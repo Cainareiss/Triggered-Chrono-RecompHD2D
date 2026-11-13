@@ -60,6 +60,12 @@ Game Mode, with no keyboard needed after setup.
 If it complains about FUSE, run it as
 `./CT_Recomp-x86_64.AppImage --appimage-extract-and-run`.
 
+The AppImage built with `packaging/appimage/build-container.sh` needs glibc 2.35 or
+newer (Ubuntu 22.04, Debian 12, Fedora, Arch, SteamOS 3 and Bazzite all qualify). An
+image built directly on a very new distribution needs that distribution's glibc, so
+use a release image or the container script. The module is built on your machine, so
+it needs about 1 GB of free space and a minute or two the first time.
+
 ### Flatpak
 
 The Flatpak isn't on Flathub. Build and install it from the source tree as described in
@@ -91,11 +97,12 @@ flatpak run io.github.jerbanpls.CtRecomp --hd2d
 
 | Option | What it does |
 | --- | --- |
+| `--help` | Print the options and the keyboard controls, then quit |
 | `--rom FILE` | Use this ROM file |
 | `--hd2d` | Draw with the HD-2D renderer (on by default in Steam's Game Mode) |
 | `--no-hd2d` | The original look, also in Game Mode |
 | `--fullscreen` | Start fullscreen |
-| `--scale N` | Window size, as a multiple of the console's 256×224 picture (default 3) |
+| `--scale N` | Window size, as a multiple of the console's 256×224 picture (default 3). Without it, the size you last left the window at is used |
 | `--interp-only` | Don't build or load the game module; run everything in the interpreter |
 | `--preset off\|subtle\|hd2d\|deck` | Starting HD-2D look (with `--hd2d`); `deck` is a lighter HD-2D, the default on a Steam Deck |
 | `--aspect 4:3\|pixel\|stretch` | Picture shape (with `--hd2d`) |
@@ -149,6 +156,13 @@ flatpak run io.github.jerbanpls.CtRecomp --hd2d
 | R | W |
 | Start | Enter |
 | Select | Right Shift |
+
+**F11** switches fullscreen on and off. The window remembers its size, place and
+fullscreen state between runs (in `~/.local/share/ct-recomp/hd2d/settings.ini`, or under
+`~/.var/app/io.github.jerbanpls.CtRecomp/data/` in the Flatpak, next to the saved look
+and picture shape). A saved place is ignored if no screen shows it any more, and on
+Wayland only the size and fullscreen state are kept, as the desktop picks the place.
+`--scale` and Steam's Game Mode (always fullscreen) override it. `--help` lists the keys.
 
 **Ctrl+Q**, or closing the window, quits. On a controller, hold **View + Menu** (Back +
 Start) for 2 seconds: the game asks whether to quit, and **A** quits, **B** goes back. Esc does not quit: Steam Input sends Esc for a
@@ -298,6 +312,11 @@ the existing launch options).
 - If the window doesn't open on a Wayland desktop, try X11 through XWayland:
   `SDL_VIDEODRIVER=x11 ./CT_Recomp-x86_64.AppImage --hd2d` (for the Flatpak,
   `flatpak run --env=SDL_VIDEODRIVER=x11 io.github.jerbanpls.CtRecomp --hd2d`).
+
+- The HD-2D code was checked against a strict GL 3.3 core profile on Mesa
+  (radeonsi and llvmpipe, with every GL error reported), but never on NVIDIA's driver.
+  If you see a black or garbled picture there, run with `CT_HD2D_GLERR=1` set and
+  send the terminal's `hd2d: GL error` lines.
 
 **AMD and Intel (Mesa).** Use an up-to-date Mesa from your distribution. Old Intel GPUs
 without OpenGL 3.3 can still play without `--hd2d`.

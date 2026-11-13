@@ -191,9 +191,30 @@ binary that matches some other ROM window by chance. Listed files skip the ROM-w
 check only; the name, ELF-export and generated-name checks still apply. It lists the
 zig binary. When zig's pin changes, update its hash there.
 
-Not tested yet: a windowed session on Wayland or X11, audio through PulseAudio or
-PipeWire, controllers in the sandbox, a system-wide install, Flathub's linter, and
-aarch64 (the zig source is x86_64 only).
+A second pass on 2026-11-13, from a clean `build.sh --user --install`, with the
+`--hd2d --frames 600 --log-pacing` run (offscreen video, dummy audio, `--filesystem=<rom dir>:ro`):
+- The first run built the module in the sandbox (43 s), loaded 1,482 functions and ran
+  600 frames at 60.10 Hz, 0 frames over 25 ms, 0 audio underruns, exit 0. GL was
+  hardware radeonsi (Mesa 26.2.5, core 4.6).
+- The data dir `~/.var/app/io.github.jerbanpls.CtRecomp/data/ct-recomp/ct/` then held
+  `ct_game.so`, `ct_game.stamp` and `rom_path`. A save appears only once the game's
+  SRAM changes: a run with `--poke-sram 100:10=AB` wrote `ct.srm` there (8,192 bytes,
+  byte 0x10 = 0xAB), so saves land in the sandbox's data dir.
+- `check_dist.py --rom --allow` passed on `build-flatpak/files` (8,035 files), on the
+  checked-out OSTree export (7,499 files) and on the `flatpak build-bundle` file
+  (45.7 MB): 0 problems each.
+- Nothing needed fixing in the manifest or the first-run flow.
+
+Not tested yet: a windowed session on Wayland or X11 inside the sandbox, audio through
+PulseAudio or PipeWire, controllers in the sandbox, a system-wide install, Flathub's
+linter, and aarch64 (the zig source is x86_64 only).
+
+### Desktop file and metainfo
+
+`desktop-file-validate` accepts the `.desktop` file. `appstreamcli validate --no-net`
+accepts the metainfo (it had warned about a missing homepage URL; one pedantic note
+remains, that the id has upper-case letters, which the app id fixes). Flathub's own
+linter was not run.
 
 ## AppImage
 
@@ -218,8 +239,23 @@ SDL2 comes from one of two places:
 - `SDL2=build` builds 2.32.10 from the pinned tarball. This needs the X11, Wayland and
   audio development headers, or SDL ends up without those backends.
 
-The engine and SDL link against the build host's glibc, so build on the oldest
-distribution the image should run on.
+The engine and SDL link against the build host's glibc. An image built on Fedora 45
+(`SDL2=system`) needs glibc 2.43: `ct_sdl_engine` imports `atan2f@GLIBC_2.43`, and its
+bundled `libSDL2` wants `GLIBC_ABI_DT_RELR`, so it failed on Ubuntu 22.04 with
+"version `GLIBC_2.43' not found". For an image that runs on older systems, use
+
+```
+packaging/appimage/build-container.sh [WORKDIR]    # default: build-appimage-ubuntu2204/
+```
+
+It runs `build.sh` with `SDL2=build` in `docker.io/library/ubuntu:22.04` (podman or
+docker; `IMAGE=` and `ENGINE=` override), with the checkout mounted read-only. The
+result needs **glibc 2.35**: the engine's highest versioned symbol is `GLIBC_2.35` (and
+SDL's 2.34), and the bundled Python and zig need only 2.17. CMake 3.24+ comes from
+PyPI there; `build.sh` now unpacks its pinned Python first and gives it to CMake, since
+22.04's own is 3.10. What the host must provide is what any SDL game needs: libstdc++,
+the GL/EGL libraries of its graphics driver, and the sound server. SDL loads X11,
+Wayland, PulseAudio, PipeWire and ALSA at run time.
 
 `cmake` must be on PATH, or set `CMAKE=/path/to/cmake`. The script checks for it before
 anything is downloaded.
@@ -238,8 +274,64 @@ These were run on 2026-11-13 on the ROG Ally (Bazzite, Fedora 45 base), building
 | `ct-recomp --build-module ROM` | Module "up to date", exit 0 |
 | Saves | No save file without an SRAM change. With `--poke-sram`, written after frame 61, equal to the SRAM dump. Reloaded identically on the next start. |
 
-Not tested yet: a windowed session, real audio, controllers, and running the image on
-another distribution.
+### Other distributions
+
+The container-built image (86 MB, `check_dist.py --rom --allow`: 8,057 files, 0 problems) was
+run headless in podman containers on 2026-11-13: `SDL_VIDEODRIVER=offscreen`,
+`SDL_AUDIODRIVER=dummy`, `--appimage-extract-and-run` (no FUSE in containers), the ROM
+bind-mounted read-only, an empty data dir, `--rom ROM --hd2d --frames 300`. Each run
+built the module from the ROM with the bundled Python and zig (43 to 55 s) and loaded
+1,482 functions. The same 300 frames (185 NMIs, PC $7E33D2) came out everywhere.
+
+| Container | glibc | Result |
+| --- | --- | --- |
+| `ubuntu:22.04` + `libgl1 libegl1 libgl1-mesa-dri` | 2.35 | passes (llvmpipe) |
+| `debian:12` + the same | 2.36 | passes (llvmpipe) |
+| `fedora:latest` + `mesa-libGL mesa-libEGL mesa-dri-drivers` | 2.44 | passes, 0 underruns |
+| `archlinux:latest` (SteamOS-like) + `mesa` | 2.44 | passes (llvmpipe) |
+| the earlier Fedora 45-built image on `ubuntu:22.04` | 2.35 | fails: needs glibc 2.43 |
+
+Missing libraries: none in the image itself. A bare container image has no OpenGL
+driver, and then the HD-2D run stops with `no usable OpenGL 3.3 / ES 3.0 context`;
+installing Mesa fixed that (a desktop has it). The underrun counts in the llvmpipe
+runs (50 to 240) are the software renderer and the shared CPU, not the image.
+These were not real windows and not real SteamOS: Steam Deck hardware is untested.
+
+Not tested yet: a windowed session of the AppImage on another distribution, real audio,
+and controllers.
+
+## NVIDIA and other desktop GPUs
+
+Reviewed in `frontend/hd2d/hd2d.c`, `touch_gl.c` and the shaders for what NVIDIA's
+proprietary driver is strict about. Nothing needed changing:
+- The context is requested as GL 3.3 core (the driver returns what it has, usually 4.6
+  core), with ES 3.0 as the fallback. Shaders start with `#version 330 core`, use
+  `layout(location=N) out`, `texture()`/`texelFetch` only, no extensions.
+- A VAO is created at init and bound in each frame before the attribute-less
+  `glDrawArrays` that a core profile needs (the touch overlay has its own).
+- Integer textures (`R8UI`, `usampler2D`) are `GL_NEAREST` with no mipmaps, so they are
+  complete. No `sampler2D` and `usampler2D` share a texture unit in any program: every
+  sampler is given an explicit unit, which NVIDIA checks at draw time.
+- Render targets are `RGBA16F` and `RGBA8`, with a framebuffer completeness check and a
+  fall back to `RGBA8` when half-float is not renderable. The multi-target passes use
+  `glDrawBuffers`.
+- `glGetString(GL_EXTENSIONS)` is only used on ES, where it is legal; a core profile never
+  calls it. Unpack and pack alignment are set to 1, for the `R8` and `R8UI` uploads.
+- New: `CT_HD2D_GLERR=1` prints (up to 20) GL errors after each frame, which strict drivers
+  report and lenient ones hide.
+
+All four looks (`off`, `subtle`, `hd2d`, `deck`) were run on the Ally's radeonsi and on
+llvmpipe (`LIBGL_ALWAYS_SOFTWARE=1`, Mesa 26.2.6 core 4.6), 1920x1080 screenshots at
+frame 650, with `CT_HD2D_GLERR=1`: no GL errors, and the two renderers' images
+differ by at most 1 (`off`), 3 (`subtle`) and 5 (`hd2d`, `deck`) of 255 per channel,
+0.06 on average at most. That is rounding, no gross error.
+
+**Not verifiable without NVIDIA hardware:** that the proprietary driver compiles every
+shader, links the multi-target programs and reports no error; its Wayland and X11
+presentation and vsync (`--pacing auto` picks the timer); and the Flatpak
+`org.freedesktop.Platform.GL.nvidia-*` extension. Mesa is the stricter GLSL front end,
+so shader errors are unlikely, but the claim is unproven. Intel and non-Mesa AMD drivers
+are in the same position.
 
 ## The compliance guarantee
 
