@@ -118,8 +118,17 @@ function(ct_engine_exe name)
 endfunction()
 ct_engine_exe(ct_boot_engine ${CMAKE_SOURCE_DIR}/tools/ct_boot.c)
 if(SDL2_FOUND)
-    ct_engine_exe(ct_sdl_engine ${CMAKE_SOURCE_DIR}/frontend/main.c)
+    # port: without --module it runs the first-run flow (frontend/firstrun.h):
+    # find the ROM, build the module with tools/build_module.py, load it.
+    # Packagers point CT_ENGINE_DATA_DIR at the installed game/ and tools/.
+    set(CT_ENGINE_DATA_DIR ${CMAKE_SOURCE_DIR} CACHE PATH
+        "Where ct_sdl_engine finds game/ and tools/ by default (--data-dir)")
+    get_filename_component(CT_GAME_ID ${GAME_DIR} NAME)
+    ct_engine_exe(ct_sdl_engine ${CMAKE_SOURCE_DIR}/frontend/main.c
+        ${CMAKE_SOURCE_DIR}/frontend/firstrun.c ${CMAKE_SOURCE_DIR}/frontend/sha1.c)
     target_link_libraries(ct_sdl_engine ct_input ct_hd2d)
+    target_compile_definitions(ct_sdl_engine PRIVATE CT_FIRSTRUN
+        CT_FIRSTRUN_GAME="${CT_GAME_ID}" CT_FIRSTRUN_DATA_DIR="${CT_ENGINE_DATA_DIR}")
 endif()
 
 set(ct_game_tests)
@@ -129,6 +138,18 @@ add_test(NAME module_parity COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_
     $<TARGET_FILE:ct_boot> $<TARGET_FILE:ct_boot_engine> $<TARGET_FILE:ct_game_module>
     ${GAME_DIR}/test/replay/leene_square.txt 3000)
 list(APPEND ct_game_tests module_parity)
+
+# port: the package scan (tools/check_dist.py) passes the engine-only
+# programs and fails the module, the static programs, and ROM pieces.
+set(ct_dist_pass $<TARGET_FILE:ct_boot_engine>)
+set(ct_dist_fail $<TARGET_FILE:ct_game_module> $<TARGET_FILE:ct_boot>)
+if(SDL2_FOUND)
+    list(APPEND ct_dist_pass $<TARGET_FILE:ct_sdl_engine>)
+    list(APPEND ct_dist_fail $<TARGET_FILE:ct_sdl>)
+endif()
+add_test(NAME check_dist COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_check_dist.py
+    ${CMAKE_SOURCE_DIR}/tools/check_dist.py ${CT_ROM} --pass ${ct_dist_pass} --fail ${ct_dist_fail})
+list(APPEND ct_game_tests check_dist)
 
 ct_game_exe(test_c1_math test/test_c1_math.c)
 foreach(t mul8 mulaccum divide shifts)

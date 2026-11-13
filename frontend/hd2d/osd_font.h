@@ -2,8 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * A 5x7 bitmap font for the renderer's on-screen messages: A-Z, 0-9 and
- * ": - / . %". One byte per row, bit 4 the leftmost pixel. Lowercase is
- * drawn as uppercase; anything else is a blank. */
+ * ": - / . % ( ) , _ ' ! ? + = < >". One byte per row, bit 4 the leftmost
+ * pixel. Lowercase is drawn as uppercase; anything else is a blank. */
 #ifndef CT_HD2D_OSD_FONT_H
 #define CT_HD2D_OSD_FONT_H
 
@@ -59,6 +59,17 @@ static inline const uint8_t *osd_glyph(char ch)
     static const uint8_t slash[7] = {0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10};
     static const uint8_t dot[7] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C};
     static const uint8_t pct[7] = {0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03};
+    static const uint8_t lparen[7] = {0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02};
+    static const uint8_t rparen[7] = {0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08};
+    static const uint8_t comma[7] = {0x00, 0x00, 0x00, 0x00, 0x0C, 0x04, 0x08};
+    static const uint8_t under[7] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F};
+    static const uint8_t apos[7] = {0x0C, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00};
+    static const uint8_t excl[7] = {0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04};
+    static const uint8_t quest[7] = {0x0E, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04};
+    static const uint8_t plus[7] = {0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00};
+    static const uint8_t equal[7] = {0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00};
+    static const uint8_t less[7] = {0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02};
+    static const uint8_t greater[7] = {0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08};
     static const uint8_t blank[7] = {0};
     if (ch >= 'a' && ch <= 'z')
         ch = (char)(ch - 'a' + 'A');
@@ -72,6 +83,17 @@ static inline const uint8_t *osd_glyph(char ch)
     case '/': return slash;
     case '.': return dot;
     case '%': return pct;
+    case '(': return lparen;
+    case ')': return rparen;
+    case ',': return comma;
+    case '_': return under;
+    case '\'': return apos;
+    case '!': return excl;
+    case '?': return quest;
+    case '+': return plus;
+    case '=': return equal;
+    case '<': return less;
+    case '>': return greater;
     default: return blank;
     }
 }

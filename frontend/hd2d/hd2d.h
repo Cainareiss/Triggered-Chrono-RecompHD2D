@@ -46,7 +46,7 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const sched_ppu_sta
 int hd2d_read(uint8_t *bgrx, int out_w, int out_h);
 
 /* Show a short message over the picture for about two seconds (A-Z,
-   0-9, ": - / . %"; at most 47 characters). */
+   0-9 and the punctuation in osd_font.h; at most 47 characters). */
 void hd2d_osd(const char *text);
 
 /* GPU time of the last hd2d_render in milliseconds (glFinish-bracketed:

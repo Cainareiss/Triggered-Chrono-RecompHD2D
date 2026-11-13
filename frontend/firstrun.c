@@ -1,0 +1,727 @@
+/* SPDX-FileCopyrightText: 2026 jerbanpls
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * First run of an engine-only build (firstrun.h). Everything game-specific
+ * comes from DATA_DIR/game/GAME_ID/game.toml: the title shown, the ROM's
+ * size and its SHA-1. POSIX only, like the module loader (fork, exec,
+ * pipes). */
+#include "firstrun.h"
+
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <SDL.h>
+
+#include "bus.h"
+#include "hd2d/osd_font.h"
+#include "module.h"
+#include "sched.h"
+#include "sha1.h"
+
+#define W SCHED_WIDTH
+#define H SCHED_HEIGHT
+#define GLYPH_W 6
+#define LINE_H 10
+#define MARGIN 8
+#define COLS ((W - 2 * MARGIN) / GLYPH_W)
+#define ROWS 18           /* body rows, between the header and the footer */
+#define PATHLEN 4096
+
+/* ---- the status screen: a title, a headline, wrapped body lines and a
+   footer, in the 5x7 font, on a dark ground ---- */
+
+enum { C_TEXT, C_DIM, C_TITLE, C_BAD, C_GOOD, C_COUNT };
+static const uint8_t palette[C_COUNT][3] = {   /* B G R */
+    [C_TEXT] = {235, 235, 235}, [C_DIM] = {150, 140, 135}, [C_TITLE] = {120, 205, 250},
+    [C_BAD] = {120, 120, 250},  [C_GOOD] = {150, 230, 150},
+};
+
+static struct {
+    char title[COLS + 1], head[COLS + 1], foot[COLS + 1];
+    uint8_t head_color;
+    char body[ROWS][COLS + 1];
+    uint8_t color[ROWS];
+    int n;
+} scr;
+static uint8_t fb[W * H * 4];
+
+static void scr_clear(const char *head, int color)
+{
+    scr.n = 0;
+    snprintf(scr.head, sizeof scr.head, "%s", head);
+    scr.head_color = (uint8_t)color;
+    scr.foot[0] = 0;
+}
+
+static void scr_line(int color, const char *s)
+{
+    if (scr.n == ROWS) {   /* full: scroll, keeping the newest */
+        memmove(scr.body[0], scr.body[1], sizeof scr.body[0] * (ROWS - 1));
+        memmove(scr.color, scr.color + 1, ROWS - 1);
+        scr.n--;
+    }
+    snprintf(scr.body[scr.n], COLS + 1, "%s", s);
+    scr.color[scr.n++] = (uint8_t)color;
+}
+
+/* Add text, wrapped at COLS on spaces (long words are cut). */
+static void scr_add(int color, const char *fmt, ...)
+{
+    char text[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(text, sizeof text, fmt, ap);
+    va_end(ap);
+    const char *p = text;
+    do {
+        size_t len = strlen(p), cut = len;
+        if (len > COLS) {
+            cut = COLS;
+            while (cut > COLS / 2 && p[cut] != ' ')
+                cut--;
+            if (p[cut] != ' ')
+                cut = COLS;
+        }
+        char line[COLS + 1];
+        memcpy(line, p, cut);
+        line[cut] = 0;
+        scr_line(color, line);
+        p += cut;
+        while (*p == ' ')
+            p++;
+    } while (*p);
+}
+
+static void draw_text(int x, int y, int color, const char *s)
+{
+    const uint8_t *c = palette[color];
+    for (; *s && x + 5 <= W; s++, x += GLYPH_W) {
+        const uint8_t *rows = osd_glyph(*s);
+        for (int r = 0; r < 7; r++)
+            for (int b = 0; b < 5; b++)
+                if (rows[r] & (0x10 >> b)) {
+                    uint8_t *px = fb + ((size_t)(y + r) * W + x + b) * 4;
+                    px[0] = c[0];
+                    px[1] = c[1];
+                    px[2] = c[2];
+                }
+    }
+}
+
+static const firstrun_opts *opt;
+
+static void scr_show(int shot)
+{
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) {
+            uint8_t *px = fb + ((size_t)y * W + x) * 4;
+            px[0] = (uint8_t)(34 + y / 16);   /* a dark blue, lighter toward the bottom */
+            px[1] = (uint8_t)(22 + y / 24);
+            px[2] = (uint8_t)(18 + y / 32);
+            px[3] = 0;
+        }
+    int tl = (int)strlen(scr.title);
+    draw_text((W - tl * GLYPH_W) / 2, MARGIN, C_TITLE, scr.title);
+    for (int x = MARGIN; x < W - MARGIN; x++) {   /* a rule under the title */
+        uint8_t *px = fb + ((size_t)(MARGIN + 10) * W + x) * 4;
+        px[0] = 120, px[1] = 95, px[2] = 80;
+    }
+    draw_text(MARGIN, MARGIN + 16, scr.head_color, scr.head);
+    for (int k = 0; k < scr.n; k++)
+        draw_text(MARGIN, MARGIN + 32 + k * LINE_H, scr.color[k], scr.body[k]);
+    draw_text(MARGIN, H - MARGIN - 7, C_DIM, scr.foot);
+    opt->present(fb);
+    if (shot && opt->shot && opt->shot_path)
+        opt->shot(fb, opt->shot_path);
+}
+
+/* ---- events ---- */
+
+static SDL_GameController *pads[4];
+
+typedef struct {
+    int quit, key;
+    char *drop;   /* SDL_free it */
+} events;
+
+static void pump(events *e)
+{
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev)) {
+        if (ev.type == SDL_QUIT) {
+            e->quit = 1;
+        } else if (ev.type == SDL_KEYDOWN && !ev.key.repeat) {
+            if (ev.key.keysym.scancode == SDL_SCANCODE_Q && (ev.key.keysym.mod & KMOD_CTRL))
+                e->quit = 1;
+            else
+                e->key = 1;
+        } else if (ev.type == SDL_CONTROLLERBUTTONDOWN) {
+            e->key = 1;
+        } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {
+            for (int k = 0; k < 4; k++)
+                if (!pads[k]) {
+                    pads[k] = SDL_GameControllerOpen(ev.cdevice.which);
+                    break;
+                }
+        } else if (ev.type == SDL_DROPFILE) {
+            if (!e->drop)
+                e->drop = ev.drop.file;
+            else
+                SDL_free(ev.drop.file);
+        }
+    }
+}
+
+static void close_pads(void)
+{
+    for (int k = 0; k < 4; k++)
+        if (pads[k]) {
+            SDL_GameControllerClose(pads[k]);
+            pads[k] = NULL;
+        }
+}
+
+/* ---- the game's description: top-level keys of game.toml ---- */
+
+static struct {
+    char name[COLS + 1];
+    long rom_size;
+    char sha1[41];
+} game;
+
+static int read_game_toml(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return -1;
+    char line[512];
+    while (fgets(line, sizeof line, f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (*p == '[')
+            break;   /* tables: past the top-level keys */
+        char key[64], *eq = strchr(p, '=');
+        size_t kl = eq ? (size_t)(eq - p) : 0;
+        while (kl && (p[kl - 1] == ' ' || p[kl - 1] == '\t'))
+            kl--;
+        if (!eq || !kl || kl >= sizeof key)
+            continue;
+        memcpy(key, p, kl);
+        key[kl] = 0;
+        char *v = eq + 1;
+        while (*v == ' ' || *v == '\t')
+            v++;
+        char str[256] = "";
+        if (*v == '"') {
+            char *end = strchr(v + 1, '"');
+            if (end && (size_t)(end - v - 1) < sizeof str) {
+                memcpy(str, v + 1, (size_t)(end - v - 1));
+                str[end - v - 1] = 0;
+            }
+        }
+        if (!strcmp(key, "name"))
+            snprintf(game.name, sizeof game.name, "%s", str);
+        else if (!strcmp(key, "rom_size"))
+            game.rom_size = strtol(v, NULL, 0);
+        else if (!strcmp(key, "rom_sha1") && strlen(str) == 40)
+            for (int k = 0; k <= 40; k++)
+                game.sha1[k] = (char)(str[k] >= 'A' && str[k] <= 'F' ? str[k] - 'A' + 'a' : str[k]);
+    }
+    fclose(f);
+    return 0;
+}
+
+/* ---- child processes ---- */
+
+static const char *python(void)
+{
+    const char *p = getenv("CT_PYTHON");
+    return p && *p ? p : "python3";
+}
+
+typedef struct {
+    pid_t pid;
+    int fd;
+    char buf[2048];
+    size_t len;
+} child;
+
+/* Start argv with its stdout and stderr on a pipe. */
+static int child_start(child *c, char *const argv[])
+{
+    int p[2];
+    if (pipe(p))
+        return -1;
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(p[0]);
+        close(p[1]);
+        return -1;
+    }
+    if (pid == 0) {
+        dup2(p[1], 1);
+        dup2(p[1], 2);
+        close(p[0]);
+        close(p[1]);
+        execvp(argv[0], argv);
+        static const char msg[] = "cannot start the build tool (is python3 installed?)\n";
+        if (write(2, msg, sizeof msg - 1) < 0)
+            _exit(127);
+        _exit(127);
+    }
+    close(p[1]);
+    fcntl(p[0], F_SETFL, fcntl(p[0], F_GETFL) | O_NONBLOCK);
+    fcntl(p[0], F_SETFD, FD_CLOEXEC);
+    c->pid = pid;
+    c->fd = p[0];
+    c->len = 0;
+    return 0;
+}
+
+/* Hand each complete line read so far to on_line. Returns 1 at EOF. */
+static int child_read(child *c, void (*on_line)(char *))
+{
+    for (;;) {
+        ssize_t n = read(c->fd, c->buf + c->len, sizeof c->buf - 1 - c->len);
+        if (n < 0)
+            return errno == EAGAIN || errno == EINTR ? 0 : 1;
+        int eof = n == 0;
+        c->len += (size_t)n;
+        char *start = c->buf, *nl;
+        while ((nl = memchr(start, '\n', c->len - (size_t)(start - c->buf)))) {
+            *nl = 0;
+            on_line(start);
+            start = nl + 1;
+        }
+        c->len -= (size_t)(start - c->buf);
+        memmove(c->buf, start, c->len);
+        if (c->len == sizeof c->buf - 1 || (eof && c->len)) {   /* overlong or unterminated */
+            c->buf[c->len] = 0;
+            on_line(c->buf);
+            c->len = 0;
+        }
+        if (eof)
+            return 1;
+    }
+}
+
+static int child_wait(child *c)
+{
+    int st = 0;
+    close(c->fd);
+    while (waitpid(c->pid, &st, 0) < 0 && errno == EINTR)
+        ;
+    return WIFEXITED(st) ? WEXITSTATUS(st) : 128 + (WIFSIGNALED(st) ? WTERMSIG(st) : 0);
+}
+
+static void log_line(char *line)
+{
+    fprintf(stderr, "ct_sdl: %s\n", line);
+}
+
+/* ---- the ROM ---- */
+
+static char rom_sha1[41];
+
+/* Check path against game.toml: 0, or -1 with the reason in why. */
+static int check_rom(const char *path, char *why, size_t n)
+{
+    char base[128];   /* the file name, enough to recognize it */
+    snprintf(base, sizeof base, "%.127s", strrchr(path, '/') ? strrchr(path, '/') + 1 : path);
+    struct stat st;
+    if (stat(path, &st) || !S_ISREG(st.st_mode)) {
+        snprintf(why, n, "Not a file: %s", base);
+        return -1;
+    }
+    if (st.st_size != game.rom_size || game.rom_size != (long)CT_ROM_SIZE) {
+        snprintf(why, n, "%s is %ld bytes, expected %ld.%s", base, (long)st.st_size,
+                 game.rom_size, st.st_size == game.rom_size + 512
+                                    ? " It has a 512-byte copier header: remove it." : "");
+        return -1;
+    }
+    uint8_t *data = malloc((size_t)st.st_size);
+    FILE *f = data ? fopen(path, "rb") : NULL;
+    size_t got = f ? fread(data, 1, (size_t)st.st_size, f) : 0;
+    if (f)
+        fclose(f);
+    if (got != (size_t)st.st_size) {
+        free(data);
+        snprintf(why, n, "Cannot read %s", base);
+        return -1;
+    }
+    sha1_hex(data, got, rom_sha1);
+    free(data);
+    if (game.sha1[0] && strcmp(rom_sha1, game.sha1)) {
+        snprintf(why, n, "%s is not the expected ROM (SHA-1 %.12s...).", base, rom_sha1);
+        return -1;
+    }
+    if (!game.sha1[0]) {   /* no SHA-1 in game.toml: ask the game's own check */
+        char script[PATHLEN], gdir[PATHLEN];
+        snprintf(script, sizeof script, "%s/tools/check_rom.py", opt->data_dir);
+        snprintf(gdir, sizeof gdir, "%s/game/%s", opt->data_dir, opt->game_id);
+        char *argv[] = {(char *)python(), script, gdir, (char *)path, NULL};
+        child c;
+        if (child_start(&c, argv) == 0) {
+            while (!child_read(&c, log_line))
+                SDL_Delay(5);
+            if (child_wait(&c) == 0)
+                return 0;
+        }
+        snprintf(why, n, "%s did not pass tools/check_rom.py.", base);
+        return -1;
+    }
+    return 0;
+}
+
+/* ---- files in the preferences folder ---- */
+
+static char pref[PATHLEN - 64];   /* room for a file name after it */
+
+static void pref_file(char *out, size_t n, const char *name)
+{
+    snprintf(out, n, "%s%s", pref, name);
+}
+
+static void remember_rom(const char *path)
+{
+    char abs[PATHLEN], file[PATHLEN];
+    if (!realpath(path, abs))
+        snprintf(abs, sizeof abs, "%s", path);
+    pref_file(file, sizeof file, "rom_path");
+    FILE *f = fopen(file, "w");
+    if (f) {
+        fprintf(f, "%s\n", abs);
+        fclose(f);
+    }
+}
+
+static int remembered_rom(char *out, size_t n)
+{
+    char file[PATHLEN];
+    pref_file(file, sizeof file, "rom_path");
+    FILE *f = fopen(file, "r");
+    if (!f)
+        return -1;
+    int ok = fgets(out, (int)n, f) != NULL;
+    fclose(f);
+    out[strcspn(out, "\r\n")] = 0;
+    return ok && *out ? 0 : -1;
+}
+
+/* The module is fresh if it exists and its stamp names this ROM and this
+   engine's module ABI. */
+static int module_fresh(const char *module)
+{
+    char file[PATHLEN], line[128], sha[41] = "";
+    unsigned abi = 0;
+    if (access(module, R_OK))
+        return 0;
+    pref_file(file, sizeof file, "ct_game.stamp");
+    FILE *f = fopen(file, "r");
+    while (f && fgets(line, sizeof line, f)) {
+        if (sscanf(line, "rom_sha1=%40s", sha) == 1)
+            continue;
+        sscanf(line, "module_abi=%u", &abi);
+    }
+    if (f)
+        fclose(f);
+    return !strcmp(sha, rom_sha1) && abi == CT_MODULE_ABI;
+}
+
+static void stamp_write(int ok)
+{
+    char file[PATHLEN];
+    pref_file(file, sizeof file, "ct_game.stamp");
+    if (!ok) {
+        remove(file);
+        return;
+    }
+    FILE *f = fopen(file, "w");
+    if (f) {
+        fprintf(f, "rom_sha1=%s\nmodule_abi=%u\n", rom_sha1, CT_MODULE_ABI);
+        fclose(f);
+    }
+}
+
+/* ---- the screens ---- */
+
+/* Wait for a ROM to be dropped on the window. 0 with path set, or
+   FIRSTRUN_QUIT. */
+static int wait_for_drop(char *path, size_t n, const char *problem)
+{
+    char why[512];
+    snprintf(why, sizeof why, "%s", problem ? problem : "");
+    int shot = 1;
+    for (;;) {
+        scr_clear("Drop your ROM file on this window.", C_TEXT);
+        scr_add(C_DIM, "Needed: %s, %ld bytes, without a copier header.", game.name,
+                game.rom_size);
+        scr_add(C_DIM, "The game code is built from it on this computer, once. Nothing "
+                       "is sent anywhere.");
+        if (why[0]) {
+            scr_line(C_TEXT, "");
+            scr_add(C_BAD, "%s", why);
+        }
+        snprintf(scr.foot, sizeof scr.foot, "Or start with --rom FILE.  Ctrl+Q quits.");
+        scr_show(shot);
+        shot = 0;
+        events e = {0};
+        pump(&e);
+        if (e.quit) {
+            SDL_free(e.drop);
+            return FIRSTRUN_QUIT;
+        }
+        if (e.drop) {
+            snprintf(path, n, "%s", e.drop);
+            SDL_free(e.drop);
+            if (!check_rom(path, why, sizeof why))
+                return 0;
+            fprintf(stderr, "ct_sdl: %s\n", why);
+            shot = 1;
+        }
+        SDL_Delay(30);
+    }
+}
+
+/* The build's progress: build_module.py's step lines, newest last. */
+#define MAX_STEPS 12
+#define MAX_TAIL 6
+static char steps[MAX_STEPS][COLS + 1], tail[MAX_TAIL][160];   /* tail: other output */
+static int n_steps, n_tail, new_step;
+
+/* in, with every word containing a slash cut to its last part: file
+   names, not paths, fit on the screen. */
+static void short_paths(const char *in, char *out, size_t n)
+{
+    size_t o = 0;
+    while (*in && o + 1 < n) {
+        size_t len = strcspn(in, " ");
+        const char *w = in, *slash = NULL;
+        for (size_t k = 0; k < len; k++)
+            if (in[k] == '/')
+                slash = in + k;
+        if (slash && slash + 1 < in + len)
+            w = slash + 1;
+        while (w < in + len && o + 1 < n)
+            out[o++] = *w++;
+        in += len;
+        while (*in == ' ' && o + 1 < n)
+            out[o++] = *in++;
+    }
+    out[o] = 0;
+}
+
+static void on_build_line(char *line)
+{
+    fprintf(stderr, "ct_sdl: %s\n", line);
+    static const char prefix[] = "build_module: ";
+    if (!strncmp(line, prefix, sizeof prefix - 1)) {
+        if (n_steps == MAX_STEPS) {
+            memmove(steps[0], steps[1], sizeof steps[0] * (MAX_STEPS - 1));
+            n_steps--;
+        }
+        short_paths(line + sizeof prefix - 1, steps[n_steps++], COLS - 1);
+        new_step = 1;
+    }
+    if (*line && (strncmp(line, prefix, sizeof prefix - 1) || strstr(line, "failed"))) {
+        if (n_tail == MAX_TAIL) {
+            memmove(tail[0], tail[1], sizeof tail[0] * (MAX_TAIL - 1));
+            n_tail--;
+        }
+        short_paths(line, tail[n_tail++], sizeof tail[0]);
+    }
+}
+
+static void build_screen(unsigned secs)
+{
+    scr_clear("Building the game code from your ROM", C_TEXT);
+    scr_add(C_DIM, "First run only: this takes about a minute.");
+    scr_line(C_TEXT, "");
+    for (int k = 0; k < n_steps; k++)
+        scr_add(k == n_steps - 1 ? C_TEXT : C_DIM, "%s %s", k == n_steps - 1 ? ">" : " ",
+                steps[k]);
+    snprintf(scr.foot, sizeof scr.foot, "%u s   Ctrl+Q stops", secs);
+}
+
+/* Run tools/build_module.py. 0 when it built the module, 1 when it
+   failed, FIRSTRUN_QUIT. */
+static int build(const char *rom)
+{
+    char script[PATHLEN], gdir[PATHLEN], out[PATHLEN];
+    snprintf(script, sizeof script, "%s/tools/build_module.py", opt->data_dir);
+    snprintf(gdir, sizeof gdir, "%s/game/%s", opt->data_dir, opt->game_id);
+    snprintf(out, sizeof out, "%s", pref);
+    size_t ol = strlen(out);
+    if (ol > 1 && out[ol - 1] == '/')
+        out[ol - 1] = 0;
+    char *argv[] = {(char *)python(), "-u", script, "--game", gdir, "--rom", (char *)rom,
+                    "--out", out, "--native", NULL};
+    n_steps = n_tail = 0;
+    stamp_write(0);
+    fprintf(stderr, "ct_sdl: building the game module: %s %s --game %s --rom %s --out %s "
+                    "--native\n", argv[0], script, gdir, rom, out);
+    child c;
+    if (access(script, R_OK) || child_start(&c, argv)) {
+        on_build_line(access(script, R_OK) ? "the build tool is missing: tools/build_module.py"
+                                           : "cannot start the build tool");
+        return 1;
+    }
+    Uint32 t0 = SDL_GetTicks();
+    new_step = 1;
+    for (;;) {
+        events e = {0};
+        pump(&e);
+        SDL_free(e.drop);
+        if (e.quit) {
+            kill(c.pid, SIGTERM);
+            child_wait(&c);
+            return FIRSTRUN_QUIT;
+        }
+        int eof = child_read(&c, on_build_line);
+        build_screen((SDL_GetTicks() - t0) / 1000);
+        scr_show(new_step);
+        new_step = 0;
+        if (eof)
+            break;
+        SDL_Delay(30);
+    }
+    int status = child_wait(&c);
+    fprintf(stderr, "ct_sdl: build_module.py exited with %d after %u s\n", status,
+            (SDL_GetTicks() - t0) / 1000);
+    return status == 0 ? 0 : 1;
+}
+
+/* The build or the load failed: offer the interpreter. FIRSTRUN_INTERP or
+   FIRSTRUN_QUIT. */
+static int offer_interp(const char *what)
+{
+    int shot = 1;
+    for (;;) {
+        scr_clear(what, C_BAD);
+        for (int k = 0; k < n_tail; k++)
+            scr_add(C_DIM, "%s", tail[k]);
+        scr_line(C_TEXT, "");
+        scr_add(C_TEXT, "Press any key or button to play without it. It is slower: the "
+                        "interpreter runs all of the game.");
+        snprintf(scr.foot, sizeof scr.foot, "Details: see the terminal. Ctrl+Q quits.");
+        scr_show(shot);
+        shot = 0;
+        events e = {0};
+        pump(&e);
+        SDL_free(e.drop);
+        if (e.quit)
+            return FIRSTRUN_QUIT;
+        if (e.key)
+            return FIRSTRUN_INTERP;
+        SDL_Delay(30);
+    }
+}
+
+int firstrun(const firstrun_opts *o)
+{
+    opt = o;
+    char toml[PATHLEN];
+    snprintf(toml, sizeof toml, "%s/game/%s/game.toml", o->data_dir, o->game_id);
+    if (read_game_toml(toml) || !game.rom_size) {
+        fprintf(stderr, "ct_sdl: no game description at %s (--data-dir DIR, --game ID)\n", toml);
+        return FIRSTRUN_ERROR;
+    }
+    snprintf(scr.title, sizeof scr.title, "%s", game.name[0] ? game.name : o->game_id);
+    char *p = SDL_GetPrefPath("ct-recomp", o->game_id);
+    if (!p) {
+        fprintf(stderr, "ct_sdl: no preferences folder: %s\n", SDL_GetError());
+        return FIRSTRUN_ERROR;
+    }
+    snprintf(pref, sizeof pref, "%s", p);
+    SDL_free(p);
+    for (int k = 0; k < SDL_NumJoysticks() && k < 4; k++)
+        if (SDL_IsGameController(k))
+            pads[k] = SDL_GameControllerOpen(k);
+
+    /* The ROM: --rom, $CT_ROM, the remembered one, else a dropped file. */
+    static char rom[PATHLEN], why[512], problem[512];   /* problem: the first one */
+    int found = 0;
+    for (int src = 0; src < 3 && !found; src++) {
+        if (src == 0 && o->rom_arg)
+            snprintf(rom, sizeof rom, "%s", o->rom_arg);
+        else if (src == 1 && getenv("CT_ROM") && *getenv("CT_ROM"))
+            snprintf(rom, sizeof rom, "%s", getenv("CT_ROM"));
+        else if (src != 2 || remembered_rom(rom, sizeof rom))
+            continue;
+        static const char *const from[] = {"--rom", "CT_ROM", "remembered"};
+        if (!check_rom(rom, why, sizeof why)) {
+            found = 1;
+            fprintf(stderr, "ct_sdl: ROM (%s): %s\n", from[src], rom);
+        } else {
+            fprintf(stderr, "ct_sdl: ROM (%s): %s\n", from[src], why);
+            if (!problem[0])
+                snprintf(problem, sizeof problem, "%s", why);
+        }
+    }
+    if (!found) {
+        if (wait_for_drop(rom, sizeof rom, problem[0] ? problem : NULL)) {
+            close_pads();
+            return FIRSTRUN_QUIT;
+        }
+        fprintf(stderr, "ct_sdl: ROM (dropped): %s\n", rom);
+    }
+    remember_rom(rom);
+    bus_init(rom);
+    if (!o->want_module) {
+        close_pads();
+        return FIRSTRUN_INTERP;
+    }
+
+    /* The module: reuse it if fresh, else build it; a fresh one that won't
+       load is rebuilt once. */
+    char module[PATHLEN];
+    pref_file(module, sizeof module, "ct_game.so");
+    int result = FIRSTRUN_MODULE;
+    for (int attempt = 0;; attempt++) {
+        int fresh = module_fresh(module);
+        fprintf(stderr, "ct_sdl: game module %s: %s\n", module,
+                fresh ? "up to date" : access(module, F_OK) ? "missing" : "stale");
+        if (!fresh) {
+            int b = build(rom);
+            if (b == FIRSTRUN_QUIT) {
+                result = FIRSTRUN_QUIT;
+                break;
+            }
+            if (b) {
+                result = offer_interp("The game code could not be built.");
+                break;
+            }
+            stamp_write(1);
+        }
+        scr_clear("Starting...", C_GOOD);
+        for (int k = 0; k < n_steps; k++)
+            scr_add(C_DIM, "  %s", steps[k]);
+        scr_show(!fresh);
+        const char *err;
+        if (!ct_module_load(module, &err)) {
+            fprintf(stderr, "ct_sdl: game module %s: %u functions\n", module, ct_func_count);
+            break;
+        }
+        fprintf(stderr, "ct_sdl: game module: %s\n", err);
+        stamp_write(0);
+        if (!fresh || attempt) {
+            char line[512];
+            snprintf(line, sizeof line, "%s", err);
+            n_tail = 0;
+            on_build_line(line);
+            result = offer_interp("The game code would not load.");
+            break;
+        }
+    }
+    close_pads();
+    return result;
+}
