@@ -74,7 +74,11 @@ It took about 40 s on a Ryzen Z1 Extreme. `--native` tunes the code for the loca
    the interpreter instead.
 
 `--interp-only` skips the module (only step 1 runs). Ctrl+Q or closing the window
-quits at any point, and also stops a running build.
+quits at any point, and also stops a running build. `--build-only` runs steps 1 and 2
+without a window, loads the module once to check it, and exits: 0 when it is ready, 1
+otherwise (no usable ROM, the build failed, or the module won't load), instead of
+waiting for a dropped file or offering the interpreter. The launcher's
+`ct-recomp --build-module ROM` is `--rom ROM --build-only`.
 
 The engine contains no game names: the game id comes from the build (the game
 directory's name, compiled in as the default) or `--game ID`. The game's files and

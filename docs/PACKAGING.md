@@ -63,21 +63,29 @@ build tree.
 The `.desktop` file runs `ct-recomp`. The launcher:
 1. Puts the bundled Python on `PATH` if there is one. It sets `CC` to the bundled zig
    (`libexec/ct-recomp/zig-cc`) unless `CC` is already set.
-2. If the engine supports `--data-dir`, starts it with `--data-dir <prefix>/share/ct-recomp`,
-   and the engine's own first-run flow does the rest.
-3. Otherwise, starts it with `--module $XDG_DATA_HOME/ct-recomp/ct_game.so`, and with
-   `CT_ROM` from the last `ct-recomp --build-module`.
+2. Starts the engine with `--data-dir <prefix>/share/ct-recomp` (and `--game $CT_RECOMP_GAME`
+   if that is set). The engine's own first-run flow does the rest: it finds the ROM,
+   builds the module if needed and remembers the ROM's path.
 
-To build the module from the command line:
+To build the module from the command line without starting the game:
 
 ```
 ct-recomp --build-module /path/to/your/rom.sfc
 ```
 
-This runs `tools/build_module.py --native` from the data dir. The module goes to
-`$XDG_DATA_HOME/ct-recomp/` (in the Flatpak, `~/.var/app/io.github.jerbanpls.CtRecomp/data/ct-recomp/`).
-The launcher also saves the ROM's path there. Nothing is written to the data dir, which
-may be read-only.
+This runs `ct_sdl_engine --rom ROM --build-only`: the same first-run flow, without a
+window. It checks the ROM, builds the module with `tools/build_module.py --native` from
+the data dir unless an up-to-date one is there, loads it once to check it, and exits 0,
+or 1 with the reason on stderr. Everything goes to the engine's per-game folder,
+`$XDG_DATA_HOME/ct-recomp/<game id>/` (in the Flatpak,
+`~/.var/app/io.github.jerbanpls.CtRecomp/data/ct-recomp/<game id>/`): `ct_game.so`,
+`ct_game.stamp` (the ROM's SHA-1 and the module ABI), and `rom_path`, which the next
+normal start uses. The in-game saves (`<game id>.srm`) live there too. Nothing is
+written to the data dir, which may be read-only.
+
+Earlier launchers built the module into `$XDG_DATA_HOME/ct-recomp/ct_game.so` and kept
+the ROM's path in `rom.path` there. Neither file is used any more and both can be
+deleted.
 
 ## Flatpak
 
@@ -142,5 +150,5 @@ No package contains code or data derived from a ROM:
 - **Sources:** the Flatpak builds from committed files, and `rom/`, `build*/`, `*.so`
   and `*.AppImage` are git-ignored.
 
-The module the user builds, and the ROM path, stay in the user's data dir and never
-enter a package.
+The module the user builds, the ROM path and the saves stay in the user's data dir and
+never enter a package.

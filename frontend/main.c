@@ -59,7 +59,9 @@
  *       --data-dir DIR (default: the source tree) holds game/ and tools/;
  *       --game ID picks DIR/game/ID (default: the game it was configured
  *       with). --shot status:PATH writes the setup screen each time it
- *       changes (a %d in PATH numbers the shots).
+ *       changes (a %d in PATH numbers the shots). --build-only stops once
+ *       the module is built and loads, without a window (the launcher's
+ *       --build-module).
  *   --save FILE | --no-save, --dump-sram FILE, --poke-sram F:ADDR=VAL
  *       the save RAM file (frontend/saves.h; default GAME_ID.srm in the
  *       per-game preferences folder), or none. For testing, --dump-sram
@@ -558,7 +560,7 @@ int main(int argc, char **argv)
 #ifdef CT_FIRSTRUN
     static const char *data_dir = CT_FIRSTRUN_DATA_DIR, *game_id = CT_FIRSTRUN_GAME,
                       *status_shot;
-    static int interp_only;
+    static int interp_only, build_only;
 #else
     static const char *game_id = CT_GAME_ID;   /* port: names the saves folder */
 #endif
@@ -613,6 +615,8 @@ int main(int argc, char **argv)
         } else if (!strcmp(argv[k], "--shot") && k + 1 < argc &&
                    !strncmp(argv[k + 1], "status:", 7)) {
             status_shot = argv[++k] + 7;
+        } else if (!strcmp(argv[k], "--build-only")) {
+            build_only = 1;
 #endif
         } else if (!strcmp(argv[k], "--save") && k + 1 < argc) {
             save_path = argv[++k];
@@ -670,7 +674,7 @@ int main(int argc, char **argv)
                             "[--rom FILE] [--save FILE] [--no-save] [--dump-sram FILE] "
                             "[--poke-sram F:ADDR=VAL]..."
 #ifdef CT_FIRSTRUN
-                            " [--data-dir DIR] [--game ID] [--shot status:PATH]"
+                            " [--data-dir DIR] [--game ID] [--shot status:PATH] [--build-only]"
 #endif
                             "\n");
             return 2;
@@ -680,6 +684,26 @@ int main(int argc, char **argv)
         scale = 1;
     atexit(report_exit);
 
+#ifdef CT_FIRSTRUN
+    if (build_only) {   /* port: --build-only: no window, no audio */
+        if (module_path || interp_only) {
+            fprintf(stderr, "ct_sdl: --build-only builds the module: not with --module or "
+                            "--interp-only\n");
+            return 2;
+        }
+        if (SDL_Init(SDL_INIT_EVENTS)) {
+            fprintf(stderr, "ct_sdl: SDL_Init: %s\n", SDL_GetError());
+            set_exit_reason("SDL_Init failed");
+            return 1;
+        }
+        firstrun_opts fo = {rom_arg, data_dir, game_id, 1, NULL, NULL, NULL, 1};
+        int r = firstrun(&fo);
+        set_exit_reason(r == FIRSTRUN_MODULE ? "--build-only: module ready"
+                                             : "--build-only: no module");
+        SDL_Quit();
+        return r == FIRSTRUN_MODULE ? 0 : 1;
+    }
+#endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER)) {
         fprintf(stderr, "ct_sdl: SDL_Init: %s\n", SDL_GetError());
         set_exit_reason("SDL_Init failed");
@@ -695,7 +719,7 @@ int main(int argc, char **argv)
         hd2d_set_preset(HD2D_OFF);   /* the setup screens in the original look */
         hd2d_set_debug(HD2D_DEBUG_NONE);
         firstrun_opts fo = {rom_arg, data_dir, game_id, !interp_only, present_status,
-                            shot_status, status_shot};
+                            shot_status, status_shot, 0};
         int r = firstrun(&fo);
         hd2d_set_preset(preset);
         hd2d_set_debug(view);

@@ -138,7 +138,8 @@ static void scr_show(int shot)
     for (int k = 0; k < scr.n; k++)
         draw_text(MARGIN, MARGIN + 32 + k * LINE_H, scr.color[k], scr.body[k]);
     draw_text(MARGIN, H - MARGIN - 7, C_DIM, scr.foot);
-    opt->present(fb);
+    if (opt->present)
+        opt->present(fb);
     if (shot && opt->shot && opt->shot_path)
         opt->shot(fb, opt->shot_path);
 }
@@ -604,6 +605,10 @@ static int build(const char *rom)
    FIRSTRUN_QUIT. */
 static int offer_interp(const char *what)
 {
+    if (opt->build_only) {   /* nobody to ask */
+        fprintf(stderr, "ct_sdl: %s\n", what);
+        return FIRSTRUN_ERROR;
+    }
     int shot = 1;
     for (;;) {
         scr_clear(what, C_BAD);
@@ -650,7 +655,9 @@ int firstrun(const firstrun_opts *o)
     /* The ROM: --rom, $CT_ROM, the remembered one, else a dropped file. */
     static char rom[PATHLEN], why[512], problem[512];   /* problem: the first one */
     int found = 0;
-    for (int src = 0; src < 3 && !found; src++) {
+    /* --build-only --rom FILE: that file or nothing. */
+    int n_src = o->build_only && o->rom_arg ? 1 : 3;
+    for (int src = 0; src < n_src && !found; src++) {
         if (src == 0 && o->rom_arg)
             snprintf(rom, sizeof rom, "%s", o->rom_arg);
         else if (src == 1 && getenv("CT_ROM") && *getenv("CT_ROM"))
@@ -666,6 +673,12 @@ int firstrun(const firstrun_opts *o)
             if (!problem[0])
                 snprintf(problem, sizeof problem, "%s", why);
         }
+    }
+    if (!found && o->build_only) {
+        fprintf(stderr, "ct_sdl: no usable ROM%s\n",
+                o->rom_arg ? "" : ": give one with --rom FILE");
+        close_pads();
+        return FIRSTRUN_ERROR;
     }
     if (!found) {
         if (wait_for_drop(rom, sizeof rom, problem[0] ? problem : NULL)) {
