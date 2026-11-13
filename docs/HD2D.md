@@ -41,6 +41,12 @@ command-line options override them.
 | `--shot F:PATH` | At frame F, render offscreen and save a PNG (repeatable) |
 | `--shot-size WxH` | Size of those screenshots (default 1920x1080) |
 
+To see where the time goes, set `CT_HD2D_PROFILE=FILE`. Every frame then appends a line
+to FILE with the GPU time of each pass, from timestamp queries read back a few frames
+later so they don't stall anything, plus the CPU time of the scene analysis and the
+uploads, and with `--log-gpu` the frame's total. It needs timer queries: OpenGL 3.3, or
+OpenGL ES with `EXT_disjoint_timer_query`.
+
 To render headlessly, for example on CI or over SSH, set `SDL_VIDEODRIVER=offscreen`.
 That gives a GPU context through EGL with no window:
 

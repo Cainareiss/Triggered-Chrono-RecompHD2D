@@ -152,6 +152,108 @@ static int load_gl(void)
     return missing ? -1 : 0;
 }
 
+/* ---- optional per-pass GPU timing ----
+   CT_HD2D_PROFILE=FILE writes one line per frame: GPU time per pass from
+   timestamp queries (GL 3.3 / ARB_timer_query, or ES with
+   EXT_disjoint_timer_query), read back a few frames later so nothing
+   stalls, plus the CPU time of the scene analysis and of the uploads. */
+#define GL_TIMESTAMP                0x8E28
+#define GL_QUERY_RESULT             0x8866
+#define GL_EXTENSIONS               0x1F03
+typedef unsigned long long GLuint64;
+typedef void (*PFN_glGenQueries)(GLsizei n, GLuint *ids);
+typedef void (*PFN_glDeleteQueries)(GLsizei n, const GLuint *ids);
+typedef void (*PFN_glQueryCounter)(GLuint id, GLenum target);
+typedef void (*PFN_glGetQueryObjectui64v)(GLuint id, GLenum pname, GLuint64 *v);
+
+enum { PROF_MARKS = 16, PROF_RING = 4 };
+
+static struct {
+    FILE *f;
+    PFN_glGenQueries gen;
+    PFN_glDeleteQueries del;
+    PFN_glQueryCounter counter;
+    PFN_glGetQueryObjectui64v get;
+    GLuint q[PROF_RING][PROF_MARKS];
+    const char *name[PROF_RING][PROF_MARKS];
+    int n[PROF_RING];
+    unsigned frame[PROF_RING];
+    double analyze_ms[PROF_RING], upload_ms[PROF_RING], submit_ms[PROF_RING],
+        total_ms[PROF_RING];
+    int slot;
+} prof;
+
+static void *gl_sym(const char *name)
+{
+    return SDL_GL_GetProcAddress(name);
+}
+
+static void prof_init(int gles)
+{
+    if (prof.f) {   /* a second init, after the first context failed */
+        fclose(prof.f);
+        memset(&prof, 0, sizeof prof);
+    }
+    const char *path = getenv("CT_HD2D_PROFILE");
+    if (!path || !*path)
+        return;
+    void *gen = gl_sym("glGenQueries"), *del = gl_sym("glDeleteQueries");
+    void *counter = gl_sym(gles ? "glQueryCounterEXT" : "glQueryCounter");
+    void *get = gl_sym(gles ? "glGetQueryObjectui64vEXT" : "glGetQueryObjectui64v");
+    /* (glGetString(GL_EXTENSIONS) is an error in a core profile.) */
+    const char *ext = gles ? (const char *)p_glGetString(GL_EXTENSIONS) : NULL;
+    if (gles && !(ext && strstr(ext, "GL_EXT_disjoint_timer_query")))
+        counter = NULL;
+    if (!gen || !del || !counter || !get) {
+        fprintf(stderr, "hd2d: CT_HD2D_PROFILE: no timer queries here\n");
+        return;
+    }
+    memcpy(&prof.gen, &gen, sizeof gen);
+    memcpy(&prof.del, &del, sizeof del);
+    memcpy(&prof.counter, &counter, sizeof counter);
+    memcpy(&prof.get, &get, sizeof get);
+    if (!(prof.f = fopen(path, "w"))) {
+        fprintf(stderr, "hd2d: cannot write %s\n", path);
+        return;
+    }
+    prof.gen(PROF_RING * PROF_MARKS, &prof.q[0][0]);
+}
+
+/* A timestamp at the end of the pass called name (the first one, "start",
+   only opens the frame). */
+static void prof_mark(const char *name)
+{
+    int s = prof.slot;
+    if (prof.f && prof.n[s] < PROF_MARKS) {
+        prof.counter(prof.q[s][prof.n[s]], GL_TIMESTAMP);
+        prof.name[s][prof.n[s]++] = name;
+    }
+}
+
+/* Write out the frame recorded in the ring slot about to be reused. */
+static void prof_flush(int s)
+{
+    if (!prof.f || prof.n[s] < 2)
+        return;
+    GLuint64 t[PROF_MARKS];
+    for (int k = 0; k < prof.n[s]; k++)
+        prof.get(prof.q[s][k], GL_QUERY_RESULT, &t[k]);
+    fprintf(prof.f, "frame=%u total=%.4f analyze=%.4f upload=%.4f submit=%.4f gpu=%.4f",
+            prof.frame[s], prof.total_ms[s], prof.analyze_ms[s], prof.upload_ms[s],
+            prof.submit_ms[s], (double)(t[prof.n[s] - 1] - t[0]) / 1e6);
+    for (int k = 1; k < prof.n[s]; k++)
+        fprintf(prof.f, " %s=%.4f", prof.name[s][k], (double)(t[k] - t[k - 1]) / 1e6);
+    fputc('\n', prof.f);
+    fflush(prof.f);
+    prof.n[s] = 0;
+}
+
+static double ms_since(uint64_t t0)
+{
+    return (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 /
+           (double)SDL_GetPerformanceFrequency();
+}
+
 /* ---- settings ---- */
 
 typedef struct {
@@ -364,6 +466,7 @@ int hd2d_init(int gles)
         return -1;
     fprintf(stderr, "hd2d: %s / %s / %s\n", p_glGetString(GL_VENDOR), p_glGetString(GL_RENDERER),
             p_glGetString(GL_VERSION));
+    prof_init(gles);
 
     static const struct { const char *src, *name; } fs[P_COUNT] = {
         [P_EMIT] = {hd2d_src_emit_frag, "emit.frag"},
@@ -434,6 +537,13 @@ void hd2d_shutdown(void)
 {
     if (!g.ready)
         return;
+    if (prof.f) {
+        for (int k = 1; k <= PROF_RING; k++)
+            prof_flush((prof.slot + k) % PROF_RING);
+        prof.del(PROF_RING * PROF_MARKS, &prof.q[0][0]);
+        fclose(prof.f);
+        prof.f = NULL;
+    }
     target *ts[] = {&g.scene, &g.back, &g.half[0], &g.half[1], &g.fgh[0], &g.fgh[1],
                     &g.quarter[0], &g.quarter[1], &g.eighth[0], &g.eighth[1], &g.soft[0],
                     &g.soft[1], &g.out, &g.emit[0], &g.emit[1]};
@@ -592,11 +702,15 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
 {
     if (!g.ready || ow < 8 || oh < 8)
         return;
+    /* The profile's own readback goes before the clock starts. */
+    prof.slot = (prof.slot + 1) % PROF_RING;
+    prof_flush(prof.slot);
     uint64_t t0 = 0;
     if (timing) {
         p_glFinish();
         t0 = SDL_GetPerformanceCounter();
     }
+    uint64_t tc = SDL_GetPerformanceCounter();
     int px, py, pw, ph;
     picture_rect(ow, oh, &px, &py, &pw, &ph);
     if (resize(ow, oh, pw, ph))
@@ -607,6 +721,7 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     int ui_z;
     float ui_frac, field_frac, focus_target, mean_luma;
     analyze(bgrx, layers, st, &ui_z, &ui_frac, &field_frac, &focus_target, &mean_luma);
+    prof.analyze_ms[prof.slot] = ms_since(tc);
     /* Point lights matter in the dark: full below 0.18 mean brightness,
        gone above 0.42 (daylight). */
     float dark_target = mean_luma < 0.18f ? 1.0f : mean_luma > 0.42f ? 0.0f
@@ -631,6 +746,8 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     p_glBindVertexArray(g.vao);
 
     /* Uploads. */
+    uint64_t tu = SDL_GetPerformanceCounter();
+    prof_mark("start");
     bind_tex(0, g.t_color);
     p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, SCHED_WIDTH, SCHED_HEIGHT, GL_RGBA, GL_UNSIGNED_BYTE,
                       bgrx);
@@ -647,6 +764,8 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     bind_tex(4, g.t_blayer);
     p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, SCHED_WIDTH, SCHED_HEIGHT, GL_RED_INTEGER,
                       GL_UNSIGNED_BYTE, have_behind ? behind_layers : layers);
+    prof.upload_ms[prof.slot] = ms_since(tu);
+    prof_mark("texup");
 
     /* 0: light sources -> blurred light map. */
     p_glUseProgram(g.prog[P_EMIT]);
@@ -657,6 +776,7 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     draw_to(g.emit[0].fbo, g.emit[0].w, g.emit[0].h);
     gauss(&g.emit[0], &g.emit[1], &g.emit[0]);
     gauss(&g.emit[0], &g.emit[1], &g.emit[0]);
+    prof_mark("emit");
     bind_tex(0, g.t_color);
     bind_tex(1, g.t_layer);
 
@@ -679,6 +799,7 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     p_glUniform3f(U(P_LIGHT, "uHaze"), 0.75f, 0.82f, 0.95f);
     p_glUniform2i(U(P_LIGHT, "uShadowOffset"), 3, 4);
     draw_to(g.fbo_light, SCHED_WIDTH, SCHED_HEIGHT);
+    prof_mark("light");
 
     /* 2: upscale into the two planes, with the tilt. */
     float tilt = have_behind ? s->tilt * scene_amt * field_amt : 0.0f;
@@ -692,6 +813,7 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     bind_tex(1, g.t_back);
     bind_tex(2, g.t_mat);
     draw_to(g.fbo_compose, pw, ph);
+    prof_mark("upscale");
 
     /* Depth of field settings, shared by passes 3 and 5. */
     float dof_tilt = s->dof_tilt * scene_amt * field_amt;
@@ -711,6 +833,7 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
         bind_tex(2, g.back.tex);
         bind_tex(3, g.t_back);
         draw_to(g.fbo_dof[0], g.half[0].w, g.half[0].h);
+        prof_mark("coc");
 
         p_glUseProgram(g.prog[P_DOFBLUR]);
         p_glUniform1i(U(P_DOFBLUR, "uSrc"), 0);
@@ -727,12 +850,14 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
         bind_tex(1, g.fgh[1].tex);
         p_glUniform2f(U(P_DOFBLUR, "uDir"), 0.0f, 1.0f / g.half[1].h);
         draw_to(g.fbo_dof[0], g.half[0].w, g.half[0].h);
+        prof_mark("dof");
 
         /* 4: bloom, two levels. */
         bright(&g.scene, &g.quarter[0], s->bloom_threshold);
         gauss(&g.quarter[0], &g.quarter[1], &g.quarter[0]);
         bright(&g.quarter[0], &g.eighth[0], -1.0f);
         gauss(&g.eighth[0], &g.eighth[1], &g.eighth[0]);
+        prof_mark("bloom");
     }
     /* Side fill: a soft copy of the scene. */
     bright(&g.scene, &g.quarter[1], -1.0f);
@@ -740,6 +865,7 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
     gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
     gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
+    prof_mark("side");
 
     /* 5: final, with the on-screen message if any. */
     float osd_alpha = 0.0f;
@@ -791,12 +917,15 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     p_glUniform1i(U(P_FINAL, "uDebug"), debug_view);
     draw_to(offscreen ? g.out.fbo : 0, ow, oh);
     p_glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    prof_mark("final");
+    prof.frame[prof.slot] = g.frame;
+    prof.submit_ms[prof.slot] = ms_since(tc);
 
     if (timing) {
         p_glFinish();
-        last_ms = (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 /
-                  (double)SDL_GetPerformanceFrequency();
+        last_ms = ms_since(t0);
     }
+    prof.total_ms[prof.slot] = timing ? last_ms : 0.0;
 }
 
 int hd2d_read(uint8_t *bgrx, int ow, int oh)
