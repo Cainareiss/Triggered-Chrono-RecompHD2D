@@ -144,9 +144,9 @@ The ROM is never committed, and CI never sees it.
 
 Symbol names partly derived from dscotton/ct_disassembly (public domain) and ChronoRET.
 
-## License
+## ROM and credits
 
-This code is MIT-licensed (see `LICENSE`). The Chrono Trigger ROM and its
+The project's license is GPL-3.0-or-later; see [License](#license) above. The Chrono Trigger ROM and its
 assets are **not included** and remain the property of their copyright
 holders — you must supply your own legally obtained ROM via `$CT_ROM`.
 Symbol names are credited to dscotton/ct_disassembly (public domain) and
