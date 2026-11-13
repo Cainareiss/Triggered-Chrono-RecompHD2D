@@ -48,9 +48,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
      there's no font asset.
    - Frame time: 1.9 ms median and 2.3 ms at p95, at 1706x1120 on this Ally's Radeon
      780M.
-   - Tests: 59/59 pass on the `hd2d` build. The full ROM suite, including the long
-     `diff_all_*` shards, was still running when this was written. To check it:
-     `ctest --test-dir build-hd -j16`.
+   - Tests: the full ROM suite passes on the `hd2d` build, 67/67, including all
+     `diff_all_*` shards (`sync_determinism` is skipped by design).
 4. **Engine and game-module split** (`8077c70`, `edebf23`), documented in
    `docs/MODULES.md`:
    - The engine reads its function tables through pointers. A game module (`ct_game.so`)
