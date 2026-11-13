@@ -1,14 +1,16 @@
 # SPDX-FileCopyrightText: 2026 jerbanpls
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Engine-only Flatpak (docs/PACKAGING.md). From the repo root:
+# Engine-only Flatpak (docs/PACKAGING.md). Build it with
 #
-#   flatpak-builder --user --install --force-clean build-flatpak \
-#       packaging/flatpak/io.github.jerbanpls.CtRecomp.yml
+#   packaging/flatpak/build.sh
+#
+# which writes the engine's source (`git archive HEAD`) and runs
+# flatpak-builder on this file.
 #
 # It holds no game code or data: the engine is built with CT_ENGINE_ONLY,
-# from the committed sources only (a git source, so neither rom/ nor any
-# build tree is ever copied in). On first use the user's own ROM is turned
+# from the committed sources only (`git archive HEAD`, so neither rom/ nor
+# any build tree is ever copied in). On first use the user's own ROM is turned
 # into a game module in ~/.var/app/io.github.jerbanpls.CtRecomp/data, with
 # the runtime's python3 and the bundled zig.
 app-id: io.github.jerbanpls.CtRecomp
@@ -30,6 +32,8 @@ finish-args:
 modules:
   - name: SDL2
     buildsystem: cmake-ninja
+    # SDL refuses an in-tree build
+    builddir: true
     config-opts:
       - -DCMAKE_BUILD_TYPE=Release
       - -DSDL_STATIC=OFF
@@ -73,10 +77,20 @@ modules:
       - -DCT_ENGINE_ONLY=ON
       # SDL2 from the module above; never the header download
       - -DCT_SDL2_SYSTEM_LIB=OFF
+      # the default --data-dir: the installed one, not the build's /run/build
+      - -DCT_ENGINE_DATA_DIR=/app/share/ct-recomp
     post-install:
       # The compliance guarantee, checked on what was installed.
-      - "! nm /app/bin/ct_sdl_engine | grep -qE ' f_[0-9A-Fa-f]{6}'"
-      - test -z "$(find /app \( -name 'ct_game*' -o -iname '*.sfc' -o -iname '*.smc' -o -name 'ct_funcs.*' \) -print)"
+      # This runs before flatpak-builder strips the binary, so nm sees the
+      # full symbol table. nm's output goes to a file first, so that nm
+      # failing fails the build instead of passing the grep.
+      - nm /app/bin/ct_sdl_engine > ../engine.syms
+      - test -s ../engine.syms
+      - "! grep -qE ' f_[0-9A-Fa-f]{6}' ../engine.syms"
+      - test -z "$(find /app \( -name 'ct_game*' -o -iname '*.sfc' -o -iname '*.smc' -o -name 'ct_funcs.*' -o -name 'ct_overlays.*' -o -name 'bank*.c' \) -print)"
     sources:
-      - type: git
-        path: ../..
+      # `git archive HEAD`, made by packaging/flatpak/build.sh: committed
+      # files only, from the checkout's HEAD.
+      - type: archive
+        path: ../../build-flatpak-src/ct-recomp-src.tar
+        strip-components: 0
