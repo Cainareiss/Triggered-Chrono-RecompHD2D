@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+SPDX-FileCopyrightText: 2026 jerbanpls
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+<resources>
+    <string name="app_name">CT Recomp</string>
+    <string name="intro">This app contains no game. Pick your own ROM image (.sfc) and a game module (ct_game.so) built from it for arm64 on your PC; both are copied into the app\'s private storage.</string>
+    <string name="pick_rom">Pick ROM (.sfc)</string>
+    <string name="pick_module">Pick game module (.so)</string>
+    <string name="hd2d">HD-2D look (OpenGL ES 3.0)</string>
+    <string name="play">Play</string>
+    <string name="missing">missing</string>
+    <string name="present">imported, %1$d bytes</string>
+    <string name="rom_label">ROM: %1$s</string>
+    <string name="module_label">Module: %1$s</string>
+    <string name="copy_failed">Import failed: %1$s</string>
+    <string name="not_module">That file is not an arm64 ELF shared object.</string>
+</resources>

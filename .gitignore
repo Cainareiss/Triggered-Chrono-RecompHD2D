@@ -39,3 +39,9 @@ SESSION*.md
 
 # Flatpak build state
 .flatpak-builder/
+
+# Android (android/): Gradle and IDE state; app/build/ holds the SDL download
+android/.gradle/
+android/local.properties
+android/.idea/
+android/**/.cxx/

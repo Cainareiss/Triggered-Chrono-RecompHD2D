@@ -1,0 +1,110 @@
+// SPDX-FileCopyrightText: 2026 jerbanpls
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The app: SDL's Java glue (from the SDL 2.32.10 release tarball), our two
+// activities, and libmain.so + libSDL2.so built by the repository's root
+// CMakeLists.txt with CT_ANDROID=ON (engine and frontend only: no game
+// code). See docs/ANDROID-BUILD.md.
+plugins {
+    id 'com.android.application'
+}
+
+// ---- SDL 2.32.10, from the official release tarball, SHA-256 pinned ----
+def sdlVersion = '2.32.10'
+def sdlUrl = "https://github.com/libsdl-org/SDL/releases/download/release-${sdlVersion}/SDL2-${sdlVersion}.tar.gz"
+def sdlSha256 = '5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165'
+def sdlDir = new File(projectDir, 'build/sdl')
+def sdlTar = new File(sdlDir, "SDL2-${sdlVersion}.tar.gz")
+def sdlSrc = new File(sdlDir, "SDL2-${sdlVersion}")
+def sdlJava = new File(sdlSrc, 'android-project/app/src/main/java')
+
+def sha256 = { File f ->
+    def md = java.security.MessageDigest.getInstance('SHA-256')
+    f.eachByte(65536) { byte[] buf, int n -> md.update(buf, 0, n) }
+    md.digest().encodeHex().toString()
+}
+
+tasks.register('fetchSdl') {
+    description = "Download SDL ${sdlVersion}, check its SHA-256 and unpack it in build/sdl"
+    outputs.dir sdlSrc
+    doLast {
+        sdlDir.mkdirs()
+        if (!sdlTar.exists() || sha256(sdlTar) != sdlSha256) {
+            logger.lifecycle("fetchSdl: downloading ${sdlUrl}")
+            def part = new File(sdlDir, sdlTar.name + '.part')
+            new URL(sdlUrl).withInputStream { i -> part.withOutputStream { o -> o << i } }
+            def got = sha256(part)
+            if (got != sdlSha256) {
+                part.delete()
+                throw new GradleException("fetchSdl: ${sdlUrl}: SHA-256 ${got}, expected ${sdlSha256}")
+            }
+            part.renameTo(sdlTar)
+        }
+        if (!new File(sdlJava, 'org/libsdl/app/SDLActivity.java').exists()) {
+            project.copy {
+                from project.tarTree(project.resources.gzip(sdlTar))
+                into sdlDir
+            }
+        }
+    }
+}
+
+android {
+    namespace 'io.github.jerbanpls.ctrecomp'
+    compileSdk 35
+    ndkVersion '27.2.12479018'
+
+    defaultConfig {
+        applicationId 'io.github.jerbanpls.ctrecomp'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '0.1'
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+        externalNativeBuild {
+            cmake {
+                arguments '-DCT_ENGINE_ONLY=ON', '-DCT_ANDROID=ON',
+                          "-DCT_SDL2_SOURCE_DIR=${sdlSrc}",
+                          '-DANDROID_STL=c++_static'
+                abiFilters 'arm64-v8a'
+                targets 'main', 'SDL2'
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file('../../CMakeLists.txt')
+            // The root CMakeLists.txt needs CMake 3.24+ ($<LINK_LIBRARY:WHOLE_ARCHIVE>).
+            version '3.31.6'
+        }
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs += [sdlJava]
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    lint {
+        abortOnError false
+    }
+}
+
+// SDL's sources must be unpacked before Java compiles and CMake configures.
+tasks.named('preBuild') { dependsOn 'fetchSdl' }
+tasks.matching { it.name.startsWith('configureCMake') || it.name.startsWith('buildCMake') }
+    .configureEach { dependsOn 'fetchSdl' }

@@ -88,6 +88,9 @@ mkdir -p shots && build/ct_boot --frames 1500 --dump shots   # headless: PNGs of
 
 `ct_sdl` keys: arrows, Z=B, X=A, A=Y, S=X, Q=L, W=R, Enter=Start, Right Shift=Select;
 a game controller works too. Ctrl+Q or closing the window quits.
+On a touchscreen an on-screen controller appears when you touch the window
+(`--touch` shows it from the start and lets the mouse press it; see
+[docs/ANDROID-BUILD.md](docs/ANDROID-BUILD.md#the-touch-controller)).
 `ct_sdl --record FILE` saves your pad input as a script; `ct_boot --script FILE
 --frames N` replays it exactly (N is on its last line), and `ct_sdl --script
 FILE` plays it back in the window. A `reset F` line in a script presses the reset button as
