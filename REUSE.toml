@@ -56,9 +56,9 @@ SPDX-License-Identifier = "ISC"
 
 # Upstream files with our (GPL-3.0-or-later) changes: the PPU layer G-buffer,
 # its scheduler plumbing, the HD-2D frontend integration, build wiring, the
-# engine-only first run, the ROM SHA-1 check, the touch overlay hookup, the
-# Android (CT_ANDROID) build, and the portable context switch and overlay
-# jump (arm64, docs/ANDROID.md).
+# engine-only first run, the ROM SHA-1 check, save files, the touch overlay
+# hookup, the Android (CT_ANDROID) build, and the portable context switch and
+# overlay jump (arm64, docs/ANDROID.md).
 [[annotations]]
 path = [
   "third_party/snes/ppu.c",
@@ -73,6 +73,7 @@ path = [
   "game/ct/game.toml",
   "runtime/spc700_host.cpp",
   "runtime/overlay.h",
+  "test/test_record.py",
 ]
 precedence = "closest"
 SPDX-FileCopyrightText = ["2022 snesrev", "2021 elzo_d", "2026 Akhil Moola", "2026 jerbanpls"]

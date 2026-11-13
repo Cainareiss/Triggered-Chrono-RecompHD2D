@@ -253,7 +253,8 @@ if(SDL2_FOUND)
         set(CT_GAME_ID ${ct_first_game} CACHE STRING "Default game for ct_sdl_engine (--game)")
     endif()
     ct_engine_exe(ct_sdl_engine ${CMAKE_SOURCE_DIR}/frontend/main.c
-        ${CMAKE_SOURCE_DIR}/frontend/firstrun.c ${CMAKE_SOURCE_DIR}/frontend/sha1.c)
+        ${CMAKE_SOURCE_DIR}/frontend/firstrun.c ${CMAKE_SOURCE_DIR}/frontend/sha1.c
+        ${CMAKE_SOURCE_DIR}/frontend/saves.c)
     target_link_libraries(ct_sdl_engine ct_input ct_hd2d)
     target_compile_definitions(ct_sdl_engine PRIVATE CT_FIRSTRUN
         CT_FIRSTRUN_GAME="${CT_GAME_ID}" CT_FIRSTRUN_DATA_DIR="${CT_ENGINE_DATA_DIR}")

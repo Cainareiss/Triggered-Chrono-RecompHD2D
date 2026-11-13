@@ -96,6 +96,8 @@ flatpak run io.github.jerbanpls.CtRecomp --hd2d
 | `--preset off\|subtle\|hd2d` | Starting HD-2D look (with `--hd2d`) |
 | `--aspect 4:3\|pixel\|stretch` | Picture shape (with `--hd2d`) |
 | `--log-gpu` | Print the HD-2D renderer's frame time every 60 frames |
+| `--save FILE` | Keep the game's save memory in FILE instead of `ct/ct.srm` (see [Your saves](#your-saves)) |
+| `--no-save` | Don't load or write the save file: in-game saves last only until you quit |
 
 ## First launch
 
@@ -187,14 +189,29 @@ The engine keeps its files in your user data folder, `~/.local/share/ct-recomp/`
 | `ct/ct_game.so` | The game module built from your ROM. Don't share it. |
 | `ct/ct_game.stamp` | The ROM checksum and engine version the module was built for |
 | `ct/rom_path` | Where your ROM is, so you don't have to pick it again |
+| `ct/ct.srm` | Your in-game saves (see [Your saves](#your-saves)) |
+| `ct/ct.srm.bak` | The save file as it was before the last write |
 | `hd2d/settings.ini` | The HD-2D look and picture shape |
 | `ct/gen/`, `ct/obj/` | Temporary build files, normally deleted after the build. If a build fails they can be left behind: they hold code generated from your ROM, so don't share them. Deleting them is safe. |
 
 The ROM itself is never copied: only its location is saved.
 
-**In-game saves are not kept yet.** The game's save memory exists only while the
-program runs: when you quit, your in-game saves are lost. Saving to disk, save states and
-importing `.srm` files from other emulators are planned (see [ROADMAP.md](../ROADMAP.md)).
+### Your saves
+
+The cartridge's battery-backed save memory (8 KiB, which holds the game's save slots) is
+kept in `ct/ct.srm`, as a plain 8,192-byte copy of that memory. It is loaded at start-up
+and written back a few seconds after the game changes it, for example right after you
+save in the game, and again when you quit, also when you close the window or the
+program stops with an error. Each write goes to a temporary file first and then replaces
+`ct.srm`, so a crash or a power cut leaves either the old save or the new one, never half
+of each. The save before the last write is kept as `ct.srm.bak`. To go back to it, quit
+and copy `ct.srm.bak` over `ct.srm`.
+
+A `ct.srm` that isn't exactly 8,192 bytes is never used or overwritten: the engine
+renames it to `ct.srm.bad`, prints a warning, and starts with empty save memory.
+
+To keep the saves somewhere else, start with `--save /path/to/file.srm`. Save states and
+importing saves from other emulators are planned (see [ROADMAP.md](../ROADMAP.md)).
 
 ## Troubleshooting
 

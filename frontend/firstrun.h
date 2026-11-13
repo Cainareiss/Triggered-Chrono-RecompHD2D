@@ -24,11 +24,17 @@ typedef struct {
     const char *data_dir;   /* where game/ and tools/ are */
     const char *game_id;    /* the directory name under DATA_DIR/game */
     int want_module;        /* 0: only find and check the ROM */
-    /* Show a SCHED_WIDTH x SCHED_HEIGHT B G R x frame in the window. */
+    /* Show a SCHED_WIDTH x SCHED_HEIGHT B G R x frame in the window (or
+       NULL: no window). */
     void (*present)(const uint8_t *bgrx);
     /* Write the same frame to a PNG (the --shot status:PATH option). */
     void (*shot)(const uint8_t *bgrx, const char *path);
     const char *shot_path;  /* or NULL */
+    /* No one to ask: without a usable ROM, or when the module can't be
+       built or loaded, return FIRSTRUN_ERROR instead of waiting for a
+       dropped file or offering the interpreter (--build-only). With
+       rom_arg set, only that ROM is tried. */
+    int build_only;
 } firstrun_opts;
 
 enum { FIRSTRUN_MODULE, FIRSTRUN_INTERP, FIRSTRUN_QUIT, FIRSTRUN_ERROR };
