@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 jerbanpls
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Pinned third-party binaries that tools/check_dist.py --allow exempts from the
+# ROM-window check only (name, ELF-export and generated-name checks still run).
+# Each entry: the file's SHA-256, then why it is safe. Add an entry only for an
+# unmodified upstream binary whose source is pinned in packaging/.
+2858dc89dbbfdd08cceda1b841e7fd0a793a1a67b49f150bc3d0d1de44ed7f51 zig 0.15.2 x86_64 compiler (official tarball, pinned in packaging/); its 256-byte bit-reversal table also appears in the ROM

@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import hashlib
 import io
 import os
 import re
@@ -119,8 +120,9 @@ def elf_defines(data: bytes, symbol: bytes) -> bool:
 
 
 class Checker:
-    def __init__(self, samples: RomSamples | None, quiet: bool):
+    def __init__(self, samples: RomSamples | None, quiet: bool, allow: dict[str, str] | None = None):
         self.samples = samples
+        self.allow = allow or {}
         self.quiet = quiet
         self.files = 0
         self.findings: list[str] = []
@@ -148,7 +150,10 @@ class Checker:
         m = SYMBOL_RE.search(data)
         if m:
             self.fail(where, f'generated function name {m.group().decode()} at offset {m.start()}')
-        off = self.samples.find(data) if self.samples else -1
+        allowed = self.allow.get(hashlib.sha256(data).hexdigest()) if self.allow else None
+        off = self.samples.find(data) if self.samples and not allowed else -1
+        if allowed:
+            print(f'check_dist: notice: {where}: ROM-window check skipped (--allow: {allowed})')
         if off >= 0:
             self.fail(where, f'a 64-byte window of the ROM at offset {off}')
         if not self.quiet and len(self.findings) == before:
@@ -242,6 +247,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument('--rom', help='the ROM, for the ROM-window check (skipped without it)')
     ap.add_argument('--samples', type=int, default=4096)
     ap.add_argument('--quiet', action='store_true', help='print only failures and the summary')
+    ap.add_argument('--allow', action='append', default=[], metavar='FILE',
+                    help='a list of "SHA256 reason" lines: files with exactly these hashes (pinned '
+                         'third-party binaries) skip only the ROM-window check, since generic '
+                         'tables in them can match ROM bytes by chance')
     a = ap.parse_args(argv[1:])
     samples = None
     if a.rom is None:
@@ -257,7 +266,22 @@ def main(argv: list[str]) -> int:
         samples = RomSamples(rom, a.samples)
         print(f'check_dist: {len(samples.windows)} ROM windows sampled '
               f'(anchors {samples.anchors.hex(" ")})')
-    c = Checker(samples, a.quiet)
+    allow: dict[str, str] = {}
+    for path in a.allow:
+        try:
+            with open(path, encoding='utf-8') as f:
+                for line in f:
+                    line = line.split('#', 1)[0].strip()
+                    if line:
+                        h, _, why = line.partition(' ')
+                        if len(h) != 64:
+                            print(f'check_dist: {path}: bad line: {line}', file=sys.stderr)
+                            return 2
+                        allow[h.lower()] = why.strip() or 'allowed'
+        except OSError as e:
+            print(f'check_dist: cannot read --allow {path}: {e}', file=sys.stderr)
+            return 2
+    c = Checker(samples, a.quiet, allow)
     for p in a.paths:
         if not os.path.exists(p):
             print(f'check_dist: no such file or directory: {p}', file=sys.stderr)
