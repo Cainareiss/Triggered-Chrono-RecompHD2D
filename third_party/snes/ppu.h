@@ -61,6 +61,14 @@ struct Ppu {
   // when color math changed the pixel. Used by the HD-2D renderer.
   uint8_t *layerBuffer;
   uint32_t layerPitch;
+  // port: optional "behind" G-buffer (NULL behindColor: off). Per output
+  // pixel, the runner-up: the best layer that lost to the winner there
+  // (the backdrop when none did). behindColor is B G R x like the frame
+  // (its CGRAM color with brightness applied, before color math and
+  // clipping); behindLayer is z level << 4 | layer, as layerBuffer, with
+  // the math bit clear. Main screen only.
+  uint8_t *behindColor, *behindLayer;
+  uint32_t behindColorPitch, behindLayerPitch;
   uint8_t extraLeftCur, extraRightCur, extraLeftRight, extraBottomCur;
   float mode7PerspectiveLow, mode7PerspectiveHigh;
 
@@ -134,6 +142,7 @@ struct Ppu {
   uint32_t colorMapRgb[256];
   PpuPixelPrioBufs bgBuffers[2];
   PpuPixelPrioBufs objBuffer;
+  PpuPixelPrioBufs behindBuf;   // port: whole-line renderer's runner-ups
   uint16_t vram[0x8000];
 };
 
@@ -148,6 +157,9 @@ void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val);
 void ppu_saveload(Ppu *ppu, SaveLoadFunc *func, void *ctx);
 void PpuBeginDrawing(Ppu *ppu, uint8_t *buffer, size_t pitch, uint32_t render_flags);
 void PpuSetLayerBuffer(Ppu *ppu, uint8_t *buffer, size_t pitch);   // port
+// port: see Ppu.behindColor; color NULL turns it off.
+void PpuSetBehindBuffer(Ppu *ppu, uint8_t *color, size_t color_pitch,
+                        uint8_t *layer, size_t layer_pitch);
 
 // Returns the current render scale, 1x = 256px, 2x=512px, 4x=1024px
 int PpuGetCurrentRenderScale(Ppu *ppu, uint32_t render_flags);

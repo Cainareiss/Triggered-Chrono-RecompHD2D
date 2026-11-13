@@ -23,6 +23,13 @@ static uint8_t present[SCHED_WIDTH * SCHED_HEIGHT * 4];   /* copied at VBlank */
 /* port: layer G-buffer, drawn and presented alongside fb */
 static uint8_t fb_layers[SCHED_WIDTH * SCHED_HEIGHT];
 static uint8_t present_layers[SCHED_WIDTH * SCHED_HEIGHT];
+/* port: behind G-buffer (the runner-up layer per pixel), when on */
+static int behind_on;
+static uint8_t fb_behind[SCHED_WIDTH * SCHED_HEIGHT * 4];
+static uint8_t present_behind[SCHED_WIDTH * SCHED_HEIGHT * 4];
+static uint8_t fb_behind_layers[SCHED_WIDTH * SCHED_HEIGHT];
+static uint8_t present_behind_layers[SCHED_WIDTH * SCHED_HEIGHT];
+static int present_behind_valid;
 static sched_ppu_state present_state;
 static int line;
 static unsigned hclock;         /* master clocks into the current line */
@@ -444,6 +451,11 @@ void sched_init(CPU *c)
     memset(present, 0, sizeof present);
     memset(fb_layers, 0, sizeof fb_layers);
     memset(present_layers, 0, sizeof present_layers);
+    memset(fb_behind, 0, sizeof fb_behind);   /* port */
+    memset(present_behind, 0, sizeof present_behind);
+    memset(fb_behind_layers, 0, sizeof fb_behind_layers);
+    memset(present_behind_layers, 0, sizeof present_behind_layers);
+    present_behind_valid = 0;
     memset(&present_state, 0, sizeof present_state);
     bus_hook(0x4200, bus_open_bus, nmitimen_write);   /* write-only: open bus */
     bus_hook(0x4201, bus_open_bus, wrio_write);
@@ -484,12 +496,21 @@ static void start_line(void)
         rdnmi_set = rdnmi_cleared = 0;
         PpuBeginDrawing(ppu, fb, SCHED_WIDTH * 4, 0);
         PpuSetLayerBuffer(ppu, fb_layers, SCHED_WIDTH);   /* port */
+        if (behind_on)   /* port: behind G-buffer */
+            PpuSetBehindBuffer(ppu, fb_behind, SCHED_WIDTH * 4, fb_behind_layers, SCHED_WIDTH);
+        else
+            PpuSetBehindBuffer(ppu, NULL, 0, NULL, 0);
         dma_initHdma(dma);
     }
     if (line == SCHED_VBLANK_LINE) {
         ppu_drawTo(ppu, 256);   /* the last line's rest */
         memcpy(present, fb, sizeof present);   /* rows 0-223 are final */
         memcpy(present_layers, fb_layers, sizeof present_layers);   /* port */
+        present_behind_valid = ppu->behindColor != NULL;   /* port */
+        if (present_behind_valid) {
+            memcpy(present_behind, fb_behind, sizeof present_behind);
+            memcpy(present_behind_layers, fb_behind_layers, sizeof present_behind_layers);
+        }
         present_state = (sched_ppu_state){
             .mode = ppu->mode, .bg3_priority = ppu->bg3Priority,
             .main_enabled = ppu->screenEnabled[0], .sub_enabled = ppu->screenEnabled[1],
@@ -1553,6 +1574,14 @@ void sched_set_reset_hook(int (*fn)(long frame)) { reset_hook = fn; }
 
 const uint8_t *sched_frame(void) { return present; }
 const uint8_t *sched_layers(void) { return present_layers; }
+/* port: behind G-buffer */
+void sched_set_behind(int on) { behind_on = on; }
+int sched_behind_on(void) { return behind_on; }
+const uint8_t *sched_behind(void) { return present_behind_valid ? present_behind : NULL; }
+const uint8_t *sched_behind_layers(void)
+{
+    return present_behind_valid ? present_behind_layers : NULL;
+}
 const sched_ppu_state *sched_ppu_state_get(void) { return &present_state; }
 long sched_frame_count(void) { return frames; }
 void sched_set_frame_hook(void (*fn)(long frame)) { frame_hook = fn; }
