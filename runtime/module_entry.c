@@ -3,7 +3,9 @@
  *
  * Compiled into every game module: describes the module's tables to the
  * engine that loads it (module.h). */
+#ifndef CT_TABLES_DEFINE   /* also set by the build */
 #define CT_TABLES_DEFINE
+#endif
 #include "module.h"
 
 __attribute__((visibility("default"))) const ct_module_info *ct_module_get(void);

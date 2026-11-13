@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 
+#include "alu.h"   /* port: decimal mode */
 #include "bus.h"
 #include "cpu.h"
 #include "cycles.h"
@@ -404,44 +405,34 @@ static inline void lsr_a16(CPU *c)
 static inline uint8_t inc8(CPU *c, uint8_t v) { v = (uint8_t)(v + 1); set_nz8(c, v); return v; }
 static inline uint8_t dec8(CPU *c, uint8_t v) { v = (uint8_t)(v - 1); set_nz8(c, v); return v; }
 
-/* ---- arithmetic (binary only; decimal mode is fatal in v0) ---- */
+/* ---- arithmetic ----
+   port: binary and decimal (D=1) ADC/SBC, runtime/alu.h (shared with the
+   interpreter). D is tested at run time, not assumed clear: code can set
+   it dynamically (PLP, RTI, SEP #$08), so a static D can't be known. The
+   `at` argument is kept for the generated calls' signature. */
 
 static inline void adc8(CPU *c, uint8_t b, uint32_t at)
 {
-    if (c->d)
-        ct_fatal("$%06X: ADC with D=1 not supported", at);
-    uint8_t a = a8(c);
-    unsigned r = (unsigned)a + b + c->c;
-    c->c = r > 0xFF;
-    c->v = ((~(a ^ b) & (a ^ r)) >> 7) & 1;
-    set_a8(c, (uint8_t)r);
-    set_nz8(c, (uint8_t)r);
+    (void)at;
+    set_a8(c, alu_adc8(c, a8(c), b));
 }
 
 static inline void adc16(CPU *c, uint16_t b, uint32_t at)
 {
-    if (c->d)
-        ct_fatal("$%06X: ADC with D=1 not supported", at);
-    uint16_t a = c->A;
-    unsigned r = (unsigned)a + b + c->c;
-    c->c = r > 0xFFFF;
-    c->v = ((~(a ^ b) & (a ^ r)) >> 15) & 1;
-    c->A = (uint16_t)r;
-    set_nz16(c, c->A);
+    (void)at;
+    c->A = alu_adc16(c, c->A, b);
 }
 
 static inline void sbc8(CPU *c, uint8_t b, uint32_t at)
 {
-    if (c->d)
-        ct_fatal("$%06X: SBC with D=1 not supported", at);
-    adc8(c, (uint8_t)~b, at);
+    (void)at;
+    set_a8(c, alu_sbc8(c, a8(c), b));
 }
 
 static inline void sbc16(CPU *c, uint16_t b, uint32_t at)
 {
-    if (c->d)
-        ct_fatal("$%06X: SBC with D=1 not supported", at);
-    adc16(c, (uint16_t)~b, at);
+    (void)at;
+    c->A = alu_sbc16(c, c->A, b);
 }
 
 static inline void cmp8(CPU *c, uint8_t r, uint8_t b)

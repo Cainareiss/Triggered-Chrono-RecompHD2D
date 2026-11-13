@@ -282,16 +282,16 @@ endfunction()
 
 ct_engine_test(test_runtime test/test_runtime.c)
 add_test(NAME runtime COMMAND test_runtime)
-foreach(f open_bus rom_write unhooked decimal entry)
+foreach(f open_bus rom_write unhooked entry)
     add_test(NAME runtime_fatal_${f} COMMAND test_runtime fatal_${f})
 endforeach()
 set_tests_properties(runtime_fatal_open_bus PROPERTIES PASS_REGULAR_EXPRESSION "ct: read8 \\$006000: open bus")
 set_tests_properties(runtime_fatal_rom_write PROPERTIES PASS_REGULAR_EXPRESSION "ct: write8 \\$E50000: write to ROM")
 set_tests_properties(runtime_fatal_unhooked PROPERTIES PASS_REGULAR_EXPRESSION "ct: read8 \\$004016: unhooked")
-set_tests_properties(runtime_fatal_decimal PROPERTIES PASS_REGULAR_EXPRESSION "ct: \\$E50000: ADC with D=1")
 set_tests_properties(runtime_fatal_entry PROPERTIES PASS_REGULAR_EXPRESSION "ct: \\$C08100: entry state m0 x0 e0, expected m1 x0")
 
-foreach(t snes_bus hw_map interp_modes interp_system sched stack_guard replay resample dsp)
+foreach(t snes_bus hw_map interp_modes interp_system sched stack_guard replay resample dsp
+        decimal)   # port: decimal (test/test_decimal.c)
     ct_engine_test(test_${t} test/test_${t}.c)
     add_test(NAME ${t} COMMAND test_${t})
 endforeach()
@@ -326,6 +326,7 @@ add_test(NAME ctest_cache_report COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DI
 add_test(NAME tas_convert COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_tas_convert.py)
 add_test(NAME decode_calls COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_decode_calls.py)
 add_test(NAME funcs_meta COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_funcs_meta.py)
+add_test(NAME replay_gen COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_replay_gen.py)   # port: tools/replay_gen.py
 
 if(SDL2_FOUND)
     add_executable(test_input test/test_input.c)

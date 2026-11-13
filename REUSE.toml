@@ -58,8 +58,8 @@ SPDX-License-Identifier = "ISC"
 # its scheduler plumbing, the HD-2D frontend integration, build wiring, the
 # engine-only first run, the ROM SHA-1 check, save files, the touch overlay
 # hookup, the Android (CT_ANDROID) build, the portable context switch and
-# overlay jump (arm64, docs/ANDROID.md), and the handheld quit combo
-# (docs/HANDHELD.md).
+# overlay jump (arm64, docs/ANDROID.md), the handheld quit combo
+# (docs/HANDHELD.md), and decimal-mode ADC/SBC.
 [[annotations]]
 path = [
   "third_party/snes/ppu.c",
@@ -77,6 +77,10 @@ path = [
   "test/test_record.py",
   "frontend/input.c",
   "frontend/input.h",
+  "runtime/interp.c",
+  "runtime/ops.h",
+  "test/test_interp_modes.c",
+  "test/test_runtime.c",
 ]
 precedence = "closest"
 SPDX-FileCopyrightText = ["2022 snesrev", "2021 elzo_d", "2026 Akhil Moola", "2026 jerbanpls"]
