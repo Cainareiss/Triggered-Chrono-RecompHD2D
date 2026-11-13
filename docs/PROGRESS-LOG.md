@@ -58,8 +58,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
 - The installed AppImage with the prebuilt module ran 600 frames at 60.10 Hz with 0
   audio underruns.
 - `--hd2d` gets a hardware GL 4.6 context on radeonsi. That short run had one 153 ms
-  stall and 6 underruns, while the full test suite was loading the machine. Not
-  investigated; possibly shader compilation on the first frames.
+  stall and 6 underruns, while the full test suite was loading the machine.
+- **Follow-up:** the stall doesn't reproduce on an idle machine, even with Mesa's shader
+  cache disabled. In 12 runs of 600 frames, 6 before the change and 6 after, the worst
+  frame was 16.78 ms, with 0 underruns. So the load caused it.
+  - Even so, `hd2d_warmup` now draws one throwaway frame per preset before audio starts
+    (about 5 ms here). That way the driver's first-draw work can't land on frame 1 on a
+    slower APU like the Deck's.
+  - The frames rendered are byte-identical with and without it.
 
 ### Not tested on real hardware yet
 - Steam's real Game Mode and Steam Input's physical buttons, including the quit combo.

@@ -1063,6 +1063,14 @@ int main(int argc, char **argv)
                  hd2d_preset() == HD2D_OFF ? "original" : hd2d_preset() == HD2D_SUBTLE ? "subtle"
                  : hd2d_preset() == HD2D_DECK ? "HD-2D Steam Deck" : "HD-2D");
         hd2d_osd(hello);
+        /* port: the driver's first-draw work now, not on frame 1 with
+           audio playing. */
+        int ww, wh;
+        SDL_GL_GetDrawableSize(win, &ww, &wh);
+        uint64_t tw = SDL_GetPerformanceCounter();
+        hd2d_warmup(ww, wh);
+        fprintf(stderr, "ct_sdl: hd2d warm-up %dx%d: %.1f ms\n", ww, wh,
+                (double)(SDL_GetPerformanceCounter() - tw) * 1000.0 / SDL_GetPerformanceFrequency());
     }
 
     SDL_AudioSpec want = {0}, have;

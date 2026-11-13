@@ -46,6 +46,11 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
                  const uint8_t *behind_layers, const sched_ppu_state *st, int out_w, int out_h,
                  int offscreen);
 
+/* One throwaway render at out_w x out_h, right after hd2d_init, so the
+   driver's first-draw shader builds and the target setup happen before
+   the game (and its audio) starts, not on its first frame. */
+void hd2d_warmup(int out_w, int out_h);
+
 /* Whether the current preset uses the behind G-buffer, so the caller can
    turn the PPU's (sched_set_behind) on only while it is needed. */
 int hd2d_wants_behind(void);

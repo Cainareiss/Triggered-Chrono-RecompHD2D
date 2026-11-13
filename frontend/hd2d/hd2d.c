@@ -299,6 +299,9 @@ static const settings presets[HD2D_PRESETS] = {
 static const char *const preset_names[HD2D_PRESETS] = {"off", "subtle", "hd2d", "deck"};
 
 static int cur_preset = HD2D_FULL, debug_view, aspect_mode, timing;
+/* Eased across frames by hd2d_render (scene brightness, ground share). */
+static float dark_amt = 0.5f, field_amt = 1.0f;
+
 static double last_ms;
 
 void hd2d_set_preset(int p) { cur_preset = p < 0 || p >= HD2D_PRESETS ? HD2D_FULL : p; }
@@ -550,6 +553,33 @@ int hd2d_init(int gles)
     return 0;
 }
 
+/* Drivers (Mesa among them) build a program's final GPU code at its first
+   draw, and the window-size targets are made on the first render: done on
+   frame 1 that is a stall long enough to drain the audio queue. One
+   throwaway render of a blank frame per preset forces both here, before
+   any audio is queued. The eased state is put back, so the first real
+   frame is as it would have been. */
+void hd2d_warmup(int ow, int oh)
+{
+    if (!g.ready)
+        return;
+    static uint8_t blank[SCHED_WIDTH * SCHED_HEIGHT * 4], blank_layers[SCHED_WIDTH * SCHED_HEIGHT];
+    float d = dark_amt, f = field_amt, fy = g.focus_y;
+    unsigned fr = g.frame;
+    int keep = cur_preset;
+    int order[2] = {keep, HD2D_FULL};
+    for (int k = 0; k < (keep == HD2D_FULL ? 1 : 2); k++) {
+        cur_preset = order[k];
+        hd2d_render(blank, blank_layers, blank, blank_layers, NULL, ow, oh, 0);
+    }
+    cur_preset = keep;
+    p_glFinish();
+    dark_amt = d;
+    field_amt = f;
+    g.focus_y = fy;
+    g.frame = fr;
+}
+
 void hd2d_shutdown(void)
 {
     if (!g.ready)
@@ -797,7 +827,6 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
        gone above 0.42 (daylight). */
     float dark_target = mean_luma < 0.18f ? 1.0f : mean_luma > 0.42f ? 0.0f
                                                  : (0.42f - mean_luma) / 0.24f;
-    static float dark_amt = 0.5f;
     dark_amt += (dark_target - dark_amt) * 0.1f;
     g.focus_y += (focus_target - g.focus_y) * 0.08f;
     /* Menus and full-screen text: ease the scene effects off. */
@@ -808,7 +837,6 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
        title cards and black-backed screens, full from 45% ground up. */
     float field_target = field_frac < 0.2f ? 0.0f : field_frac > 0.45f ? 1.0f
                                                    : (field_frac - 0.2f) / 0.25f;
-    static float field_amt = 1.0f;
     field_amt += (field_target - field_amt) * 0.1f;
 
     p_glDisable(GL_DEPTH_TEST);
