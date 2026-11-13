@@ -294,6 +294,70 @@ static void test_bg_16x16(void)
     CHECK(!strcmp(row8, "brrb"), "row 8 by 8-pixel quarter: %s, want brrb", row8);
 }
 
+/* port: the behind G-buffer (Ppu.behindColor): per pixel, the layer that
+   lost to the one shown, from both renderers. Mode 1, BG1 over BG2:
+   columns 0-7 BG1 high priority (red) over BG2 (green), 8-15 BG1 low
+   priority over BG2, 16-31 BG2 alone over the backdrop (blue), 32 on the
+   backdrop alone. */
+static void test_behind_buffer(void)
+{
+    static const struct { int x, front, behind, behind_z, behind_layer; } want[] = {
+        {0, 'r', 'g', 7, 1}, {7, 'r', 'g', 7, 1}, {8, 'r', 'g', 7, 1}, {15, 'r', 'g', 7, 1},
+        {16, 'g', 'b', 0, 5}, {31, 'g', 'b', 0, 5}, {32, 'b', 'b', 0, 5}, {255, 'b', 'b', 0, 5},
+    };
+    for (int whole_line = 0; whole_line < 2; whole_line++) {
+        bus_reset();
+        Ppu *p = snes_hw_ppu();
+        write8(0x2100, 0x0F);   /* INIDISP: brightness 15 */
+        write8(0x2105, 0x01);   /* BGMODE 1 */
+        write8(0x2107, 0x00);   /* BG1 tilemap at $0000 */
+        write8(0x2108, 0x08);   /* BG2 tilemap at $0800 */
+        write8(0x210B, 0x11);   /* BG1 and BG2 tiles at $1000 */
+        write8(0x212C, 0x03);   /* TM: BG1, BG2 */
+        static const struct { uint8_t index; uint16_t color; } cg[] = {
+            {0, 0x7C00}, {1, 0x001F}, {18, 0x03E0}};   /* backdrop blue, 1 red, 18 green */
+        for (int k = 0; k < 3; k++) {
+            write8(0x2121, cg[k].index);
+            write8(0x2122, cg[k].color & 0xFF);
+            write8(0x2122, cg[k].color >> 8);
+        }
+        memset(p->vram, 0, sizeof p->vram);
+        p->vram[0] = 0x2000 | 1;   /* BG1 cell 0: tile 1, priority 1 */
+        p->vram[1] = 1;            /* cell 1: tile 1, priority 0 */
+        for (int c = 0; c < 4; c++)
+            p->vram[0x0800 + c] = 0x0400 | 2;   /* BG2 cells 0-3: tile 2, palette 1 */
+        for (int r = 0; r < 8; r++) {
+            p->vram[0x1000 + 16 + r] = 0x00FF;   /* tile 1: color 1 */
+            p->vram[0x1000 + 32 + r] = 0xFF00;   /* tile 2: color 2 */
+        }
+        static uint8_t buf[256 * 4 * 4], bcolor[256 * 4 * 4], blayer[256 * 4];
+        memset(bcolor, 0xEE, sizeof bcolor);
+        memset(blayer, 0xEE, sizeof blayer);
+        PpuBeginDrawing(p, buf, 256 * 4, whole_line ? kPpuRenderFlags_NewRenderer : 0);
+        PpuSetBehindBuffer(p, bcolor, 256 * 4, blayer, 256);
+        for (int line = 0; line <= 2; line++)
+            ppu_runLine(p, line);
+        ppu_drawTo(p, 256);
+        PpuSetBehindBuffer(p, NULL, 0, NULL, 0);
+#define RGB(c, x) ((c)[(x) * 4 + 2] > 0 ? 'r' : (c)[(x) * 4 + 1] > 0 ? 'g' : (c)[(x) * 4] > 0 ? 'b' : '.')
+        for (size_t k = 0; k < sizeof want / sizeof *want; k++) {
+            int x = want[k].x;
+            CHECK(RGB(buf, x) == want[k].front, "%s renderer, pixel %d shows %c, want %c",
+                  whole_line ? "whole-line" : "per-pixel", x, RGB(buf, x), want[k].front);
+            CHECK(RGB(bcolor, x) == want[k].behind && bcolor[x * 4 + 3] == 0,
+                  "%s renderer, pixel %d has %c behind, want %c",
+                  whole_line ? "whole-line" : "per-pixel", x, RGB(bcolor, x), want[k].behind);
+            CHECK(blayer[x] == (want[k].behind_z << 4 | want[k].behind_layer),
+                  "%s renderer, pixel %d behind layer byte %02x, want %02x",
+                  whole_line ? "whole-line" : "per-pixel", x, blayer[x],
+                  want[k].behind_z << 4 | want[k].behind_layer);
+        }
+#undef RGB
+        CHECK(bcolor[16 * 4 + 0] == 0xFF && bcolor[0 * 4 + 1] == 0xFF,
+              "behind colors at full brightness: B %u G %u", bcolor[16 * 4], bcolor[1]);
+    }
+}
+
 int main(void)
 {
     th_bus_init();
@@ -308,5 +372,6 @@ int main(void)
     test_offset_per_tile();
     test_bg_16x16();
     test_midline_write();
+    test_behind_buffer();
     return th_report("snes_bus");
 }

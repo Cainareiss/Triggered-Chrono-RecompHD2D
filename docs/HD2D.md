@@ -23,7 +23,7 @@ build/ct_sdl --hd2d --fullscreen    # or press F11; automatic under gamescope
 | Key | Action |
 | --- | --- |
 | F1 | Cycle the preset: `off`, `subtle`, `hd2d` (default) |
-| F2 | Cycle the debug view: layer classes, depth, blur amount, split compare (original pixels on the left), off |
+| F2 | Cycle the debug view: layer classes, depth, blur amount, split compare (original pixels on the left), background plane, off |
 | F3 | Cycle the aspect: 4:3 (default), 8:7 pixel aspect, stretch |
 | F11 | Toggle fullscreen |
 | R3 / L3 (controller) | Same as F1 / F3, for handhelds without function keys |
@@ -36,7 +36,7 @@ command-line options override them.
 | --- | --- |
 | `--preset off\|subtle\|hd2d` | Choose the starting preset |
 | `--aspect 4:3\|pixel\|stretch` | Choose the picture shape |
-| `--debug-view N` | Start in debug view N (0 off, 1 classes, 2 depth, 3 blur, 4 split compare) |
+| `--debug-view N` | Start in debug view N (0 off, 1 classes, 2 depth, 3 blur, 4 split compare, 5 background plane) |
 | `--log-gpu` | Print the renderer's frame time every 60 frames (stalls the GPU to measure) |
 | `--shot F:PATH` | At frame F, render offscreen and save a PNG (repeatable) |
 | `--shot-size WxH` | Size of those screenshots (default 1920x1080) |
@@ -57,6 +57,19 @@ SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy build/ct_sdl --hd2d --fast \
    (`sched_layers()`), along with a snapshot of PPU state (`sched_ppu_state_get()`). This
    doesn't change normal output: frame and state hashes match the unmodified PPU on all
    9,200 frames of the Leene Square replay.
+
+   **Behind buffer.** Optionally (`PpuSetBehindBuffer`, `sched_set_behind()`), the PPU
+   also records, per pixel, the *runner-up*: the best layer that lost to the winner
+   there, or the backdrop if none did. It stores that layer's color (B G R x, brightness
+   applied, no color math) and its layer byte (`z << 4 | layer`). The scheduler presents
+   them with the frame (`sched_behind()`, `sched_behind_layers()`), and returns NULL for
+   frames drawn without them. The per-pixel renderer finds the runner-up by continuing
+   down the mode's priority list past the winner. The whole-line renderer keeps a
+   second z buffer: a beaten winner moves into it, and a loser that beats it replaces
+   it. Its draw functions come in two compiled versions, so with the buffer off nothing
+   extra runs. `test_snes_bus` checks that both renderers give the same runner-ups. The
+   frontend turns the buffer on only for the presets that use it (subtle and HD-2D).
+   Hashes stay identical with it on or off.
 2. **Classification** (`shaders/light.frag`). The layer byte sorts each pixel into one of
    six classes:
    - *backdrop*
@@ -82,8 +95,25 @@ SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy build/ct_sdl --hd2d --fast \
    - Ground darkens where it meets foreground and actors (contact occlusion).
    - Actor edges facing the light get a rim light.
    - Distance haze is applied to the far planes.
-5. **Sharp-bilinear upscale** to the output size.
-6. **Tilt-shift depth of field** at half resolution:
+   The pass also writes a *background plane*. It is the same picture, except that under
+   foreground pixels it holds the behind buffer's pixel, lit the same way (shadows,
+   point lights, haze; no relief). Where only the backdrop is behind a foreground pixel,
+   nothing was drawn there, so the foreground stands in for it.
+5. **Sharp-bilinear upscale** to the output size. This pass splits the picture into the
+   background plane and a foreground plane (foreground color and coverage). With the
+   **diorama tilt** (`tilt`: off in Subtle, 0.022 in HD-2D), the foreground is drawn
+   about 2% larger around the focus point. Roofs, arches and canopies then shift a few
+   pixels away from the focus, about 3 source pixels at the picture's edges, as tall
+   things near the camera do in a tilted view. The pixels they move off show the
+   background plane. The enlargement maps the picture into itself, so the edges never
+   need filling. The foreground never covers UI or a pixel that was in front of it,
+   such as a high-priority sprite. Where nothing is behind it, it stays where it was.
+6. **Tilt-shift depth of field** at half resolution, done separately for the two planes
+   and then composited (foreground over background):
+   - The background plane holds the hidden pixels under the foreground, so blurring it
+     never smears an in-focus arch or roof into the blurred ground around it.
+   - The foreground plane is blurred as color plus coverage, so a blurred roof's edge
+     fades out over the sharp ground behind it instead of ending in a hard cut.
    - A sharp band follows the actors' vertical center, and blur grows above and below it.
    - Planes away from the focal depth also blur.
    - Each sample is weighted by its own blur amount, so in-focus pixels don't bleed halos.
@@ -100,16 +130,31 @@ Menus that cover more than 15–30% of the screen with UI ease the scene effects
 
 ## Performance
 
-On a ROG Ally (Ryzen Z1 Extreme, Radeon 780M, Mesa radeonsi), the renderer takes about
-about 1.9 ms per frame (median; 2.3 ms at the 95th percentile) at 1706×1120, which is about 1080p's pixel count. That time
-includes the uploads and the CPU-side scene analysis. Desktop AMD and NVIDIA GPUs have a
-large margin.
+On a ROG Ally (Ryzen Z1 Extreme, Radeon 780M, Mesa radeonsi), the renderer takes
+about 2.6 ms per frame at 1706×1120 (`--scale 5`, about 1080p's pixel count), median over
+the Leene Square replay at normal speed; 4.3 ms at the 95th percentile. Without the two
+planes and the tilt it was 2.4 ms (3.9 ms). The times include the uploads and the CPU-side
+scene analysis, and vary by a few tenths of a millisecond between runs. Desktop AMD and
+NVIDIA GPUs have a large margin.
+
+The behind buffer costs CPU time in the PPU. Headless (`ct_boot`, 9,200 frames of the
+Leene Square replay), the game runs at about 388 frames per second without it and
+about 314 with it (`--behind`). That is about 0.6 ms more per frame, so it is only on
+while a preset uses it.
 
 ## Limits and next steps
 
-- The G-buffer stores only the *winning* pixel. Layers hidden behind others aren't
-  available, so true parallax or 3D camera tilt isn't possible yet. That needs per-layer
-  output from the PPU, which is a larger change.
+- The behind buffer holds one hidden layer, not all of them. A pixel with two layers
+  stacked under the foreground shows only the upper one when revealed. Sprites hide
+  other sprites at the same pixel before the PPU sees them, so a sprite is never the
+  runner-up of another sprite.
+- The tilt moves whole classes. An object drawn partly with high-priority tiles and
+  partly with low-priority ones (such as a tent whose top is in front of the actors and
+  whose bottom is not) splits at that line by the tilt's few pixels. Pixels changed by
+  color math (translucent clouds, for example) carry the blended color with them.
+- Only the per-pixel PPU path runs in the game. The whole-line renderer's behind
+  tracking is covered by the unit test only. Its 4x4 mode 7 path doesn't write the
+  buffer.
 - Classification uses PPU state only, with no per-game tables, so it stays game-agnostic
   (`tools/check_agnostic.py`). Some scenes will misclassify. Mode 7 scenes get
   tilt-shift only.

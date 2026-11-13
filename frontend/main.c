@@ -187,12 +187,13 @@ static int n_shots, shot_w = 1920, shot_h = 1080;
 
 /* One screenshot of a frame: HD-2D at shot_w x shot_h, else as is. */
 static int write_shot(const char *path, const uint8_t *bgrx, const uint8_t *layers,
+                      const uint8_t *behind, const uint8_t *behind_layers,
                       const sched_ppu_state *st)
 {
     int ok;
     if (hd2d_mode) {
         uint8_t *buf = malloc((size_t)shot_w * shot_h * 4);
-        hd2d_render(bgrx, layers, st, shot_w, shot_h, 1);
+        hd2d_render(bgrx, layers, behind, behind_layers, st, shot_w, shot_h, 1);
         ok = buf && !hd2d_read(buf, shot_w, shot_h) && !png_write_bgrx(path, buf, shot_w, shot_h);
         free(buf);
     } else {
@@ -206,7 +207,8 @@ static void take_shots(long f)
     for (int k = 0; k < n_shots; k++) {
         if (shots[k].frame != f)
             continue;
-        int ok = write_shot(shots[k].path, sched_frame(), sched_layers(), sched_ppu_state_get());
+        int ok = write_shot(shots[k].path, sched_frame(), sched_layers(), sched_behind(),
+                            sched_behind_layers(), sched_ppu_state_get());
         fprintf(stderr, "ct_sdl: frame %ld: %s %s\n", f, ok ? "wrote" : "cannot write",
                 shots[k].path);
     }
@@ -216,7 +218,8 @@ static void present_hd2d(void)
 {
     int w, h;
     SDL_GL_GetDrawableSize(win, &w, &h);
-    hd2d_render(sched_frame(), sched_layers(), sched_ppu_state_get(), w, h, 0);
+    hd2d_render(sched_frame(), sched_layers(), sched_behind(), sched_behind_layers(),
+                sched_ppu_state_get(), w, h, 0);
     SDL_GL_SwapWindow(win);
     if (log_gpu && sched_frame_count() % 60 == 0)
         fprintf(stderr, "ct_sdl: frame %ld hd2d %dx%d %.2f ms\n", sched_frame_count(), w, h,
@@ -246,7 +249,8 @@ static int hd2d_key(SDL_Scancode sc)
         hd2d_set_debug((hd2d_debug() + 1) % HD2D_DEBUGS);
         fprintf(stderr, "ct_sdl: hd2d debug view %d\n", hd2d_debug());
         static const char *const msg[HD2D_DEBUGS] = {"Debug: off", "Debug: layers", "Debug: depth",
-                                                     "Debug: blur", "Debug: compare"};
+                                                     "Debug: blur", "Debug: compare",
+                                                     "Debug: behind"};
         hd2d_osd(msg[hd2d_debug()]);
     } else if (sc == SDL_SCANCODE_F3) {
         hd2d_set_aspect((hd2d_aspect() + 1) % HD2D_ASPECTS);
@@ -408,6 +412,8 @@ static void on_frame(long f)
     const uint8_t *fb = sched_frame();   /* B G R x = ARGB8888 little-endian */
     if (hd2d_mode) {
         present_hd2d();
+        /* The PPU's behind G-buffer only while the look uses it. */
+        sched_set_behind(hd2d_wants_behind());
     } else {
         SDL_UpdateTexture(tex, NULL, fb, SCHED_WIDTH * 4);
         SDL_RenderClear(ren);
@@ -511,7 +517,7 @@ static void present_status(const uint8_t *bgrx)
     if (hd2d_mode) {
         int w, h;
         SDL_GL_GetDrawableSize(win, &w, &h);
-        hd2d_render(bgrx, status_layers, NULL, w, h, 0);
+        hd2d_render(bgrx, status_layers, NULL, NULL, NULL, w, h, 0);
         SDL_GL_SwapWindow(win);
     } else {
         SDL_UpdateTexture(tex, NULL, bgrx, SCHED_WIDTH * 4);
@@ -532,7 +538,7 @@ static void shot_status(const uint8_t *bgrx, const char *path)
     else
         snprintf(name, sizeof name, "%s", path);
     path = name;
-    int ok = write_shot(path, bgrx, status_layers, NULL);
+    int ok = write_shot(path, bgrx, status_layers, NULL, NULL, NULL);
     fprintf(stderr, "ct_sdl: setup screen: %s %s\n", ok ? "wrote" : "cannot write", path);
 }
 #endif
@@ -728,6 +734,7 @@ int main(int argc, char **argv)
 
     interp_reset(&cpu);
     sched_init(&cpu);
+    sched_set_behind(hd2d_mode && hd2d_wants_behind());   /* port: see on_frame */
     sched_set_frame_hook(on_frame);
     sched_set_reset_hook(script_reset);
     ct_fatal_hook = on_fatal;

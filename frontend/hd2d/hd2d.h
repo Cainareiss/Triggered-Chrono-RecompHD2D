@@ -17,7 +17,7 @@
 
 enum { HD2D_OFF, HD2D_SUBTLE, HD2D_FULL, HD2D_PRESETS };
 enum { HD2D_DEBUG_NONE, HD2D_DEBUG_CLASSES, HD2D_DEBUG_DEPTH, HD2D_DEBUG_BLUR, HD2D_DEBUG_SPLIT,
-       HD2D_DEBUGS };
+       HD2D_DEBUG_BEHIND, HD2D_DEBUGS };
 enum { HD2D_ASPECT_4_3, HD2D_ASPECT_PIXEL, HD2D_ASPECT_STRETCH, HD2D_ASPECTS };
 
 /* Load GL entry points (SDL_GL_GetProcAddress), compile the shaders, make
@@ -35,11 +35,19 @@ void hd2d_set_aspect(int aspect);
 int hd2d_aspect(void);
 
 /* Draw one frame: bgrx and layers are SCHED_WIDTH x SCHED_HEIGHT
-   (sched_frame, sched_layers), st the PPU state latched with them. Draws
-   to the bound window's default framebuffer at out_w x out_h, or with
-   offscreen set to an internal target that hd2d_read returns. */
-void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const sched_ppu_state *st,
-                 int out_w, int out_h, int offscreen);
+   (sched_frame, sched_layers), behind and behind_layers the behind
+   G-buffer (sched_behind, sched_behind_layers; NULL if not drawn: the
+   layered depth of field and the tilt then fall back to the front layer
+   alone), st the PPU state latched with them. Draws to the bound window's
+   default framebuffer at out_w x out_h, or with offscreen set to an
+   internal target that hd2d_read returns. */
+void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behind,
+                 const uint8_t *behind_layers, const sched_ppu_state *st, int out_w, int out_h,
+                 int offscreen);
+
+/* Whether the current preset uses the behind G-buffer, so the caller can
+   turn the PPU's (sched_set_behind) on only while it is needed. */
+int hd2d_wants_behind(void);
 
 /* After an offscreen hd2d_render of out_w x out_h: copy it as B G R x
    bytes, rows top first (png_write_bgrx's layout). Returns 0 or -1. */

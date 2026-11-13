@@ -39,6 +39,8 @@ Ppu* ppu_init() {
   Ppu* ppu = (Ppu * )malloc(sizeof(Ppu));
   ppu->layerBuffer = NULL;   // port
   ppu->layerPitch = 0;
+  ppu->behindColor = ppu->behindLayer = NULL;   // port
+  ppu->behindColorPitch = ppu->behindLayerPitch = 0;
   ppu->extraLeftRight = kPpuExtraLeftRight;
   return ppu;
 }
@@ -159,6 +161,17 @@ static void ppu_updateBrightness(Ppu *ppu) {
 void PpuSetLayerBuffer(Ppu *ppu, uint8_t *buffer, size_t pitch) {
   ppu->layerBuffer = buffer;
   ppu->layerPitch = (uint32_t)pitch;
+}
+
+// port: see Ppu.behindColor. Both buffers or neither.
+void PpuSetBehindBuffer(Ppu *ppu, uint8_t *color, size_t color_pitch,
+                        uint8_t *layer, size_t layer_pitch) {
+  if (!color || !layer)
+    color = layer = NULL;
+  ppu->behindColor = color;
+  ppu->behindLayer = layer;
+  ppu->behindColorPitch = (uint32_t)color_pitch;
+  ppu->behindLayerPitch = (uint32_t)layer_pitch;
 }
 
 // port: where line y's G-buffer row goes; a scratch row when the
@@ -320,14 +333,31 @@ static void PpuWindows_Calc(PpuWindows *win, Ppu *ppu, uint layer) {
   win->bits = w1_bits | w2_bits;
 }
 
+// port: the draw functions below come in two versions, plain and _b,
+// which also keeps the runner-up z buffer (behindBuf, pointer bz kept in
+// step with dstz) for the behind G-buffer. PPU_ZTEST stores value v of
+// priority z at pixel i if it beats the winner there; the beaten winner
+// becomes the runner-up, and a loser that beats the runner-up replaces it.
+#if defined(__GNUC__)
+#define PPU_ALWAYS_INLINE inline __attribute__((always_inline))
+#else
+#define PPU_ALWAYS_INLINE inline
+#endif
+#define PPU_ZTEST(i, z, v) do { \
+  if ((z) > dstz[i]) { if (behind) bz[i] = dstz[i]; dstz[i] = (v); } \
+  else if (behind && (z) > bz[i]) bz[i] = (v); } while (0)
+#define PPU_DRAW_VARIANTS(name, ...) \
+  static void name(__VA_ARGS__) { name##_t(PPU_ARGS, false); } \
+  static void name##_b(__VA_ARGS__) { name##_t(PPU_ARGS, true); }
+
 // Draw a whole line of a 4bpp background layer into bgBuffers
-static void PpuDrawBackground_4bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZbufType zhi, PpuZbufType zlo) {
+static PPU_ALWAYS_INLINE void PpuDrawBackground_4bpp_t(Ppu *ppu, uint y, bool sub, uint layer, PpuZbufType zhi, PpuZbufType zlo, const bool behind) {
 #define DO_PIXEL(i) do { \
   pixel = (bits >> i) & 1 | (bits >> (7 + i)) & 2 | (bits >> (14 + i)) & 4 | (bits >> (21 + i)) & 8; \
-  if ((bits & (0x01010101 << i)) && z > dstz[i]) dstz[i] = z + pixel; } while (0)
+  if (bits & (0x01010101 << i)) PPU_ZTEST(i, z, z + pixel); } while (0)
 #define DO_PIXEL_HFLIP(i) do { \
   pixel = (bits >> (7 - i)) & 1 | (bits >> (14 - i)) & 2 | (bits >> (21 - i)) & 4 | (bits >> (28 - i)) & 8; \
-  if ((bits & (0x80808080 >> i)) && z > dstz[i]) dstz[i] = z + pixel; } while (0)
+  if (bits & (0x80808080 >> i)) PPU_ZTEST(i, z, z + pixel); } while (0)
 #define READ_BITS(ta, tile) (addr = &ppu->vram[((ta) + (tile) * 16) & 0x7fff], addr[0] | addr[8] << 16)
   enum { kPaletteShift = 6 };
   if (!IS_SCREEN_ENABLED(ppu, sub, layer))
@@ -352,6 +382,7 @@ static void PpuDrawBackground_4bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZb
     uint x = win.edges[windex] + bglayer->hScroll;
     uint w = win.edges[windex + 1] - win.edges[windex];
     PpuZbufType *dstz = ppu->bgBuffers[sub].data + win.edges[windex] + kPpuExtraLeftRight;
+    PpuZbufType *bz = ppu->behindBuf.data + win.edges[windex] + kPpuExtraLeftRight;   // port
     const uint16 *tp = tps[x >> 8 & 1] + ((x >> 3) & 0x1f);
     const uint16 *tp_last = tps[x >> 8 & 1] + 31;
     const uint16 *tp_next = tps[(x >> 8 & 1) ^ 1];
@@ -369,13 +400,13 @@ static void PpuDrawBackground_4bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZb
         z += ((tile & 0x1c00) >> kPaletteShift);
         if (tile & 0x4000) {
           bits >>= (x & 7), x += curw;
-          do DO_PIXEL(0); while (bits >>= 1, dstz++, --curw);
+          do DO_PIXEL(0); while (bits >>= 1, dstz++, bz++, --curw);
         } else {
           bits <<= (x & 7), x += curw;
-          do DO_PIXEL_HFLIP(0); while (bits <<= 1, dstz++, --curw);
+          do DO_PIXEL_HFLIP(0); while (bits <<= 1, dstz++, bz++, --curw);
         }
       } else {
-        dstz += curw;
+        dstz += curw, bz += curw;
       }
     }
     // Handle full tiles in the middle
@@ -395,7 +426,7 @@ static void PpuDrawBackground_4bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZb
           DO_PIXEL_HFLIP(4); DO_PIXEL_HFLIP(5); DO_PIXEL_HFLIP(6); DO_PIXEL_HFLIP(7);
         }
       }
-      dstz += 8, w -= 8;
+      dstz += 8, bz += 8, w -= 8;
     }
     // Handle remaining clipped part
     if (w) {
@@ -406,9 +437,9 @@ static void PpuDrawBackground_4bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZb
       if (bits) {
         z += ((tile & 0x1c00) >> kPaletteShift);
         if (tile & 0x4000) {
-          do DO_PIXEL(0); while (bits >>= 1, dstz++, --w);
+          do DO_PIXEL(0); while (bits >>= 1, dstz++, bz++, --w);
         } else {
-          do DO_PIXEL_HFLIP(0); while (bits <<= 1, dstz++, --w);
+          do DO_PIXEL_HFLIP(0); while (bits <<= 1, dstz++, bz++, --w);
         }
       }
     }
@@ -417,15 +448,18 @@ static void PpuDrawBackground_4bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZb
 #undef DO_PIXEL
 #undef DO_PIXEL_HFLIP
 }
+#define PPU_ARGS ppu, y, sub, layer, zhi, zlo
+PPU_DRAW_VARIANTS(PpuDrawBackground_4bpp, Ppu *ppu, uint y, bool sub, uint layer, PpuZbufType zhi, PpuZbufType zlo)
+#undef PPU_ARGS
 
 // Draw a whole line of a 2bpp background layer into bgBuffers
-static void PpuDrawBackground_2bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZbufType zhi, PpuZbufType zlo) {
+static PPU_ALWAYS_INLINE void PpuDrawBackground_2bpp_t(Ppu *ppu, uint y, bool sub, uint layer, PpuZbufType zhi, PpuZbufType zlo, const bool behind) {
 #define DO_PIXEL(i) do { \
   pixel = (bits >> i) & 1 | (bits >> (7 + i)) & 2; \
-  if (pixel && z > dstz[i]) dstz[i] = z + pixel; } while (0)
+  if (pixel) PPU_ZTEST(i, z, z + pixel); } while (0)
 #define DO_PIXEL_HFLIP(i) do { \
   pixel = (bits >> (7 - i)) & 1 | (bits >> (14 - i)) & 2; \
-  if (pixel && z > dstz[i]) dstz[i] = z + pixel; } while (0)
+  if (pixel) PPU_ZTEST(i, z, z + pixel); } while (0)
 #define READ_BITS(ta, tile) (addr = &ppu->vram[(ta) + (tile) * 8 & 0x7fff], addr[0])
   enum { kPaletteShift = 8 };
   if (!IS_SCREEN_ENABLED(ppu, sub, layer))
@@ -451,6 +485,7 @@ static void PpuDrawBackground_2bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZb
     uint x = win.edges[windex] + bglayer->hScroll;
     uint w = win.edges[windex + 1] - win.edges[windex];
     PpuZbufType *dstz = ppu->bgBuffers[sub].data + win.edges[windex] + kPpuExtraLeftRight;
+    PpuZbufType *bz = ppu->behindBuf.data + win.edges[windex] + kPpuExtraLeftRight;   // port
     const uint16 *tp = tps[x >> 8 & 1] + ((x >> 3) & 0x1f);
     const uint16 *tp_last = tps[x >> 8 & 1] + 31;
     const uint16 *tp_next = tps[(x >> 8 & 1) ^ 1];
@@ -469,13 +504,13 @@ static void PpuDrawBackground_2bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZb
         z += ((tile & 0x1c00) >> kPaletteShift);
         if (tile & 0x4000) {
           bits >>= (x & 7), x += curw;
-          do DO_PIXEL(0); while (bits >>= 1, dstz++, --curw);
+          do DO_PIXEL(0); while (bits >>= 1, dstz++, bz++, --curw);
         } else {
           bits <<= (x & 7), x += curw;
-          do DO_PIXEL_HFLIP(0); while (bits <<= 1, dstz++, --curw);
+          do DO_PIXEL_HFLIP(0); while (bits <<= 1, dstz++, bz++, --curw);
         }
       } else {
-        dstz += curw;
+        dstz += curw, bz += curw;
       }
     }
     // Handle full tiles in the middle
@@ -495,7 +530,7 @@ static void PpuDrawBackground_2bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZb
           DO_PIXEL_HFLIP(4); DO_PIXEL_HFLIP(5); DO_PIXEL_HFLIP(6); DO_PIXEL_HFLIP(7);
         }
       }
-      dstz += 8, w -= 8;
+      dstz += 8, bz += 8, w -= 8;
     }
     // Handle remaining clipped part
     if (w) {
@@ -506,9 +541,9 @@ static void PpuDrawBackground_2bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZb
       if (bits) {
         z += ((tile & 0x1c00) >> kPaletteShift);
         if (tile & 0x4000) {
-          do DO_PIXEL(0); while (bits >>= 1, dstz++, --w);
+          do DO_PIXEL(0); while (bits >>= 1, dstz++, bz++, --w);
         } else {
-          do DO_PIXEL_HFLIP(0); while (bits <<= 1, dstz++, --w);
+          do DO_PIXEL_HFLIP(0); while (bits <<= 1, dstz++, bz++, --w);
         }
       }
     }
@@ -518,9 +553,12 @@ static void PpuDrawBackground_2bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZb
 #undef DO_PIXEL
 #undef DO_PIXEL_HFLIP
 }
+#define PPU_ARGS ppu, y, sub, layer, zhi, zlo
+PPU_DRAW_VARIANTS(PpuDrawBackground_2bpp, Ppu *ppu, uint y, bool sub, uint layer, PpuZbufType zhi, PpuZbufType zlo)
+#undef PPU_ARGS
 
 // Draw a whole line of a 4bpp background layer into bgBuffers, with mosaic applied
-static void PpuDrawBackground_4bpp_mosaic(Ppu *ppu, uint y, bool sub, uint layer, PpuZbufType zhi, PpuZbufType zlo) {
+static PPU_ALWAYS_INLINE void PpuDrawBackground_4bpp_mosaic_t(Ppu *ppu, uint y, bool sub, uint layer, PpuZbufType zhi, PpuZbufType zlo, const bool behind) {
 #define GET_PIXEL() pixel = (bits) & 1 | (bits >> 7) & 2 | (bits >> 14) & 4 | (bits >> 21) & 8
 #define GET_PIXEL_HFLIP() pixel = (bits >> 7) & 1 | (bits >> 14) & 2 | (bits >> 21) & 4 | (bits >> 28) & 8
 #define READ_BITS(ta, tile) (addr = &ppu->vram[((ta) + (tile) * 16) & 0x7fff], addr[0] | addr[8] << 16)
@@ -546,6 +584,7 @@ static void PpuDrawBackground_4bpp_mosaic(Ppu *ppu, uint y, bool sub, uint layer
       continue;  // layer is disabled for this window part
     int sx = win.edges[windex];
     PpuZbufType *dstz = ppu->bgBuffers[sub].data + sx + kPpuExtraLeftRight;
+    PpuZbufType *bz = ppu->behindBuf.data + sx + kPpuExtraLeftRight;   // port
     PpuZbufType *dstz_end = ppu->bgBuffers[sub].data + win.edges[windex + 1] + kPpuExtraLeftRight;
     uint x = sx + bglayer->hScroll;
     const uint16 *tp = tps[x >> 8 & 1] + ((x >> 3) & 0x1f);
@@ -562,12 +601,9 @@ static void PpuDrawBackground_4bpp_mosaic(Ppu *ppu, uint y, bool sub, uint layer
       if (pixel) {
         pixel += (tile & 0x1c00) >> kPaletteShift;
         int i = 0;
-        do {
-          if (z > dstz[i])
-            dstz[i] = pixel + z;
-        } while (++i != w);
+        do PPU_ZTEST(i, z, pixel + z); while (++i != w);   // port
       }
-      dstz += w, x += w;
+      dstz += w, bz += w, x += w;
       for (; x >= 8; x -= 8)
         tp = (tp != tp_last) ? tp + 1 : tp_next;
       w = ppu->mosaicSize;
@@ -577,9 +613,12 @@ static void PpuDrawBackground_4bpp_mosaic(Ppu *ppu, uint y, bool sub, uint layer
 #undef GET_PIXEL
 #undef GET_PIXEL_HFLIP
 }
+#define PPU_ARGS ppu, y, sub, layer, zhi, zlo
+PPU_DRAW_VARIANTS(PpuDrawBackground_4bpp_mosaic, Ppu *ppu, uint y, bool sub, uint layer, PpuZbufType zhi, PpuZbufType zlo)
+#undef PPU_ARGS
 
 // Draw a whole line of a 2bpp background layer into bgBuffers, with mosaic applied
-static void PpuDrawBackground_2bpp_mosaic(Ppu *ppu, int y, bool sub, uint layer, PpuZbufType zhi, PpuZbufType zlo) {
+static PPU_ALWAYS_INLINE void PpuDrawBackground_2bpp_mosaic_t(Ppu *ppu, int y, bool sub, uint layer, PpuZbufType zhi, PpuZbufType zlo, const bool behind) {
 #define GET_PIXEL() pixel = (bits) & 1 | (bits >> 7) & 2
 #define GET_PIXEL_HFLIP() pixel = (bits >> 7) & 1 | (bits >> 14) & 2
 #define READ_BITS(ta, tile) (addr = &ppu->vram[((ta) + (tile) * 8) & 0x7fff], addr[0])
@@ -605,6 +644,7 @@ static void PpuDrawBackground_2bpp_mosaic(Ppu *ppu, int y, bool sub, uint layer,
       continue;  // layer is disabled for this window part
     int sx = win.edges[windex];
     PpuZbufType *dstz = ppu->bgBuffers[sub].data + sx + kPpuExtraLeftRight;
+    PpuZbufType *bz = ppu->behindBuf.data + sx + kPpuExtraLeftRight;   // port
     PpuZbufType *dstz_end = ppu->bgBuffers[sub].data + win.edges[windex + 1] + kPpuExtraLeftRight;
     uint x = sx + bglayer->hScroll;
     const uint16 *tp = tps[x >> 8 & 1] + ((x >> 3) & 0x1f);
@@ -621,12 +661,9 @@ static void PpuDrawBackground_2bpp_mosaic(Ppu *ppu, int y, bool sub, uint layer,
       if (pixel) {
         pixel += (tile & 0x1c00) >> kPaletteShift;
         uint i = 0;
-        do {
-          if (z > dstz[i])
-            dstz[i] = pixel + z;
-        } while (++i != w);
+        do PPU_ZTEST(i, z, pixel + z); while (++i != w);   // port
       }
-      dstz += w, x += w;
+      dstz += w, bz += w, x += w;
       for (; x >= 8; x -= 8)
         tp = (tp != tp_last) ? tp + 1 : tp_next;
       w = ppu->mosaicSize;
@@ -636,13 +673,16 @@ static void PpuDrawBackground_2bpp_mosaic(Ppu *ppu, int y, bool sub, uint layer,
 #undef GET_PIXEL
 #undef GET_PIXEL_HFLIP
 }
+#define PPU_ARGS ppu, y, sub, layer, zhi, zlo
+PPU_DRAW_VARIANTS(PpuDrawBackground_2bpp_mosaic, Ppu *ppu, int y, bool sub, uint layer, PpuZbufType zhi, PpuZbufType zlo)
+#undef PPU_ARGS
 
 
 // level6 should be set if it's from palette 0xc0 which means color math is not applied
 #define SPRITE_PRIO_TO_PRIO(prio, level6) (((prio) * 4 + 2) * 16 + 4 + (level6 ? 2 : 0))
 #define SPRITE_PRIO_TO_PRIO_HI(prio) ((prio) * 4 + 2)
 
-static void PpuDrawSprites(Ppu *ppu, uint y, uint sub, bool clear_backdrop) {
+static PPU_ALWAYS_INLINE void PpuDrawSprites_t(Ppu *ppu, uint y, uint sub, bool clear_backdrop, const bool behind) {
   int layer = 4;
   if (!IS_SCREEN_ENABLED(ppu, sub, layer))
     return;  // layer is completely hidden
@@ -655,16 +695,18 @@ static void PpuDrawSprites(Ppu *ppu, uint y, uint sub, bool clear_backdrop) {
     int width = win.edges[windex + 1] - left;
     PpuZbufType *src = ppu->objBuffer.data + left + kPpuExtraLeftRight;
     PpuZbufType *dst = ppu->bgBuffers[sub].data + left + kPpuExtraLeftRight;
+    PpuZbufType *bz = ppu->behindBuf.data + left + kPpuExtraLeftRight;   // port
     if (clear_backdrop) {
-      memcpy(dst, src, width * sizeof(uint16));
+      memcpy(dst, src, width * sizeof(uint16));   // port: runner-up stays the backdrop
     } else {
-      do {
-        if (src[0] > dst[0])
-          dst[0] = src[0];
-      } while (src++, dst++, --width);
+      PpuZbufType *dstz = dst;   // port
+      do PPU_ZTEST(0, src[0], src[0]); while (src++, dstz++, bz++, --width);
     }
   }
 }
+#define PPU_ARGS ppu, y, sub, clear_backdrop
+PPU_DRAW_VARIANTS(PpuDrawSprites, Ppu *ppu, uint y, uint sub, bool clear_backdrop)
+#undef PPU_ARGS
 
 // Assumes it's drawn on an empty backdrop
 static void PpuDrawBackground_mode7(Ppu *ppu, uint y, bool sub, PpuZbufType z) {
@@ -848,7 +890,7 @@ static void PpuDrawMode7Upsampled(Ppu *ppu, uint y) {
 #undef DRAW_PIXEL
 }
 
-static void PpuDrawBackgrounds(Ppu *ppu, int y, bool sub) {
+static PPU_ALWAYS_INLINE void PpuDrawBackgrounds_t(Ppu *ppu, int y, bool sub, const bool behind) {
 // Top 4 bits contain the prio level, and bottom 4 bits the layer type.
 // SPRITE_PRIO_TO_PRIO can be used to convert from obj prio to this prio.
 //  15: BG3 tiles with priority 1 if bit 3 of $2105 is set
@@ -864,30 +906,42 @@ static void PpuDrawBackgrounds(Ppu *ppu, int y, bool sub) {
 //  1: BG3 tiles with priority 0
 //  0: backdrop
 
+  // port: _b versions keep the runner-ups (main screen, behind G-buffer on)
+#define PPU_CALL(name, ...) (behind ? name##_b(__VA_ARGS__) : name(__VA_ARGS__))
+  if (behind)
+    ClearBackdrop(&ppu->behindBuf);
   if (ppu->mode == 1) {
     if (ppu->lineHasSprites)
-      PpuDrawSprites(ppu, y, sub, true);
+      PPU_CALL(PpuDrawSprites, ppu, y, sub, true);
 
     if (IS_MOSAIC_ENABLED(ppu, 0))
-      PpuDrawBackground_4bpp_mosaic(ppu, y, sub, 0, 0xc000, 0x8000);
+      PPU_CALL(PpuDrawBackground_4bpp_mosaic, ppu, y, sub, 0, 0xc000, 0x8000);
     else
-      PpuDrawBackground_4bpp(ppu, y, sub, 0, 0xc000, 0x8000);
+      PPU_CALL(PpuDrawBackground_4bpp, ppu, y, sub, 0, 0xc000, 0x8000);
 
     if (IS_MOSAIC_ENABLED(ppu, 1))
-      PpuDrawBackground_4bpp_mosaic(ppu, y, sub, 1, 0xb100, 0x7100);
+      PPU_CALL(PpuDrawBackground_4bpp_mosaic, ppu, y, sub, 1, 0xb100, 0x7100);
     else
-      PpuDrawBackground_4bpp(ppu, y, sub, 1, 0xb100, 0x7100);
+      PPU_CALL(PpuDrawBackground_4bpp, ppu, y, sub, 1, 0xb100, 0x7100);
 
     if (IS_MOSAIC_ENABLED(ppu, 2))
-      PpuDrawBackground_2bpp_mosaic(ppu, y, sub, 2, 0xf200, 0x1200);
+      PPU_CALL(PpuDrawBackground_2bpp_mosaic, ppu, y, sub, 2, 0xf200, 0x1200);
     else
-      PpuDrawBackground_2bpp(ppu, y, sub, 2, 0xf200, 0x1200);
+      PPU_CALL(PpuDrawBackground_2bpp, ppu, y, sub, 2, 0xf200, 0x1200);
   } else {
     // mode 7
     PpuDrawBackground_mode7(ppu, y, sub, 0xc000);
     if (ppu->lineHasSprites)
-      PpuDrawSprites(ppu, y, sub, false);
+      PPU_CALL(PpuDrawSprites, ppu, y, sub, false);
   }
+#undef PPU_CALL
+}
+
+static void PpuDrawBackgrounds(Ppu *ppu, int y, bool sub) {
+  if (!sub && ppu->behindColor)   // port
+    PpuDrawBackgrounds_t(ppu, y, sub, true);
+  else
+    PpuDrawBackgrounds_t(ppu, y, sub, false);
 }
 
 static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
@@ -896,6 +950,10 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
     size_t n = sizeof(uint32) * (256 + ppu->extraLeftRight * 2);
     memset(dst, 0, n);
     memset(PpuLayerRow(ppu, y), 0, 256 + ppu->extraLeftRight * 2);   // port
+    if (ppu->behindColor) {
+      memset(ppu->behindColor + (y - 1) * ppu->behindColorPitch, 0, n);
+      memset(ppu->behindLayer + (y - 1) * ppu->behindLayerPitch, 0, 256 + ppu->extraLeftRight * 2);
+    }
     return;
   }
 
@@ -996,6 +1054,23 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
     }
   } while (cw_clip_math >>= 1, ++windex < cwin.nr);
 
+  // port: the runner-ups' colors and layer bytes for the behind G-buffer.
+  if (ppu->behindColor) {
+    uint32 *bc = (uint32 *)(ppu->behindColor + (y - 1) * ppu->behindColorPitch);
+    uint8 *bl = ppu->behindLayer + (y - 1) * ppu->behindLayerPitch;
+    memset(bc, 0, sizeof(uint32) * (256 + ppu->extraLeftRight * 2));
+    memset(bl, 0, 256 + ppu->extraLeftRight * 2);
+    int o = ppu->extraLeftRight - kPpuExtraLeftRight;
+    for (int i = kPpuExtraLeftRight - ppu->extraLeftCur; i < kPpuExtraLeftRight + 256 + ppu->extraRightCur; i++) {
+      PpuZbufType v = ppu->behindBuf.data[i];
+      uint32 color = ppu->cgram[v & 0xff];
+      bc[i + o] = ppu->brightnessMult[color & 0x1f] << 16 |
+                  ppu->brightnessMult[(color >> 5) & 0x1f] << 8 |
+                  ppu->brightnessMult[(color >> 10) & 0x1f];
+      bl[i + o] = (v >> 8) & 0xf7;
+    }
+  }
+
   // Clear out stuff on the sides.
   if (ppu->extraLeftRight - ppu->extraLeftCur != 0)
     memset(dst_org, 0, sizeof(uint32) * (ppu->extraLeftRight - ppu->extraLeftCur));
@@ -1061,6 +1136,10 @@ static void ppu_handlePixel(Ppu* ppu, int x, int y) {
         (uint8)(mainZ << 4 | (mathEnabled ? 8 : 0) | (mainLayer & 7));
   } else {
     PpuLayerRow(ppu, y)[x + ppu->extraLeftRight] = 0;
+    if (ppu->behindColor) {   // port
+      memset(ppu->behindColor + (y - 1) * ppu->behindColorPitch + (x + ppu->extraLeftRight) * 4, 0, 4);
+      ppu->behindLayer[(y - 1) * ppu->behindLayerPitch + x + ppu->extraLeftRight] = 0;
+    }
   }
   int row = y - 1;
   uint8 *pixelBuffer = (uint8*) &ppu->renderBuffer[row * ppu->renderPitch + (x + ppu->extraLeftRight) * 4];
@@ -1086,6 +1165,65 @@ static const int bitDepthsPerMode[10][4] = {
   {4, 4, 2, 5},
   {8, 7, 5, 5}
 };
+
+// port: the pixel that entry (curLayer, curPriority) of the mode's
+// priority list has at (x, y), 0 for none (split out of ppu_getPixel, so
+// the behind G-buffer can continue down the list).
+static inline int ppu_entryPixel(Ppu *ppu, int x, int y, bool sub, int curLayer, int curPriority) {
+  bool layerActive = false;
+  int pixel = 0;
+  if (!sub) {
+    layerActive = IS_SCREEN_ENABLED(ppu, 0, curLayer) && (
+      !IS_SCREEN_WINDOWED(ppu, 0, curLayer) || !ppu_getWindowState(ppu, curLayer, x)
+      );
+  } else {
+    layerActive = IS_SCREEN_ENABLED(ppu, 1, curLayer) && (
+      !IS_SCREEN_WINDOWED(ppu, 1, curLayer) || !ppu_getWindowState(ppu, curLayer, x)
+      );
+  }
+  if (layerActive) {
+    if (curLayer < 4) {
+      // bg layer
+      int lx = x;
+      int ly = y;
+      if (IS_MOSAIC_ENABLED(ppu, curLayer)) {
+        lx -= lx % ppu->mosaicSize;
+        ly -= (ly - 1) % ppu->mosaicSize;
+      }
+      if (ppu->mode == 7) {
+        pixel = ppu_getPixelForMode7(ppu, lx, curLayer, curPriority);
+      } else {
+        int hoff = lx + ppu->bgLayer[curLayer].hScroll;
+        int voff = ly + ppu->bgLayer[curLayer].vScroll;
+        // ct-recomp: offset-per-tile (modes 2, 4, 6; BG1/BG2), which
+        // upstream never implemented (ALTTP doesn't use it).
+        if ((ppu->mode == 2 || ppu->mode == 4 || ppu->mode == 6) && curLayer < 2)
+          ppu_offsetPerTile(ppu, curLayer, lx, ly, &hoff, &voff);
+        pixel = ppu_getPixelForBgLayer(
+          ppu, hoff & 0x3ff, voff & 0x3ff,
+          curLayer, curPriority
+        );
+      }
+    } else {
+      // get a pixel from the sprite buffer
+      pixel = 0;
+      if ((ppu->objBuffer.data[x + kPpuExtraLeftRight] >> 12) == SPRITE_PRIO_TO_PRIO_HI(curPriority))
+        pixel = ppu->objBuffer.data[x + kPpuExtraLeftRight] & 0xff;
+    }
+  }
+  return pixel;
+}
+
+// port: z level on the whole-line renderer's scale (see
+// PpuDrawBackgrounds) of priority-list entry (curLayer, curPriority).
+static inline int ppu_zLevel(Ppu *ppu, int curLayer, int curPriority) {
+  static const uint8 kBgZ[4][2] = { {8, 12}, {7, 11}, {1, 3}, {4, 5} };
+  if (curLayer == 4)
+    return curPriority * 4 + 2;
+  if (curLayer == 2 && curPriority && ppu->bg3Priority)
+    return 15;
+  return kBgZ[curLayer][curPriority ? 1 : 0];
+}
 
 static int ppu_getPixel(Ppu *ppu, int x, int y, bool sub, int *r, int *g, int *b, int *z) {
   // array for layer definitions per mode:
@@ -1129,64 +1267,45 @@ static int ppu_getPixel(Ppu *ppu, int x, int y, bool sub, int *r, int *g, int *b
   actMode = ppu->mode == 7 && ppu->m7extBg_always_zero ? 9 : actMode;
   int layer = 5;
   int pixel = 0;
-  for (int i = 0; i < layerCountPerMode[actMode]; i++) {
+  int i;   // port: kept for the runner-up
+  for (i = 0; i < layerCountPerMode[actMode]; i++) {
     int curLayer = layersPerMode[actMode][i];
     int curPriority = prioritysPerMode[actMode][i];
-    bool layerActive = false;
-    if (!sub) {
-      layerActive = IS_SCREEN_ENABLED(ppu, 0, curLayer) && (
-        !IS_SCREEN_WINDOWED(ppu, 0, curLayer) || !ppu_getWindowState(ppu, curLayer, x)
-        );
-    } else {
-      layerActive = IS_SCREEN_ENABLED(ppu, 1, curLayer) && (
-        !IS_SCREEN_WINDOWED(ppu, 1, curLayer) || !ppu_getWindowState(ppu, curLayer, x)
-        );
-    }
-    if (layerActive) {
-      if (curLayer < 4) {
-        // bg layer
-        int lx = x;
-        int ly = y;
-        if (IS_MOSAIC_ENABLED(ppu, curLayer)) {
-          lx -= lx % ppu->mosaicSize;
-          ly -= (ly - 1) % ppu->mosaicSize;
-        }
-        if (ppu->mode == 7) {
-          pixel = ppu_getPixelForMode7(ppu, lx, curLayer, curPriority);
-        } else {
-          int hoff = lx + ppu->bgLayer[curLayer].hScroll;
-          int voff = ly + ppu->bgLayer[curLayer].vScroll;
-          // ct-recomp: offset-per-tile (modes 2, 4, 6; BG1/BG2), which
-          // upstream never implemented (ALTTP doesn't use it).
-          if ((ppu->mode == 2 || ppu->mode == 4 || ppu->mode == 6) && curLayer < 2)
-            ppu_offsetPerTile(ppu, curLayer, lx, ly, &hoff, &voff);
-          pixel = ppu_getPixelForBgLayer(
-            ppu, hoff & 0x3ff, voff & 0x3ff,
-            curLayer, curPriority
-          );
-        }
-      } else {
-        // get a pixel from the sprite buffer
-        pixel = 0;
-        if ((ppu->objBuffer.data[x + kPpuExtraLeftRight] >> 12) == SPRITE_PRIO_TO_PRIO_HI(curPriority))
-          pixel = ppu->objBuffer.data[x + kPpuExtraLeftRight] & 0xff;
-      }
-    }
+    pixel = ppu_entryPixel(ppu, x, y, sub, curLayer, curPriority);   // port: was inline here
     if (pixel > 0) {
       layer = curLayer;
       // port: z level on the whole-line renderer's scale
       // (see PpuDrawBackgrounds), for the layer G-buffer.
-      if (z) {
-        static const uint8 kBgZ[4][2] = { {8, 12}, {7, 11}, {1, 3}, {4, 5} };
-        if (curLayer == 4)
-          *z = curPriority * 4 + 2;
-        else if (curLayer == 2 && curPriority && ppu->bg3Priority)
-          *z = 15;
-        else
-          *z = kBgZ[curLayer][curPriority ? 1 : 0];
-      }
+      if (z)
+        *z = ppu_zLevel(ppu, curLayer, curPriority);
       break;
     }
+  }
+  // port: the runner-up for the behind G-buffer: the next entry down the
+  // priority list with a pixel here, else the backdrop.
+  if (z && ppu->behindColor) {
+    int bpixel = 0, blayer = 5, bzl = 0;
+    for (i++; i < layerCountPerMode[actMode]; i++) {
+      int curLayer = layersPerMode[actMode][i];
+      int curPriority = prioritysPerMode[actMode][i];
+      bpixel = ppu_entryPixel(ppu, x, y, sub, curLayer, curPriority);
+      if (bpixel > 0) {
+        blayer = curLayer;
+        bzl = ppu_zLevel(ppu, curLayer, curPriority);
+        break;
+      }
+    }
+    if (blayer == 4 && bpixel < 0xc0) blayer = 6;
+    uint16_t bcolor = ppu->cgram[bpixel & 0xff];
+    int br = (bcolor & 0x1f) * ppu->brightness / 15;
+    int bg = ((bcolor >> 5) & 0x1f) * ppu->brightness / 15;
+    int bb = ((bcolor >> 10) & 0x1f) * ppu->brightness / 15;
+    uint8_t *bc = ppu->behindColor + (y - 1) * ppu->behindColorPitch + (x + ppu->extraLeftRight) * 4;
+    bc[0] = (bb << 3) | (bb >> 2);
+    bc[1] = (bg << 3) | (bg >> 2);
+    bc[2] = (br << 3) | (br >> 2);
+    bc[3] = 0;
+    ppu->behindLayer[(y - 1) * ppu->behindLayerPitch + x + ppu->extraLeftRight] = (uint8_t)(bzl << 4 | blayer);
   }
   if (layer == 5 && z)
     *z = 0;

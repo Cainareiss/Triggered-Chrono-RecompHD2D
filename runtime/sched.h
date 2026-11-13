@@ -78,6 +78,20 @@ const uint8_t *sched_frame(void);
    (see Ppu.layerBuffer in third_party/snes/ppu.h). */
 const uint8_t *sched_layers(void);
 
+/* port: the behind G-buffer: per pixel, the runner-up, the best layer
+   that lost to the one shown there (the backdrop when none did); see
+   Ppu.behindColor in third_party/snes/ppu.h. Off by default, as it costs
+   CPU time; sched_set_behind takes effect from the next frame.
+   sched_behind is SCHED_WIDTH x SCHED_HEIGHT pixels, bytes B G R 0, its
+   color with brightness applied but no color math; sched_behind_layers
+   one byte per pixel, z level << 4 | layer, as sched_layers. Both are
+   copied at VBlank with the frame; NULL when the last frame was drawn
+   without them. */
+void sched_set_behind(int on);
+int sched_behind_on(void);
+const uint8_t *sched_behind(void);
+const uint8_t *sched_behind_layers(void);
+
 /* port: PPU state latched with the last frame (at VBlank), for
    renderers that treat scenes differently. */
 typedef struct {
