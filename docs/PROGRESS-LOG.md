@@ -4,6 +4,63 @@ SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # Progress log
 
+## 2026-11-13, afternoon: first playable build (Steam Deck / ROG Ally, Bazzite)
+
+### Play it now on this Ally
+- **Installed:** `~/Applications/CT_Recomp-x86_64.AppImage`, plus a "CT Recomp" entry in
+  the desktop menu. Your game module is already built in `~/.local/share/ct-recomp/ct/`,
+  so the game starts at once.
+- **Desktop Mode:** run it from the menu. The plain renderer is the default there; add
+  `--hd2d` for the HD-2D look, or press F1 or R3 in game.
+- **Game Mode:** add the AppImage to Steam as a non-Steam game. For the steps, run
+  `packaging/steam/add-to-steam.sh`, which only prints them; see also
+  [HANDHELD.md](HANDHELD.md). Under gamescope it goes fullscreen with HD-2D, and on a
+  Steam Deck with the lighter `deck` preset.
+- **Controls:** the built-in pad plays the game. Hold View+Menu for 2 s to quit, R3
+  cycles the look, L3 cycles the aspect.
+- **Saves:** in-game saves now persist, in `~/.local/share/ct-recomp/ct/ct.srm`.
+
+### What landed today (all on `hd2d`, verified after each merge)
+- **Decimal-mode CPU arithmetic** (65816 BCD ADC/SBC, per bsnes, module ABI 2).
+  - Opening the world-map menu no longer stops the game.
+  - The `world_map_save` replay saves in-game, resets and loads the save back.
+  - 12 crash-hunt runs of 30k–60k frames each, native and interpreted, found no fatal
+    errors. See [KNOWN-ISSUES.md](KNOWN-ISSUES.md).
+- **Handheld / Game Mode:**
+  - fullscreen, no cursor, the deck preset on a Deck
+  - controller-only first run, with a ROM search in `~/Documents`, `~/Downloads` and
+    next to the AppImage
+  - the quit combo
+  - timer pacing at 60.10 Hz by default; vsync with `--pacing vsync`
+- **HD-2D performance:** frame time roughly halved, with the UI pixel-identical. On the
+  Ally's 780M, GPU-only time is about 2.2 → 1.1 ms (median).
+- **Also:** touch controls; our own arm64 coroutine switch, verified under qemu; save
+  files; a real Flatpak build; AppImage verification; CI workflow; player's guide;
+  package checks.
+
+### Verified on this Ally, real window and audio
+- The installed AppImage with the prebuilt module ran 600 frames at 60.10 Hz with 0
+  audio underruns.
+- `--hd2d` gets a hardware GL 4.6 context on radeonsi. That short run had one 153 ms
+  stall and 6 underruns, while the full test suite was loading the machine. Not
+  investigated; possibly shader compilation on the first frames.
+
+### Not tested on real hardware yet
+- Steam's real Game Mode and Steam Input's physical buttons, including the quit combo.
+- Any Steam Deck: GPU detection, the deck preset's speed, module build time.
+- VRR at 120 Hz on the Ally.
+- Long human play sessions. Our automated runs reach the first battle and the world map
+  and save there. Later areas may hit engine gaps not seen yet: report the frame and PC
+  from the error message.
+
+### Still open
+- **Android:** the APK work is paused partway. The Gradle wrapper and SDL fetch work;
+  libmain.so needs `CT_GAME_ID` and `saves.c` in the Android CMake branch. See
+  [ANDROID-BUILD.md](ANDROID-BUILD.md).
+- **The krtp0028 fork:** never merged. It's no longer needed, since arm64 has our own
+  context switch.
+
+
 ## 2026-11-13: overnight session
 
 ### Read this first
