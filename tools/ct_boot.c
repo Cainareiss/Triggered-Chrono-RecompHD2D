@@ -6,6 +6,8 @@
  * --dump DIR       write DIR/frame_NNNNN.png for every frame the PPU drew
  *                  anything into (any nonblack pixel) that differs from the
  *                  last one written
+ * --shot-every N DIR  write DIR/shot_NNNNNNN.png at every Nth frame edge (all
+ *                  frames, black or not): checkpoints along a long replay
  * --needed-hw FILE write FILE: the fatal error that stopped the run, if any
  *                  (where the boot stops next), and the hardware stubbed
  *                  on purpose along the way
@@ -339,6 +341,8 @@ static int nonblack(const uint8_t *p, size_t n)
 }
 
 static const char *dump;
+static const char *shot_dir;   /* --shot-every */
+static long shot_every;
 static FILE *wav, *hash_log, *ref_log;
 static const char *wram_path, *vram_path, *aram_path;
 static long last_frame;
@@ -405,6 +409,12 @@ static void on_frame(long f)
         wav_write(wav, audio, n);
     if (dump && png_dump_frame(dump, f, sched_frame(), SCHED_WIDTH, SCHED_HEIGHT) > 0)
         dumped++;
+    if (shot_dir && f % shot_every == 0) {
+        char path[4096];
+        snprintf(path, sizeof path, "%s/shot_%07ld.png", shot_dir, f);
+        if (png_write_bgrx(path, sched_frame(), SCHED_WIDTH, SCHED_HEIGHT) != 0)
+            fprintf(stderr, "ct_boot: cannot write %s\n", path);
+    }
     if (hash_log)
         write_state_hashes(hash_log, f);
     if (f == last_frame && (wram_path || vram_path || aram_path))
@@ -435,7 +445,10 @@ int main(int argc, char **argv)
             frames = atol(argv[++k]);
         else if (!strcmp(argv[k], "--dump") && k + 1 < argc)
             dump = argv[++k];
-        else if (!strcmp(argv[k], "--needed-hw") && k + 1 < argc)
+        else if (!strcmp(argv[k], "--shot-every") && k + 2 < argc && atol(argv[k + 1]) > 0) {
+            shot_every = atol(argv[++k]);
+            shot_dir = argv[++k];
+        } else if (!strcmp(argv[k], "--needed-hw") && k + 1 < argc)
             needed = argv[++k];
         else if (!strcmp(argv[k], "--min-nmis") && k + 1 < argc)
             min_nmis = atol(argv[++k]);
@@ -570,7 +583,7 @@ int main(int argc, char **argv)
         } else if (!strcmp(argv[k], "--expect-pc") && k + 1 < argc && n_expect < MAX_EXPECT)
             expect_pc[n_expect++] = (uint32_t)strtoul(argv[++k], NULL, 16);
         else {
-            fprintf(stderr, "usage: ct_boot [--frames N] [--dump DIR] [--needed-hw FILE] "
+            fprintf(stderr, "usage: ct_boot [--frames N] [--dump DIR] [--shot-every N DIR] [--needed-hw FILE] "
                             "[--min-nmis K] [--require-render] [--wav FILE] "
                             "[--require-audio] [--input F1-F2:BUTTONS] [--script FILE] "
                             "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE] [--behind]\n");
