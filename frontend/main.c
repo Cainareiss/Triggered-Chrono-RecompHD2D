@@ -49,7 +49,17 @@
  *       --hd2d unset, writes the plain 256x224 frame.
  *   --module FILE
  *       take the game code from a game module (runtime/module.h): the
- *       engine-only build (ct_sdl_engine) contains none of its own. */
+ *       engine-only build (ct_sdl_engine) contains none of its own.
+ *   --rom FILE
+ *       the ROM to run (instead of $CT_ROM).
+ *   engine-only build, without --module: the first-run flow (firstrun.h)
+ *       finds the ROM (--rom, $CT_ROM, the last one used, or a file dropped
+ *       on the window), builds the game module from it if needed, with a
+ *       progress screen, and loads it. --interp-only skips the module.
+ *       --data-dir DIR (default: the source tree) holds game/ and tools/;
+ *       --game ID picks DIR/game/ID (default: the game it was configured
+ *       with). --shot status:PATH writes the setup screen each time it
+ *       changes (a %d in PATH numbers the shots). */
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -60,6 +70,9 @@
 
 #include "bus.h"
 #include "module.h"   /* port: --module */
+#ifdef CT_FIRSTRUN
+#include "firstrun.h" /* port: engine-only first run */
+#endif
 #include "hd2d/hd2d.h"
 #include "hwlog.h"
 #include "input.h"
@@ -172,21 +185,28 @@ static int hd2d_mode, log_gpu;
 static struct { long frame; const char *path; } shots[MAX_SHOTS];
 static int n_shots, shot_w = 1920, shot_h = 1080;
 
+/* One screenshot of a frame: HD-2D at shot_w x shot_h, else as is. */
+static int write_shot(const char *path, const uint8_t *bgrx, const uint8_t *layers,
+                      const sched_ppu_state *st)
+{
+    int ok;
+    if (hd2d_mode) {
+        uint8_t *buf = malloc((size_t)shot_w * shot_h * 4);
+        hd2d_render(bgrx, layers, st, shot_w, shot_h, 1);
+        ok = buf && !hd2d_read(buf, shot_w, shot_h) && !png_write_bgrx(path, buf, shot_w, shot_h);
+        free(buf);
+    } else {
+        ok = !png_write_bgrx(path, bgrx, SCHED_WIDTH, SCHED_HEIGHT);
+    }
+    return ok;
+}
+
 static void take_shots(long f)
 {
     for (int k = 0; k < n_shots; k++) {
         if (shots[k].frame != f)
             continue;
-        int ok;
-        if (hd2d_mode) {
-            uint8_t *buf = malloc((size_t)shot_w * shot_h * 4);
-            hd2d_render(sched_frame(), sched_layers(), sched_ppu_state_get(), shot_w, shot_h, 1);
-            ok = buf && !hd2d_read(buf, shot_w, shot_h) &&
-                 !png_write_bgrx(shots[k].path, buf, shot_w, shot_h);
-            free(buf);
-        } else {
-            ok = !png_write_bgrx(shots[k].path, sched_frame(), SCHED_WIDTH, SCHED_HEIGHT);
-        }
+        int ok = write_shot(shots[k].path, sched_frame(), sched_layers(), sched_ppu_state_get());
         fprintf(stderr, "ct_sdl: frame %ld: %s %s\n", f, ok ? "wrote" : "cannot write",
                 shots[k].path);
     }
@@ -421,11 +441,112 @@ static int script_reset(long frame)
     return replay_reset(&script, frame);
 }
 
+/* port: the window, plain or HD-2D (moved out of main so the first-run
+   screens can open it before the ROM is known). Returns 0, or 1 with the
+   reason set. */
+static int open_window(const char *title, int scale, int fullscreen)
+{
+    /* port: under gamescope (Steam Game Mode, handheld PCs) the
+       window is the whole screen anyway: start fullscreen. */
+    if (getenv("GAMESCOPE_WAYLAND_DISPLAY") || getenv("SteamDeck"))
+        fullscreen = 1;
+    Uint32 wflags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI |
+                    (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+    if (hd2d_mode) {
+        /* OpenGL 3.3 core, else OpenGL ES 3.0. */
+        static const struct { int profile, major, minor, gles; } want_gl[] = {
+            {SDL_GL_CONTEXT_PROFILE_CORE, 3, 3, 0},
+            {SDL_GL_CONTEXT_PROFILE_ES, 3, 0, 1},
+        };
+        for (size_t k = 0; k < sizeof want_gl / sizeof *want_gl && !glctx; k++) {
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, want_gl[k].profile);
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, want_gl[k].major);
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, want_gl[k].minor);
+            SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+            win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                   SCHED_WIDTH * scale * 4 / 3, SCHED_HEIGHT * scale,
+                                   wflags | SDL_WINDOW_OPENGL);
+            glctx = win ? SDL_GL_CreateContext(win) : NULL;
+            if (glctx && hd2d_init(want_gl[k].gles)) {
+                SDL_GL_DeleteContext(glctx);
+                glctx = NULL;
+            }
+            if (!glctx && win) {
+                SDL_DestroyWindow(win);
+                win = NULL;
+            }
+        }
+        if (!glctx) {
+            fprintf(stderr, "ct_sdl: no usable OpenGL 3.3 / ES 3.0 context: %s\n", SDL_GetError());
+            set_exit_reason("HD-2D renderer setup failed");
+            return 1;
+        }
+        SDL_GL_SetSwapInterval(0);   /* paced by the frame timer below */
+    } else {
+        win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                               SCHED_WIDTH * scale, SCHED_HEIGHT * scale, wflags);
+        ren = win ? SDL_CreateRenderer(win, -1, 0) : NULL;
+        if (win && !ren)
+            ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
+        tex = ren ? SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888,
+                                                   SDL_TEXTUREACCESS_STREAMING, SCHED_WIDTH,
+                                                   SCHED_HEIGHT) : NULL;
+        if (!tex) {
+            fprintf(stderr, "ct_sdl: window: %s\n", SDL_GetError());
+            set_exit_reason("window or renderer creation failed");
+            return 1;
+        }
+        SDL_RenderSetLogicalSize(ren, SCHED_WIDTH, SCHED_HEIGHT);
+        SDL_RenderSetIntegerScale(ren, SDL_TRUE);
+    }
+    return 0;
+}
+
+#ifdef CT_FIRSTRUN
+/* port: the first-run screens: frames of text, no layer information. */
+static uint8_t status_layers[SCHED_WIDTH * SCHED_HEIGHT];
+
+static void present_status(const uint8_t *bgrx)
+{
+    if (hd2d_mode) {
+        int w, h;
+        SDL_GL_GetDrawableSize(win, &w, &h);
+        hd2d_render(bgrx, status_layers, NULL, w, h, 0);
+        SDL_GL_SwapWindow(win);
+    } else {
+        SDL_UpdateTexture(tex, NULL, bgrx, SCHED_WIDTH * 4);
+        SDL_RenderClear(ren);
+        SDL_RenderCopy(ren, tex, NULL, NULL);
+        SDL_RenderPresent(ren);
+    }
+}
+
+/* PATH may hold one %d: numbered shots, one per change, from 0. */
+static void shot_status(const uint8_t *bgrx, const char *path)
+{
+    static int seq;
+    char name[4096];
+    const char *pct = strchr(path, '%');
+    if (pct && pct[1] == 'd' && !strchr(pct + 1, '%'))
+        snprintf(name, sizeof name, "%.*s%d%s", (int)(pct - path), path, seq++, pct + 2);
+    else
+        snprintf(name, sizeof name, "%s", path);
+    path = name;
+    int ok = write_shot(path, bgrx, status_layers, NULL);
+    fprintf(stderr, "ct_sdl: setup screen: %s %s\n", ok ? "wrote" : "cannot write", path);
+}
+#endif
+
 int main(int argc, char **argv)
 {
     static long frames = -1;           /* static: survive the longjmp */
     static int scale = 3, require_render, require_no_underrun, fullscreen;
-    static const char *needed, *module_path;
+    static const char *needed, *module_path, *rom_arg;
+#ifdef CT_FIRSTRUN
+    static const char *data_dir = CT_FIRSTRUN_DATA_DIR, *game_id = CT_FIRSTRUN_GAME,
+                      *status_shot;
+    static int interp_only;
+#endif
     settings_load();   /* port: saved HD-2D settings; options below override */
     for (int k = 1; k < argc; k++) {
         if (!strcmp(argv[k], "--scale") && k + 1 < argc)
@@ -446,8 +567,12 @@ int main(int argc, char **argv)
             log_audio = 1;
         else if (!strcmp(argv[k], "--require-no-underrun"))
             require_no_underrun = 1;
-        else if (!strcmp(argv[k], "--interp-only"))
+        else if (!strcmp(argv[k], "--interp-only")) {
             sched_set_native(0);
+#ifdef CT_FIRSTRUN
+            interp_only = 1;
+#endif
+        }
         else if (!strcmp(argv[k], "--record") && k + 1 < argc) {
             if (replay_rec_open(&rec, argv[++k], "ct_sdl --record")) {
                 fprintf(stderr, "ct_sdl: cannot write %s\n", argv[k]);
@@ -461,6 +586,17 @@ int main(int argc, char **argv)
             }
         } else if (!strcmp(argv[k], "--module") && k + 1 < argc) {
             module_path = argv[++k];
+        } else if (!strcmp(argv[k], "--rom") && k + 1 < argc) {
+            rom_arg = argv[++k];
+#ifdef CT_FIRSTRUN
+        } else if (!strcmp(argv[k], "--data-dir") && k + 1 < argc) {
+            data_dir = argv[++k];
+        } else if (!strcmp(argv[k], "--game") && k + 1 < argc) {
+            game_id = argv[++k];
+        } else if (!strcmp(argv[k], "--shot") && k + 1 < argc &&
+                   !strncmp(argv[k + 1], "status:", 7)) {
+            status_shot = argv[++k] + 7;
+#endif
         } else if (!strcmp(argv[k], "--hd2d")) {
             hd2d_mode = 1;
         } else if (!strcmp(argv[k], "--preset") && k + 1 < argc) {
@@ -502,7 +638,12 @@ int main(int argc, char **argv)
                             "[--interp-only] [--record FILE] [--script FILE] [--log-audio] "
                             "[--require-no-underrun] [--hd2d] [--preset off|subtle|hd2d] "
                             "[--aspect 4:3|pixel|stretch] [--debug-view N] [--fullscreen] "
-                            "[--log-gpu] [--shot F:PATH]... [--shot-size WxH] [--module FILE]\n");
+                            "[--log-gpu] [--shot F:PATH]... [--shot-size WxH] [--module FILE] "
+                            "[--rom FILE]"
+#ifdef CT_FIRSTRUN
+                            " [--data-dir DIR] [--game ID] [--shot status:PATH]"
+#endif
+                            "\n");
             return 2;
         }
     }
@@ -516,7 +657,34 @@ int main(int argc, char **argv)
         return 1;
     }
     static CPU cpu;
-    bus_init(NULL);
+    int first_run = 0;
+#ifdef CT_FIRSTRUN
+    if (!module_path) {   /* port: engine-only first run (firstrun.h) */
+        if (open_window("ct-recomp", scale, fullscreen))
+            return 1;
+        int preset = hd2d_preset(), view = hd2d_debug();
+        hd2d_set_preset(HD2D_OFF);   /* the setup screens in the original look */
+        hd2d_set_debug(HD2D_DEBUG_NONE);
+        firstrun_opts fo = {rom_arg, data_dir, game_id, !interp_only, present_status,
+                            shot_status, status_shot};
+        int r = firstrun(&fo);
+        hd2d_set_preset(preset);
+        hd2d_set_debug(view);
+        if (r == FIRSTRUN_QUIT) {
+            set_exit_reason("quit during setup");
+            return 0;
+        }
+        if (r == FIRSTRUN_ERROR) {
+            set_exit_reason("setup failed");
+            return 2;
+        }
+        if (r == FIRSTRUN_INTERP)
+            fprintf(stderr, "ct_sdl: no game module: running in the interpreter only\n");
+        first_run = 1;
+    }
+#endif
+    if (!first_run)
+        bus_init(rom_arg);
     if (module_path) {   /* port: game code from a module (runtime/module.h) */
         const char *err;
         if (ct_module_load(module_path, &err)) {
@@ -531,64 +699,17 @@ int main(int argc, char **argv)
     title[21] = 0;
     for (int k = 20; k >= 0 && (title[k] == ' ' || !title[k]); k--)
         title[k] = 0;
-    /* port: under gamescope (Steam Game Mode, handheld PCs) the
-       window is the whole screen anyway: start fullscreen. */
-    if (getenv("GAMESCOPE_WAYLAND_DISPLAY") || getenv("SteamDeck"))
-        fullscreen = 1;
-    Uint32 wflags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI |
-                    (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+    if (win)
+        SDL_SetWindowTitle(win, title);
+    else if (open_window(title, scale, fullscreen))
+        return 1;
     if (hd2d_mode) {
-        /* OpenGL 3.3 core, else OpenGL ES 3.0. */
-        static const struct { int profile, major, minor, gles; } want_gl[] = {
-            {SDL_GL_CONTEXT_PROFILE_CORE, 3, 3, 0},
-            {SDL_GL_CONTEXT_PROFILE_ES, 3, 0, 1},
-        };
-        for (size_t k = 0; k < sizeof want_gl / sizeof *want_gl && !glctx; k++) {
-            SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, want_gl[k].profile);
-            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, want_gl[k].major);
-            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, want_gl[k].minor);
-            SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-            win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                   SCHED_WIDTH * scale * 4 / 3, SCHED_HEIGHT * scale,
-                                   wflags | SDL_WINDOW_OPENGL);
-            glctx = win ? SDL_GL_CreateContext(win) : NULL;
-            if (glctx && hd2d_init(want_gl[k].gles)) {
-                SDL_GL_DeleteContext(glctx);
-                glctx = NULL;
-            }
-            if (!glctx && win) {
-                SDL_DestroyWindow(win);
-                win = NULL;
-            }
-        }
-        if (!glctx) {
-            fprintf(stderr, "ct_sdl: no usable OpenGL 3.3 / ES 3.0 context: %s\n", SDL_GetError());
-            set_exit_reason("HD-2D renderer setup failed");
-            return 1;
-        }
-        SDL_GL_SetSwapInterval(0);   /* paced by the frame timer below */
         /* port: say which look is on and how to change it. */
         static char hello[48];
         snprintf(hello, sizeof hello, "Look: %s - F1/R3 to change",
                  hd2d_preset() == HD2D_OFF ? "original" : hd2d_preset() == HD2D_SUBTLE ? "subtle"
                                                                                        : "HD-2D");
         hd2d_osd(hello);
-    } else {
-        win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                               SCHED_WIDTH * scale, SCHED_HEIGHT * scale, wflags);
-        ren = win ? SDL_CreateRenderer(win, -1, 0) : NULL;
-        if (win && !ren)
-            ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
-        tex = ren ? SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888,
-                                                   SDL_TEXTUREACCESS_STREAMING, SCHED_WIDTH,
-                                                   SCHED_HEIGHT) : NULL;
-        if (!tex) {
-            fprintf(stderr, "ct_sdl: window: %s\n", SDL_GetError());
-            set_exit_reason("window or renderer creation failed");
-            return 1;
-        }
-        SDL_RenderSetLogicalSize(ren, SCHED_WIDTH, SCHED_HEIGHT);
-        SDL_RenderSetIntegerScale(ren, SDL_TRUE);
     }
 
     SDL_AudioSpec want = {0}, have;

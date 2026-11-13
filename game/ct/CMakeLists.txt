@@ -115,6 +115,18 @@ add_test(NAME module_parity COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_
     ${GAME_DIR}/test/replay/leene_square.txt 3000)
 list(APPEND ct_game_tests module_parity)
 
+# port: the package scan (tools/check_dist.py) passes the engine-only
+# programs and fails the module, the static programs, and ROM pieces.
+set(ct_dist_pass $<TARGET_FILE:ct_boot_engine>)
+set(ct_dist_fail $<TARGET_FILE:ct_game_module> $<TARGET_FILE:ct_boot>)
+if(SDL2_FOUND)
+    list(APPEND ct_dist_pass $<TARGET_FILE:ct_sdl_engine>)
+    list(APPEND ct_dist_fail $<TARGET_FILE:ct_sdl>)
+endif()
+add_test(NAME check_dist COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_check_dist.py
+    ${CMAKE_SOURCE_DIR}/tools/check_dist.py ${CT_ROM} --pass ${ct_dist_pass} --fail ${ct_dist_fail})
+list(APPEND ct_game_tests check_dist)
+
 ct_game_exe(test_c1_math test/test_c1_math.c)
 foreach(t mul8 mulaccum divide shifts)
     add_test(NAME c1_math_${t} COMMAND test_c1_math ${t})

@@ -96,6 +96,25 @@ to script the pad, `--wav FILE` for audio, `--hash-log FILE` for per-frame
 state hashes (`tools/lockstep.py` compares native and interpreted runs with
 them), and `--needed-hw FILE` to report where emulation stops.
 
+Engine-only (`build/ct_sdl_engine`, no game code inside, see
+[docs/MODULES.md](docs/MODULES.md)): started without `--module`, it finds your
+ROM (`--rom FILE`, then `$CT_ROM`, then the one it used last, else it asks you
+to drop the file on its window), checks it against `game/ct/game.toml`, builds
+the game module from it into its preferences folder
+(`~/.local/share/ct-recomp/ct/`) with a progress screen, about 40 seconds once,
+and starts the game. Later runs reuse the module until the ROM or the module
+ABI changes. If the build fails, a key press plays in the interpreter instead.
+
+```
+build/ct_sdl_engine --hd2d --rom /path/to/chrono_trigger.sfc
+build/ct_sdl_engine --hd2d             # later: the ROM and module are remembered
+```
+
+`--data-dir DIR` points it at an installed copy of `game/` and `tools/` (default:
+this source tree; packagers set `-DCT_ENGINE_DATA_DIR=...`). Before shipping a
+package, `tools/check_dist.py PACKAGE --rom ROM` checks it for anything built
+from the ROM, inside `.zip`, `.tar` and `.AppImage` files too.
+
 Reference comparison: `tools/ref_compare.py --probe build/ct_boot --mesen PATH
 --rom $CT_ROM --frames N [--script FILE]` runs the same input in
 [Mesen 2](https://github.com/SourMesen/Mesen2) (used as a tool, headless under

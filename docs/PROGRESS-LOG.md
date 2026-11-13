@@ -63,6 +63,17 @@ SPDX-License-Identifier: GPL-3.0-or-later
      original upstream baseline too.
    - Without a module, interpreter-only runs at about 290 fps headless, so it's a usable
      fallback.
+5. **First run and package check** (branch `first-run`), documented in
+   `docs/MODULES.md`:
+   - `ct_sdl_engine` without `--module` finds the ROM (`--rom`, `$CT_ROM`, the last
+     one used, or a file dropped on the window) and checks its SHA-1 against
+     `game.toml`. It builds the module with `build_module.py` behind a progress
+     screen, then plays. A stamp next to the module (ROM SHA-1 and module ABI)
+     triggers a rebuild when either changes. If the build fails, a key press plays
+     in the interpreter.
+   - `tools/check_dist.py` scans a package, archives included, for module or
+     generated-source names, an exported `ct_module_get`, generated function names,
+     and sampled 64-byte ROM windows. The `check_dist` ctest covers it.
 
 ### Things that need your decision
 - **krtp0028 fork merge:** the permission check blocked building and running this
@@ -80,11 +91,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
 - I now stage explicit paths and review them before committing.
 
 ### Next, in plan order
-1. **First-run flow** in `ct_sdl_engine`: pick the ROM, build the module (progress
-   screen), then play. Also a `tools/check_dist.py` scan for ROM-derived content in
-   packages.
-2. **AppImage and Flatpak** of the engine, bundling Python and a compiler for
-   `build_module.py`.
-3. **HD-2D, next level:** per-layer PPU output (not just the winning pixel), for real
+1. **AppImage and Flatpak** of the engine, bundling Python and a compiler for
+   `build_module.py`, with `CT_ENGINE_DATA_DIR` pointing at the bundled files, and
+   checked with `tools/check_dist.py`.
+2. **HD-2D, next level:** per-layer PPU output (not just the winning pixel), for real
    parallax and camera tilt.
-4. **Android:** needs the fork merge.
+3. **Android:** needs the fork merge.

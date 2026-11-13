@@ -55,7 +55,8 @@ SPDX-FileCopyrightText = "2004-2025 ares team, Near et al"
 SPDX-License-Identifier = "ISC"
 
 # Upstream files with our (GPL-3.0-or-later) changes: the PPU layer G-buffer,
-# its scheduler plumbing, the HD-2D frontend integration and build wiring.
+# its scheduler plumbing, the HD-2D frontend integration, build wiring, the
+# engine-only first run and the ROM SHA-1 check.
 [[annotations]]
 path = [
   "third_party/snes/ppu.c",
@@ -66,6 +67,8 @@ path = [
   "game/ct/CMakeLists.txt",
   "runtime/func_table.h",
   "tools/ct_boot.c",
+  "tools/check_rom.py",
+  "game/ct/game.toml",
 ]
 precedence = "closest"
 SPDX-FileCopyrightText = ["2022 snesrev", "2021 elzo_d", "2026 Akhil Moola", "2026 jerbanpls"]

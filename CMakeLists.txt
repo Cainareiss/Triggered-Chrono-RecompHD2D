@@ -155,8 +155,25 @@ function(ct_engine_exe name)
 endfunction()
 ct_engine_exe(ct_boot_engine ${CMAKE_SOURCE_DIR}/tools/ct_boot.c)
 if(SDL2_FOUND)
-    ct_engine_exe(ct_sdl_engine ${CMAKE_SOURCE_DIR}/frontend/main.c)
+    # port: without --module it runs the first-run flow (frontend/firstrun.h):
+    # find the ROM, build the module with tools/build_module.py, load it.
+    # Packagers point CT_ENGINE_DATA_DIR at the installed data dir
+    # (<prefix>/share/ct-recomp); the launcher also passes --data-dir.
+    set(CT_ENGINE_DATA_DIR ${CMAKE_SOURCE_DIR} CACHE PATH
+        "Where ct_sdl_engine finds game/ and tools/ by default (--data-dir)")
+    # The game it builds by default: the first game/<id> with a game.toml.
+    if(NOT CT_GAME_ID)
+        file(GLOB ct_game_tomls ${CMAKE_SOURCE_DIR}/game/*/game.toml)
+        list(GET ct_game_tomls 0 ct_first_toml)
+        get_filename_component(ct_first_game ${ct_first_toml} DIRECTORY)
+        get_filename_component(ct_first_game ${ct_first_game} NAME)
+        set(CT_GAME_ID ${ct_first_game} CACHE STRING "Default game for ct_sdl_engine (--game)")
+    endif()
+    ct_engine_exe(ct_sdl_engine ${CMAKE_SOURCE_DIR}/frontend/main.c
+        ${CMAKE_SOURCE_DIR}/frontend/firstrun.c ${CMAKE_SOURCE_DIR}/frontend/sha1.c)
     target_link_libraries(ct_sdl_engine ct_input ct_hd2d)
+    target_compile_definitions(ct_sdl_engine PRIVATE CT_FIRSTRUN
+        CT_FIRSTRUN_GAME="${CT_GAME_ID}" CT_FIRSTRUN_DATA_DIR="${CT_ENGINE_DATA_DIR}")
 endif()
 
 # ---- engine tests: no game, no ROM (synthetic image, test/harness.h) ----

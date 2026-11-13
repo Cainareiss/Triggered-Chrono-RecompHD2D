@@ -1,9 +1,11 @@
 # Game description read by recomp/game.py, tools/check_rom.py,
-# tools/check_agnostic.py, and the build.
+# tools/check_agnostic.py, the engine's first run (frontend/firstrun.c), and the
+# build.
 
 name = "Chrono Trigger (USA) 1.0"
 rom_size = 0x400000          # headerless
 rom_crc32 = 0x2D206BF7
+rom_sha1 = "de5822f4f2f7a55acb8926d4c0eaa63d5d989312"   # port: also checked by the engine's first run
 mapping = "hirom"
 
 # Words that must not appear in the game-agnostic tree (check_agnostic.py).

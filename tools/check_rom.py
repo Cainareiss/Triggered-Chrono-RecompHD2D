@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Verify a ROM image against a game's game.toml (size and CRC32).
+"""Verify a ROM image against a game's game.toml (size, CRC32, and SHA-1
+if it lists rom_sha1).
 
 usage: check_rom.py GAME_DIR [ROM]   (ROM defaults to $CT_ROM)
 """
+import hashlib
 import os
 import sys
 import tomllib
@@ -18,9 +20,14 @@ def check(game_dir: str, path: str) -> str | None:
     if size != g['rom_size']:
         return f'size {size}, expected {g["rom_size"]} for {g["name"]}'
     with open(path, 'rb') as f:
-        crc = zlib.crc32(f.read())
+        data = f.read()
+    crc = zlib.crc32(data)
     if crc != g['rom_crc32']:
         return f'crc32 {crc:08x}, expected {g["rom_crc32"]:08x} for {g["name"]}'
+    # port: the SHA-1 too, as the engine's first run checks it
+    sha1 = hashlib.sha1(data).hexdigest()
+    if 'rom_sha1' in g and sha1 != g['rom_sha1'].lower():
+        return f'sha1 {sha1}, expected {g["rom_sha1"]} for {g["name"]}'
     return None
 
 
