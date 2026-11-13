@@ -74,16 +74,33 @@
  *       the save RAM file (frontend/saves.h; default GAME_ID.srm in the
  *       per-game preferences folder), or none. For testing, --dump-sram
  *       writes the save RAM as it is at exit, and --poke-sram changes a
- *       byte of it after frame F. */
+ *       byte of it after frame F.
+ *   handhelds (docs/HANDHELD.md, device.h): under Steam's Game Mode
+ *       (gamescope) the window is fullscreen, the mouse cursor hidden and
+ *       HD-2D on unless --no-hd2d; on a Steam Deck with no saved look the
+ *       "deck" preset is the default. Holding View+Menu (Back+Start) for
+ *       2 s asks whether to quit (A quits, B goes back).
+ *   --pacing auto|timer|vsync [--log-pacing]
+ *       how frames are paced: a sleep to each 60.0988 Hz frame time
+ *       (timer; auto, the default, is the timer for now), or the
+ *       display's vertical sync (vsync, for 60 Hz displays: the audio
+ *       rate control absorbs the 0.16% difference, and while the sound
+ *       queue runs low vsync is off until it refills). A vsync that
+ *       doesn't give ~60 Hz falls back to the timer. --log-pacing prints frame-time statistics every 60 frames;
+ *       every exit prints them for the whole run. */
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__unix__) || defined(__APPLE__)
+#include <time.h>
+#endif
 
 #include <SDL.h>
 
 #include "bus.h"
+#include "device.h"   /* port: Steam Game Mode, Steam Deck */
 #include "module.h"   /* port: --module */
 #ifdef CT_FIRSTRUN
 #include "firstrun.h" /* port: engine-only first run */
@@ -124,6 +141,29 @@ static char exit_reason[256] =
 static long exit_frame = -1;
 static long audio_underruns, audio_dropped;
 
+/* port: frame pacing (--pacing) and its statistics: the time between
+   successive frame edges, after the wait. */
+enum { PACE_AUTO, PACE_TIMER, PACE_VSYNC };
+static int pace_opt = PACE_AUTO, pace_vsync, log_pacing;
+static int pace_catchup;     /* vsync off for now: the sound queue ran low */
+static long pace_catchups;   /* times that happened */
+static struct {
+    uint64_t last;
+    long n, late;               /* late: over 25 ms, a missed display refresh at 60 Hz */
+    double sum, min, max;       /* ms */
+    long wn, wlate;             /* the current 60-frame window */
+    double wsum, wmin, wmax;
+} pace;
+
+static void pace_print(const char *what, long n, double sum, double mn, double mx, long late)
+{
+    if (n && sum > 0)
+        fprintf(stderr, "ct_sdl: pacing %s (%s): %ld frames, mean %.3f ms (%.3f Hz), min %.3f, "
+                        "max %.3f, %ld over 25 ms, %ld vsync catch-ups\n", what,
+                pace_vsync ? "vsync" : "timer", n, sum / n, 1000.0 * n / sum, mn, mx, late,
+                pace_catchups);
+}
+
 static void set_exit_reason(const char *fmt, ...) CT_PRINTF(1, 2);
 static void set_exit_reason(const char *fmt, ...)
 {
@@ -138,6 +178,7 @@ static void report_exit(void)
     fprintf(stderr, "ct_sdl: exit: %s (frame %ld)\n", exit_reason, exit_frame);
     fprintf(stderr, "ct_sdl: audio: %ld underruns, %ld frames dropped\n", audio_underruns,
             audio_dropped);
+    pace_print("run", pace.n, pace.sum, pace.min, pace.max, pace.late);   /* port */
 }
 
 static void print_controllers(void)
@@ -199,6 +240,9 @@ static const char *dump;
 static SDL_Window *win;
 static SDL_GLContext glctx;
 static int hd2d_mode, log_gpu;
+static int game_mode, preset_saved, preset_given;   /* port: device.h defaults */
+static quit_combo quitc;                            /* port: View+Menu quits */
+static long quit_asked = -1;                        /* frame the question went up */
 #define MAX_SHOTS 64
 static struct { long frame; const char *path; } shots[MAX_SHOTS];
 static int n_shots, shot_w = 1920, shot_h = 1080;
@@ -300,7 +344,7 @@ static int hd2d_key(SDL_Scancode sc)
         hd2d_set_preset((hd2d_preset() + 1) % HD2D_PRESETS);
         fprintf(stderr, "ct_sdl: hd2d preset %s\n", hd2d_preset_name(hd2d_preset()));
         static const char *const msg[HD2D_PRESETS] = {"Look: original", "Look: HD-2D subtle",
-                                                      "Look: HD-2D"};
+                                                      "Look: HD-2D", "Look: HD-2D Steam Deck"};
         hd2d_osd(msg[hd2d_preset()]);
         settings_save();
     } else if (sc == SDL_SCANCODE_F2) {
@@ -345,8 +389,10 @@ static void settings_load(void)
     FILE *f = path ? fopen(path, "r") : NULL;
     while (f && fgets(line, sizeof line, f)) {
         int n;
-        if (sscanf(line, "preset=%63s", val) == 1 && parse_preset(val) >= 0)
+        if (sscanf(line, "preset=%63s", val) == 1 && parse_preset(val) >= 0) {
             hd2d_set_preset(parse_preset(val));
+            preset_saved = 1;   /* port: the user's choice beats the device default */
+        }
         else if (sscanf(line, "aspect=%d", &n) == 1)
             hd2d_set_aspect(n);
     }
@@ -429,8 +475,30 @@ static void poll_input(long f)
         }
     }
     uint16_t buttons = input_keyboard(keys.held);
-    if (pad)
-        buttons |= input_controller(pad_button, pad_axis, pad);
+    if (pad) {   /* port: the quit combo first: it can keep the pad from the game */
+        int q = quit_combo_update(&quitc, f, pad_button, pad);
+        if (q == QUIT_ASK && !hd2d_mode) {   /* no on-screen messages: the hold quits */
+            fprintf(stderr, "ct_sdl: View+Menu held 2 s: quitting\n");
+            set_exit_reason("View+Menu held 2 s");
+            running = 0;
+        } else if (q == QUIT_ASK) {
+            fprintf(stderr, "ct_sdl: View+Menu held 2 s: asking to quit\n");
+            quit_asked = f;
+        } else if (q == QUIT_YES) {
+            fprintf(stderr, "ct_sdl: quit confirmed with A\n");
+            set_exit_reason("View+Menu held 2 s, then A");
+            running = 0;
+        } else if (q == QUIT_CANCEL) {
+            fprintf(stderr, "ct_sdl: quit cancelled\n");
+            quit_asked = -1;
+            hd2d_osd("Back to the game");
+        }
+        /* The question stays up (a message lasts about 2 s) until answered. */
+        if (quit_asked >= 0 && running && (f - quit_asked) % 90 == 0)
+            hd2d_osd("Quit? A: quit   B: back to the game");
+        if (!quit_combo_masks(&quitc))
+            buttons |= input_controller(pad_button, pad_axis, pad);
+    }
     buttons |= touch_buttons(f);   /* port */
     live_buttons = buttons;
 }
@@ -471,6 +539,96 @@ static void queue_audio(long f)
     }
 }
 
+/* port: sleep until the performance counter reaches t. SDL_Delay counts
+   whole milliseconds, and up to a millisecond of jitter shows on a
+   variable-refresh display; nanosleep wakes within tens of microseconds. */
+static void sleep_until(uint64_t t)
+{
+    uint64_t now = SDL_GetPerformanceCounter();
+    if (now >= t)
+        return;
+    uint64_t ns = (t - now) * 1000000000ull / perf_freq;
+#if defined(__unix__) || defined(__APPLE__)
+    struct timespec ts = {(time_t)(ns / 1000000000ull), (long)(ns % 1000000000ull)};
+    while (nanosleep(&ts, &ts))
+        ;
+#else
+    SDL_Delay((uint32_t)(ns / 1000000));
+#endif
+}
+
+static void set_vsync(int on)
+{
+    if (hd2d_mode)
+        SDL_GL_SetSwapInterval(on);
+    else if (ren)
+        SDL_RenderSetVSync(ren, on);
+}
+
+/* port: one frame edge's interval into the statistics; a vsync that
+   doesn't hold the frame rate near 60 Hz gives way to the timer. */
+static void pace_frame(void)
+{
+    uint64_t now = SDL_GetPerformanceCounter();
+    if (pace.last) {
+        double ms = (double)(now - pace.last) * 1000.0 / (double)perf_freq;
+        if (!pace.n || ms < pace.min)
+            pace.min = ms;
+        if (!pace.n || ms > pace.max)
+            pace.max = ms;
+        if (!pace.wn || ms < pace.wmin)
+            pace.wmin = ms;
+        if (!pace.wn || ms > pace.wmax)
+            pace.wmax = ms;
+        pace.n++, pace.wn++;
+        pace.sum += ms, pace.wsum += ms;
+        if (ms > 25.0)
+            pace.late++, pace.wlate++;
+        if (pace.wn == 60) {
+            if (log_pacing)
+                pace_print("60", pace.wn, pace.wsum, pace.wmin, pace.wmax, pace.wlate);
+            double mean = pace.wsum / pace.wn;
+            static long catchups_seen;
+            /* Not on the first window (start-up) or one with catch-up
+               frames, which run fast. */
+            int caught_up = pace_catchups != catchups_seen || pace.n == 60;
+            catchups_seen = pace_catchups;
+            if (pace_vsync && !caught_up && (mean < 16.2 || mean > 17.4)) {
+                fprintf(stderr, "ct_sdl: pacing: vsync gives %.2f ms frames, not ~16.67: "
+                                "using the timer\n", mean);
+                set_vsync(0);
+                pace_vsync = pace_catchup = 0;
+            }
+            pace.wn = pace.wlate = 0;
+            pace.wsum = 0;
+        }
+    }
+    pace.last = now;
+}
+
+/* port: vsync or the timer (--pacing), once the window is open. */
+static void choose_pacing(void)
+{
+    SDL_DisplayMode m = {0};
+    int idx = win ? SDL_GetWindowDisplayIndex(win) : -1;
+    if (idx < 0 || SDL_GetCurrentDisplayMode(idx, &m))
+        m.refresh_rate = 0;
+    /* auto is the timer for now: vsync (--pacing vsync) loses a frame for
+       every missed refresh and catches up only through the sound queue
+       check in on_frame, and it is not yet measured on a real Game Mode
+       display. */
+    int want = !fast && pace_opt == PACE_VSYNC;
+    int ok = 0;
+    if (want)
+        ok = hd2d_mode ? !SDL_GL_SetSwapInterval(1) : ren && !SDL_RenderSetVSync(ren, 1);
+    pace_vsync = ok;
+    if (!ok)
+        set_vsync(0);
+    fprintf(stderr, "ct_sdl: display %dx%d at %d Hz: pacing by %s%s\n", m.w, m.h,
+            m.refresh_rate, ok ? "vsync" : "the 60.0988 Hz timer",
+            want && !ok ? " (vsync unavailable)" : "");
+}
+
 /* Frame edge (sched_set_frame_hook): frame f is complete. Present it and
    its audio, wait for its time slot, then read input for frame f+1. Runs
    at the same point whether the CPU is interpreted or inside a native
@@ -479,6 +637,20 @@ static void on_frame(long f)
 {
     exit_frame = f;
     queue_audio(f);
+    if (pace_vsync && playing && audio && !fast) {
+        /* port: a frame that missed its refresh is lost under vsync, and the
+           sound queue drains by a frame each time: when it runs low, stop
+           waiting for vsync until the queue is back near its target. */
+        unsigned lvl = SDL_GetQueuedAudioSize(audio) / 4;
+        if (!pace_catchup && lvl < 2 * AUDIO_BUFFER) {   /* two device buffers from empty */
+            pace_catchup = 1;
+            pace_catchups++;
+            set_vsync(0);
+        } else if (pace_catchup && lvl >= AUDIO_TARGET) {
+            pace_catchup = 0;
+            set_vsync(1);
+        }
+    }
     const uint8_t *fb = sched_frame();   /* B G R x = ARGB8888 little-endian */
     if (hd2d_mode) {
         present_hd2d();
@@ -494,10 +666,23 @@ static void on_frame(long f)
     if (!fast) {
         next_frame += perf_freq * FRAME_NS / 1000000000ull;
         uint64_t now = SDL_GetPerformanceCounter();
-        if (now < next_frame)
-            SDL_Delay((uint32_t)((next_frame - now) * 1000 / perf_freq));
-        else if (now - next_frame > perf_freq / 10)
+        if (pace_vsync) {
+            /* port: the swap above waited for the display; the timer only
+               keeps a vsync that stops waiting (a minimized window, a
+               compositor change) from running the game fast. */
+            /* Behind (a 60.000 Hz display, or a late frame): no sleep, and
+               a resync only past 100 ms, as for the timer, so a vsync that
+               doesn't wait still catches up after a slow frame. */
+            if (now + perf_freq / 1000 < next_frame - perf_freq * FRAME_NS / 1000000000ull)
+                sleep_until(next_frame - perf_freq * FRAME_NS / 1000000000ull);
+            else if (now > next_frame + perf_freq / 10)
+                next_frame = now;
+        } else if (now < next_frame) {
+            sleep_until(next_frame);
+        } else if (now - next_frame > perf_freq / 10) {
             next_frame = now;   /* more than 100 ms behind: resync, don't sprint */
+        }
+        pace_frame();
     }
     saves_frame(f);   /* port */
     poll_input(f);
@@ -522,7 +707,7 @@ static int open_window(const char *title, int scale, int fullscreen)
 {
     /* port: under gamescope (Steam Game Mode, handheld PCs) the
        window is the whole screen anyway: start fullscreen. */
-    if (getenv("GAMESCOPE_WAYLAND_DISPLAY") || getenv("SteamDeck"))
+    if (game_mode)
         fullscreen = 1;
     Uint32 wflags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI |
                     (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
@@ -557,7 +742,17 @@ static int open_window(const char *title, int scale, int fullscreen)
             set_exit_reason("HD-2D renderer setup failed");
             return 1;
         }
-        SDL_GL_SetSwapInterval(0);   /* paced by the frame timer below */
+        SDL_GL_SetSwapInterval(0);   /* paced by the frame timer; choose_pacing may change it */
+        /* port: the Steam Deck's APU gets the lighter look, unless the
+           user saved or asked for one. */
+        const char *gl = NULL;
+        int deck = device_gl_is_deck(&gl) || device_kind() == DEVICE_STEAM_DECK;
+        fprintf(stderr, "ct_sdl: GL renderer \"%s\", device \"%s\"%s\n", gl,
+                device_product(), deck ? ": Steam Deck" : "");
+        if (deck && !preset_saved && !preset_given) {
+            hd2d_set_preset(HD2D_DECK);
+            fprintf(stderr, "ct_sdl: hd2d preset deck (Steam Deck default)\n");
+        }
     } else {
         win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                SCHED_WIDTH * scale, SCHED_HEIGHT * scale, wflags);
@@ -574,6 +769,18 @@ static int open_window(const char *title, int scale, int fullscreen)
         }
         /* port: integer scaling is done by present_plain (touch.h) */
     }
+    if (game_mode)   /* port: nothing to point at on a handheld */
+        SDL_ShowCursor(SDL_DISABLE);
+    {
+        int w = 0, h = 0;
+        if (hd2d_mode)
+            SDL_GL_GetDrawableSize(win, &w, &h);
+        else
+            SDL_GetRendererOutputSize(ren, &w, &h);
+        fprintf(stderr, "ct_sdl: window %dx%d%s\n", w, h,
+                SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN ? ", fullscreen" : "");
+    }
+    choose_pacing();
     return 0;
 }
 
@@ -688,13 +895,26 @@ int main(int argc, char **argv)
             }
         } else if (!strcmp(argv[k], "--hd2d")) {
             hd2d_mode = 1;
+        } else if (!strcmp(argv[k], "--no-hd2d")) {   /* port: beats the Game Mode default */
+            hd2d_mode = -1;
+        } else if (!strcmp(argv[k], "--pacing") && k + 1 < argc) {
+            const char *v = argv[++k];
+            pace_opt = !strcmp(v, "timer") ? PACE_TIMER : !strcmp(v, "vsync") ? PACE_VSYNC
+                     : !strcmp(v, "auto") ? PACE_AUTO : -1;
+            if (pace_opt < 0) {
+                fprintf(stderr, "ct_sdl: --pacing: auto, timer or vsync\n");
+                return 2;
+            }
+        } else if (!strcmp(argv[k], "--log-pacing")) {
+            log_pacing = 1;
         } else if (!strcmp(argv[k], "--preset") && k + 1 < argc) {
             int p = parse_preset(argv[++k]);
             if (p < 0) {
-                fprintf(stderr, "ct_sdl: --preset: off, subtle or hd2d\n");
+                fprintf(stderr, "ct_sdl: --preset: off, subtle, hd2d or deck\n");
                 return 2;
             }
             hd2d_set_preset(p);
+            preset_given = 1;
         } else if (!strcmp(argv[k], "--aspect") && k + 1 < argc) {
             const char *v = argv[++k];
             hd2d_set_aspect(!strcmp(v, "pixel") ? HD2D_ASPECT_PIXEL
@@ -732,12 +952,12 @@ int main(int argc, char **argv)
             fprintf(stderr, "usage: ct_sdl [--scale N] [--frames N] [--dump DIR] "
                             "[--needed-hw FILE] [--fast] [--require-render] [--log-input] "
                             "[--interp-only] [--record FILE] [--script FILE] [--log-audio] "
-                            "[--require-no-underrun] [--hd2d] [--preset off|subtle|hd2d] "
+                            "[--require-no-underrun] [--hd2d] [--no-hd2d] [--preset off|subtle|hd2d|deck] "
                             "[--aspect 4:3|pixel|stretch] [--debug-view N] [--fullscreen] "
                             "[--log-gpu] [--shot F:PATH]... [--shot-size WxH] [--module FILE] "
                             "[--rom FILE] [--touch] [--touch-hide SECS] [--touch-test FILE] "
                             "[--save FILE] [--no-save] [--dump-sram FILE] "
-                            "[--poke-sram F:ADDR=VAL]..."
+                            "[--poke-sram F:ADDR=VAL]... [--pacing auto|timer|vsync] [--log-pacing]"
 #ifdef CT_FIRSTRUN
                             " [--data-dir DIR] [--game ID] [--shot status:PATH] [--build-only]"
 #endif
@@ -747,6 +967,18 @@ int main(int argc, char **argv)
     }
     if (scale < 1)
         scale = 1;
+    {   /* port: Steam Game Mode (device.h): fullscreen, HD-2D unless --no-hd2d */
+        const char *why;
+        game_mode = device_game_mode(&why);
+        if (game_mode)
+            fprintf(stderr, "ct_sdl: Steam Game Mode (%s): fullscreen, no cursor%s\n", why,
+                    hd2d_mode >= 0 ? ", HD-2D" : "");
+        if (game_mode && !hd2d_mode)
+            hd2d_mode = 1;
+        if (hd2d_mode < 0)
+            hd2d_mode = 0;
+    }
+    quit_combo_init(&quitc);
     touch_init(&touch_o);   /* port */
     atexit(report_exit);
 
@@ -829,7 +1061,7 @@ int main(int argc, char **argv)
         static char hello[48];
         snprintf(hello, sizeof hello, "Look: %s - F1/R3 to change",
                  hd2d_preset() == HD2D_OFF ? "original" : hd2d_preset() == HD2D_SUBTLE ? "subtle"
-                                                                                       : "HD-2D");
+                 : hd2d_preset() == HD2D_DECK ? "HD-2D Steam Deck" : "HD-2D");
         hd2d_osd(hello);
     }
 
@@ -867,6 +1099,7 @@ int main(int argc, char **argv)
 
     key_filter_init(&keys);
     perf_freq = SDL_GetPerformanceFrequency();
+    pace.last = 0;   /* port: the setup screens' time is not a frame */
     next_frame = SDL_GetPerformanceCounter();
     poll_input(0);
     set_input(1);

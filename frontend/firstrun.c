@@ -7,6 +7,7 @@
  * pipes). */
 #include "firstrun.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -14,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -21,6 +23,7 @@
 #include <SDL.h>
 
 #include "bus.h"
+#include "device.h"
 #include "hd2d/osd_font.h"
 #include "module.h"
 #include "sched.h"
@@ -32,7 +35,7 @@
 #define LINE_H 10
 #define MARGIN 8
 #define COLS ((W - 2 * MARGIN) / GLYPH_W)
-#define ROWS 18           /* body rows, between the header and the footer */
+#define ROWS 17           /* body rows, between the header and the footer */
 #define PATHLEN 4096
 
 /* ---- the status screen: a title, a headline, wrapped body lines and a
@@ -150,8 +153,27 @@ static SDL_GameController *pads[4];
 
 typedef struct {
     int quit, key;
+    int button;          /* port: the last controller button pressed, or -1 */
+    SDL_Scancode sc;     /* the last key pressed */
     char *drop;   /* SDL_free it */
 } events;
+
+#define EVENTS_INIT {0, 0, -1, SDL_SCANCODE_UNKNOWN, NULL}
+
+/* port: the "confirm" and "back" answers, by controller (A, B: bottom and
+   right face buttons) or key (Enter, Escape; Steam Input's desktop layout
+   sends those for A and B). */
+static int ev_yes(const events *e)
+{
+    return e->button == SDL_CONTROLLER_BUTTON_A || e->sc == SDL_SCANCODE_RETURN ||
+           e->sc == SDL_SCANCODE_KP_ENTER || e->sc == SDL_SCANCODE_SPACE;
+}
+
+/* The quit hint for footers: no keyboard in Steam's Game Mode. */
+static const char *quit_hint(void)
+{
+    return device_game_mode(NULL) ? "Steam button: quit" : "Ctrl+Q quits";
+}
 
 static void pump(events *e)
 {
@@ -162,9 +184,14 @@ static void pump(events *e)
         } else if (ev.type == SDL_KEYDOWN && !ev.key.repeat) {
             if (ev.key.keysym.scancode == SDL_SCANCODE_Q && (ev.key.keysym.mod & KMOD_CTRL))
                 e->quit = 1;
-            else
+            else {
                 e->key = 1;
-        } else if (ev.type == SDL_CONTROLLERBUTTONDOWN || ev.type == SDL_FINGERDOWN) {
+                e->sc = ev.key.keysym.scancode;
+            }
+        } else if (ev.type == SDL_CONTROLLERBUTTONDOWN) {
+            e->key = 1;
+            e->button = ev.cbutton.button;
+        } else if (ev.type == SDL_FINGERDOWN) {
             e->key = 1;   /* a tap counts too (phones) */
         } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {
             for (int k = 0; k < 4; k++)
@@ -420,6 +447,136 @@ static int remembered_rom(char *out, size_t n)
     return ok && *out ? 0 : -1;
 }
 
+/* ---- port: looking for the ROM in the usual folders ----
+
+   Documents, Downloads, the AppImage's folder and the per-game folder, to
+   SCAN_DEPTH levels of subfolders and at most SCAN_MAX_ENTRIES directory
+   entries in all; only .sfc / .smc files of the ROM's exact size are read
+   and hashed. A handheld in Game Mode has no file manager to drop a file
+   from. */
+#define SCAN_DEPTH 2
+#define SCAN_MAX_ENTRIES 2000
+#define SCAN_DIRS 6
+
+static char scan_dir[SCAN_DIRS][PATHLEN];
+static int n_scan_dirs, scan_app = -1;   /* scan_app: the AppImage's folder */
+
+static void scan_add(const char *a, const char *b)
+{
+    if (!a || !*a || n_scan_dirs == SCAN_DIRS)
+        return;
+    char d[PATHLEN];
+    snprintf(d, sizeof d, "%s%s", a, b ? b : "");
+    size_t l = strlen(d);
+    while (l > 1 && d[l - 1] == '/')
+        d[--l] = 0;
+    for (int k = 0; k < n_scan_dirs; k++)
+        if (!strcmp(scan_dir[k], d))
+            return;
+    snprintf(scan_dir[n_scan_dirs++], PATHLEN, "%s", d);
+}
+
+static void scan_dirs_init(void)
+{
+    const char *home = getenv("HOME");
+    n_scan_dirs = 0;
+    scan_app = -1;
+    scan_add(getenv("XDG_DOCUMENTS_DIR"), NULL);
+    scan_add(home, "/Documents");
+    scan_add(getenv("XDG_DOWNLOAD_DIR"), NULL);
+    scan_add(home, "/Downloads");
+    const char *app = getenv("APPIMAGE");   /* set by the AppImage runtime */
+    if (app && strrchr(app, '/')) {
+        char d[PATHLEN];
+        snprintf(d, sizeof d, "%.*s", (int)(strrchr(app, '/') - app), app);
+        int before = n_scan_dirs;
+        scan_add(d[0] ? d : "/", NULL);
+        if (n_scan_dirs > before)
+            scan_app = before;
+    }
+    scan_add(pref, NULL);
+}
+
+/* Files already hashed and rejected, so a rescan doesn't read them again. */
+static struct { dev_t dev; ino_t ino; time_t mtime; } rejected[64];
+static int n_rejected;
+
+typedef struct {
+    int entries;
+    char headered[PATHLEN];   /* a file of the ROM's size plus 512, if any */
+} scan_state;
+
+static int has_rom_ext(const char *name)
+{
+    const char *dot = strrchr(name, '.');
+    return dot && (!strcasecmp(dot, ".sfc") || !strcasecmp(dot, ".smc"));
+}
+
+static int scan_tree(const char *dir, int depth, scan_state *st, char *found, size_t n)
+{
+    DIR *d = opendir(dir);
+    if (!d)
+        return 0;
+    struct dirent *e;
+    int hit = 0;
+    while (!hit && st->entries < SCAN_MAX_ENTRIES && (e = readdir(d))) {
+        if (e->d_name[0] == '.')
+            continue;   /* ., .., hidden files and folders */
+        st->entries++;
+        char path[PATHLEN];
+        if (snprintf(path, sizeof path, "%s/%s", dir, e->d_name) >= (int)sizeof path)
+            continue;
+        struct stat ls, fs;
+        if (lstat(path, &ls))
+            continue;
+        if (S_ISDIR(ls.st_mode)) {   /* not through symlinks: no loops */
+            if (depth < SCAN_DEPTH)
+                hit = scan_tree(path, depth + 1, st, found, n);
+            continue;
+        }
+        if (!has_rom_ext(e->d_name) || stat(path, &fs) || !S_ISREG(fs.st_mode))
+            continue;
+        if (fs.st_size == game.rom_size + 512 && !st->headered[0])
+            snprintf(st->headered, sizeof st->headered, "%s", path);
+        if (fs.st_size != game.rom_size)
+            continue;
+        int seen = 0;
+        for (int k = 0; k < n_rejected && !seen; k++)
+            seen = rejected[k].dev == fs.st_dev && rejected[k].ino == fs.st_ino &&
+                   rejected[k].mtime == fs.st_mtime;
+        if (seen)
+            continue;
+        char why[512];
+        if (!check_rom(path, why, sizeof why)) {
+            snprintf(found, n, "%s", path);
+            hit = 1;
+        } else {
+            fprintf(stderr, "ct_sdl: search: %s\n", why);
+            int k = n_rejected < 64 ? n_rejected++ : 63;
+            rejected[k].dev = fs.st_dev;
+            rejected[k].ino = fs.st_ino;
+            rejected[k].mtime = fs.st_mtime;
+        }
+    }
+    closedir(d);
+    return hit;
+}
+
+/* 0 with the ROM's path in found, or -1. headered (may be NULL) gets a
+   file that would match but for a copier header. */
+static int scan_for_rom(char *found, size_t n, char *headered, size_t hn)
+{
+    scan_state st = {0, ""};
+    int hit = 0;
+    for (int k = 0; k < n_scan_dirs && !hit; k++)
+        hit = scan_tree(scan_dir[k], 0, &st, found, n);
+    fprintf(stderr, "ct_sdl: search: %d entries in %d folders: %s\n", st.entries, n_scan_dirs,
+            hit ? found : "no ROM");
+    if (headered)
+        snprintf(headered, hn, "%s", st.headered);
+    return hit ? 0 : -1;
+}
+
 /* The module is fresh if it exists and its stamp names this ROM and this
    engine's module ABI. */
 static int module_fresh(const char *module)
@@ -457,27 +614,62 @@ static void stamp_write(int ok)
 
 /* ---- the screens ---- */
 
-/* Wait for a ROM to be dropped on the window. 0 with path set, or
-   FIRSTRUN_QUIT. */
+/* Wait for the ROM: put in one of the searched folders (searched again on
+   A or Enter, and every few seconds), or dropped on the window. 0 with
+   path set, or FIRSTRUN_QUIT. */
 static int wait_for_drop(char *path, size_t n, const char *problem)
 {
-    char why[512];
+    char why[512], headered[PATHLEN] = "";
     snprintf(why, sizeof why, "%s", problem ? problem : "");
-    int shot = 1;
+    int shot = 1, searches = 1, gm = device_game_mode(NULL);
+    Uint32 last_scan = SDL_GetTicks();
     for (;;) {
-        scr_clear("Drop your ROM file on this window.", C_TEXT);
-        scr_add(C_DIM, "Needed: %s, %ld bytes, without a copier header.", game.name,
-                game.rom_size);
-        scr_add(C_DIM, "The game code is built from it on this computer, once. Nothing "
-                       "is sent anywhere.");
-        if (why[0]) {
+        scr_clear("No ROM found. Put your ROM file in:", C_TEXT);
+        /* The folders, short: relative to the home folder (the font has
+           no ~). The last one, the per-game folder, isn't shown. */
+        const char *home = getenv("HOME");
+        size_t hl = home ? strlen(home) : 0;
+        char where[1024] = "", app[PATHLEN] = "";
+        for (int k = 0; k < n_scan_dirs - 1; k++) {
+            const char *d = scan_dir[k];
+            if (hl && !strncmp(d, home, hl) && (d[hl] == '/' || !d[hl]))
+                d = d[hl] ? d + hl + 1 : "the home folder";
+            if (k == scan_app)
+                snprintf(app, sizeof app, "%s", d);
+            else
+                snprintf(where + strlen(where), sizeof where - strlen(where), "%s%s",
+                         where[0] ? ", " : "", d);
+        }
+        /* Long paths would push the rest off the screen: name the last
+           folder only. */
+        if (app[0] && strlen(app) > COLS - 28 && strrchr(app, '/'))
+            memmove(app, strrchr(app, '/') + 1, strlen(strrchr(app, '/')));
+        scr_add(C_TITLE, "  %s", where);
+        if (home && hl <= COLS - 24)
+            scr_add(C_DIM, "  in your home folder, %s", home);
+        else
+            scr_add(C_DIM, "  in your home folder");
+        if (app[0])
+            scr_add(C_TITLE, "  or next to the AppImage, in %s", app);
+        scr_line(C_TEXT, "");
+        scr_add(C_DIM, "%s, headerless, %ld bytes, SHA-1:", game.name, game.rom_size);
+        scr_add(C_DIM, "%s", game.sha1[0] ? game.sha1 : "(checked by tools/check_rom.py)");
+        scr_add(C_DIM, "The game code is built from it here, once. Nothing is sent anywhere.");
+        if (headered[0]) {
+            scr_line(C_TEXT, "");
+            scr_add(C_BAD, "%s has a 512-byte copier header: remove it.",
+                    strrchr(headered, '/') + 1);
+        } else if (why[0]) {
             scr_line(C_TEXT, "");
             scr_add(C_BAD, "%s", why);
         }
-        snprintf(scr.foot, sizeof scr.foot, "Or start with --rom FILE.  Ctrl+Q quits.");
+        if (!gm)
+            scr_add(C_DIM, "Or drop the file on this window, or start with --rom FILE.");
+        scr_add(C_DIM, "Searched %d time%s.", searches, searches == 1 ? "" : "s");
+        snprintf(scr.foot, sizeof scr.foot, "A: search again   %s", quit_hint());
         scr_show(shot);
         shot = 0;
-        events e = {0};
+        events e = EVENTS_INIT;
         pump(&e);
         if (e.quit) {
             SDL_free(e.drop);
@@ -489,7 +681,20 @@ static int wait_for_drop(char *path, size_t n, const char *problem)
             if (!check_rom(path, why, sizeof why))
                 return 0;
             fprintf(stderr, "ct_sdl: %s\n", why);
+            headered[0] = 0;
             shot = 1;
+        }
+        if (ev_yes(&e) || SDL_GetTicks() - last_scan > 5000) {
+            char h[PATHLEN];
+            int asked = ev_yes(&e);
+            if (!scan_for_rom(path, n, h, sizeof h))
+                return 0;
+            searches++;
+            last_scan = SDL_GetTicks();
+            if (strcmp(h, headered) || asked) {
+                snprintf(headered, sizeof headered, "%s", h);
+                shot = 1;
+            }
         }
         SDL_Delay(30);
     }
@@ -552,7 +757,8 @@ static void build_screen(unsigned secs)
     for (int k = 0; k < n_steps; k++)
         scr_add(k == n_steps - 1 ? C_TEXT : C_DIM, "%s %s", k == n_steps - 1 ? ">" : " ",
                 steps[k]);
-    snprintf(scr.foot, sizeof scr.foot, "%u s   Ctrl+Q stops", secs);
+    snprintf(scr.foot, sizeof scr.foot, "%u s   %s", secs,
+             device_game_mode(NULL) ? "Steam button: stop" : "Ctrl+Q stops");
 }
 
 /* Run tools/build_module.py. 0 when it built the module, 1 when it
@@ -581,7 +787,7 @@ static int build(const char *rom)
     Uint32 t0 = SDL_GetTicks();
     new_step = 1;
     for (;;) {
-        events e = {0};
+        events e = EVENTS_INIT;
         pump(&e);
         SDL_free(e.drop);
         if (e.quit) {
@@ -603,8 +809,9 @@ static int build(const char *rom)
     return status == 0 ? 0 : 1;
 }
 
-/* The build or the load failed: offer the interpreter. FIRSTRUN_INTERP or
-   FIRSTRUN_QUIT. */
+/* The build or the load failed: offer the interpreter, or another try.
+   FIRSTRUN_INTERP, FIRSTRUN_QUIT or OFFER_RETRY. */
+#define OFFER_RETRY 100
 static int offer_interp(const char *what)
 {
     if (opt->build_only) {   /* nobody to ask */
@@ -617,17 +824,21 @@ static int offer_interp(const char *what)
         for (int k = 0; k < n_tail; k++)
             scr_add(C_DIM, "%s", tail[k]);
         scr_line(C_TEXT, "");
-        scr_add(C_TEXT, "Press any key or button to play without it. It is slower: the "
-                        "interpreter runs all of the game.");
-        snprintf(scr.foot, sizeof scr.foot, "Details: see the terminal. Ctrl+Q quits.");
+        scr_add(C_TEXT, "B: play without it. It is slower: the interpreter runs all of the "
+                        "game.");
+        scr_add(C_TEXT, "A: try again.");
+        snprintf(scr.foot, sizeof scr.foot, "%s",
+                 device_game_mode(NULL) ? quit_hint() : "Details: see the terminal. Ctrl+Q quits.");
         scr_show(shot);
         shot = 0;
-        events e = {0};
+        events e = EVENTS_INIT;
         pump(&e);
         SDL_free(e.drop);
         if (e.quit)
             return FIRSTRUN_QUIT;
-        if (e.key)
+        if (ev_yes(&e))
+            return OFFER_RETRY;
+        if (e.key)   /* B, Escape, any other key or a tap */
             return FIRSTRUN_INTERP;
         SDL_Delay(30);
     }
@@ -676,6 +887,17 @@ int firstrun(const firstrun_opts *o)
                 snprintf(problem, sizeof problem, "%s", why);
         }
     }
+    scan_dirs_init();   /* port: then the usual folders */
+    if (!found && !(o->build_only && o->rom_arg)) {
+        char headered[PATHLEN];
+        if (!scan_for_rom(rom, sizeof rom, headered, sizeof headered)) {
+            found = 1;
+            fprintf(stderr, "ct_sdl: ROM (found): %s\n", rom);
+        } else if (headered[0] && !problem[0]) {
+            snprintf(problem, sizeof problem, "%s has a 512-byte copier header: remove it.",
+                     strrchr(headered, '/') + 1);
+        }
+    }
     if (!found && o->build_only) {
         fprintf(stderr, "ct_sdl: no usable ROM%s\n",
                 o->rom_arg ? "" : ": give one with --rom FILE");
@@ -713,6 +935,11 @@ int firstrun(const firstrun_opts *o)
             }
             if (b) {
                 result = offer_interp("The game code could not be built.");
+                if (result == OFFER_RETRY) {
+                    result = FIRSTRUN_MODULE;
+                    attempt = -1;
+                    continue;
+                }
                 break;
             }
             stamp_write(1);
@@ -734,6 +961,11 @@ int firstrun(const firstrun_opts *o)
             n_tail = 0;
             on_build_line(line);
             result = offer_interp("The game code would not load.");
+            if (result == OFFER_RETRY) {
+                result = FIRSTRUN_MODULE;
+                attempt = -1;
+                continue;
+            }
             break;
         }
     }

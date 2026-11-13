@@ -42,6 +42,9 @@ you must not share the ROM.
 The packages bundle everything the module build needs: a C compiler (zig) in both, and
 Python in the AppImage. The Flatpak uses the Python in its runtime.
 
+**On a Steam Deck or ROG Ally**, see [HANDHELD.md](HANDHELD.md): a step-by-step guide for
+Game Mode, with no keyboard needed after setup.
+
 ## Installing
 
 ### AppImage
@@ -89,13 +92,16 @@ flatpak run io.github.jerbanpls.CtRecomp --hd2d
 | Option | What it does |
 | --- | --- |
 | `--rom FILE` | Use this ROM file |
-| `--hd2d` | Draw with the HD-2D renderer |
+| `--hd2d` | Draw with the HD-2D renderer (on by default in Steam's Game Mode) |
+| `--no-hd2d` | The original look, also in Game Mode |
 | `--fullscreen` | Start fullscreen |
 | `--scale N` | Window size, as a multiple of the console's 256×224 picture (default 3) |
 | `--interp-only` | Don't build or load the game module; run everything in the interpreter |
-| `--preset off\|subtle\|hd2d` | Starting HD-2D look (with `--hd2d`) |
+| `--preset off\|subtle\|hd2d\|deck` | Starting HD-2D look (with `--hd2d`); `deck` is a lighter HD-2D, the default on a Steam Deck |
 | `--aspect 4:3\|pixel\|stretch` | Picture shape (with `--hd2d`) |
 | `--log-gpu` | Print the HD-2D renderer's frame time every 60 frames |
+| `--pacing auto\|timer\|vsync` | How frames are paced: the engine's 60.0988 Hz timer (`timer`, and `auto`, the default), or the display's vsync on a 60 Hz screen (`vsync`, see [HANDHELD.md](HANDHELD.md#looks-frame-rate-and-battery)) |
+| `--log-pacing` | Print frame-time statistics every 60 frames (every exit prints them for the whole run) |
 | `--save FILE` | Keep the game's save memory in FILE instead of `ct/ct.srm` (see [Your saves](#your-saves)) |
 | `--no-save` | Don't load or write the save file: in-game saves last only until you quit |
 
@@ -105,10 +111,14 @@ flatpak run io.github.jerbanpls.CtRecomp --hd2d
    1. `--rom FILE`
    2. the `CT_ROM` environment variable
    3. the ROM that worked last time
+   4. a `.sfc` or `.smc` file of the right size and checksum in `~/Documents`,
+      `~/Downloads`, the AppImage's folder or the data folder (up to two subfolders
+      deep, at most about 2000 files)
 
-   If none of those works, the window asks you to **drop your ROM file on it**. Drag the
-   file from your file manager onto the window. The screen shows what's needed and, when
-   a file is rejected, says why (see [Troubleshooting](#troubleshooting)).
+   If none of those works, the window says where to put the ROM, with its size and
+   SHA-1. Copy the file there and press **A** (or Enter) to search again, or **drop the
+   file on the window** from your file manager. When a file is rejected, the screen says
+   why (see [Troubleshooting](#troubleshooting)).
 2. **The module build.** The first time, and again whenever the ROM or the engine
    changes in a way that needs it, the engine builds the game module. A progress screen
    lists each step as it runs, with a seconds counter at the bottom:
@@ -120,7 +130,7 @@ flatpak run io.github.jerbanpls.CtRecomp --hd2d
    6. done (the generated C has been deleted by then)
 
    This takes about a minute (around 40 seconds on a ROG Ally), and happens once.
-   **Ctrl+Q** stops the build and quits.
+   **Ctrl+Q** (in Game Mode, the Steam button) stops the build and quits.
 3. **Play.** The screen shows "Starting..." and the game begins. On later launches, the
    remembered ROM and the existing module are reused, so the game starts right away.
 
@@ -140,7 +150,8 @@ flatpak run io.github.jerbanpls.CtRecomp --hd2d
 | Start | Enter |
 | Select | Right Shift |
 
-**Ctrl+Q**, or closing the window, quits. Esc does not quit: Steam Input sends Esc for a
+**Ctrl+Q**, or closing the window, quits. On a controller, hold **View + Menu** (Back +
+Start) for 2 seconds: the game asks whether to quit, and **A** quits, **B** goes back. Esc does not quit: Steam Input sends Esc for a
 controller button in some layouts.
 
 ### Controller
@@ -169,7 +180,7 @@ renderer adds lighting and blur, not new art. More detail is in [HD2D.md](HD2D.m
 
 | Key | Controller | What it does |
 | --- | --- | --- |
-| F1 | R3 (click the right stick) | Cycle the look: original, subtle, HD-2D (the default) |
+| F1 | R3 (click the right stick) | Cycle the look: original, subtle, HD-2D (the default), HD-2D Steam Deck |
 | F2 | | Cycle the debug views: layers, depth, blur, side-by-side compare, off |
 | F3 | L3 (click the left stick) | Cycle the picture shape: 4:3 (default), pixel 8:7, stretch |
 | F11 | | Toggle fullscreen |
@@ -231,8 +242,8 @@ The file isn't the dump the port needs (see [What you need](#what-you-need)).
 
 ### "The game code could not be built."
 
-The window shows the last lines of the build's output. Press any key or button to **play
-anyway in the interpreter**: the game runs without the module, with every instruction
+The window shows the last lines of the build's output. Press **A** (or Enter) to try the build
+again, or **B** (or any other key) to **play anyway in the interpreter**: the game runs without the module, with every instruction
 interpreted. It's slower: on a ROG Ally it measured about 290 frames per second without
 a window, against the 60 the game needs, so it's still playable on most PCs. The build is tried again on the next launch.
 
@@ -245,7 +256,7 @@ Common causes:
 
 "The game code would not load." means a module was built but couldn't be loaded. (A
 module left over from an earlier run is rebuilt once before this message.) Again, any
-key or button plays in the interpreter.
+A tries again, and B or any other key plays in the interpreter.
 
 ### Rebuilding the module
 
@@ -270,9 +281,11 @@ without `--hd2d` to play with the original look, which works on any graphics dri
 
 **Steam Deck, ROG Ally and other handhelds.** Add the AppImage to Steam as a non-Steam
 game; for the Flatpak, add it with Steam's "Add a Non-Steam Game" and pick
-**CT Recomp**. To use HD-2D, add `--hd2d` to the shortcut's launch options (for the
-Flatpak shortcut, at the end of the existing launch options).
-- In Game Mode (gamescope) the game starts fullscreen automatically.
+**CT Recomp**. In Game Mode HD-2D is on by default; for the original look, add
+`--no-hd2d` to the shortcut's launch options (for the Flatpak shortcut, at the end of
+the existing launch options).
+- In Game Mode (gamescope) the game starts fullscreen, with HD-2D on and no mouse
+  cursor. The full guide is [HANDHELD.md](HANDHELD.md).
 - Use R3 and L3 for the look and the picture shape, since handhelds lack F-keys.
 - Use a Steam Input layout that sends gamepad buttons, not a keyboard or desktop layout.
 - The renderer takes about 2 ms per frame on a ROG Ally at roughly 1080p's pixel count,
