@@ -292,6 +292,8 @@ static int child_start(child *c, char *const argv[])
 static int child_read(child *c, void (*on_line)(char *))
 {
     for (;;) {
+        if (c->len >= sizeof c->buf - 1)   /* can't happen (flushed below); keeps the size sane */
+            c->len = 0;
         ssize_t n = read(c->fd, c->buf + c->len, sizeof c->buf - 1 - c->len);
         if (n < 0)
             return errno == EAGAIN || errno == EINTR ? 0 : 1;
