@@ -94,3 +94,60 @@ void key_filter_button(key_filter *kf, long frame)
             kf->ignored[k] = 1;
         }
 }
+
+/* port: the quit combo (input.h). */
+enum { QC_IDLE, QC_HOLD, QC_ASK, QC_RELEASE };
+
+void quit_combo_init(quit_combo *q)
+{
+    memset(q, 0, sizeof *q);
+}
+
+int quit_combo_update(quit_combo *q, long frame,
+                      int (*button)(void *ctx, SDL_GameControllerButton b), void *ctx)
+{
+    int back = button(ctx, SDL_CONTROLLER_BUTTON_BACK) != 0;
+    int start = button(ctx, SDL_CONTROLLER_BUTTON_START) != 0;
+    int a = button(ctx, SDL_CONTROLLER_BUTTON_A) != 0;
+    int b = button(ctx, SDL_CONTROLLER_BUTTON_B) != 0;
+    int a_down = a && !q->prev_a, b_down = b && !q->prev_b;
+    q->prev_a = a;
+    q->prev_b = b;
+    int r = QUIT_NONE;
+    switch (q->state) {
+    case QC_IDLE:
+        if (back && start) {
+            q->state = QC_HOLD;
+            q->since = frame;
+        }
+        break;
+    case QC_HOLD:
+        if (!back || !start)
+            q->state = QC_RELEASE;   /* let go early: nothing, once released */
+        else if (frame - q->since >= QUIT_HOLD_FRAMES) {
+            q->state = QC_ASK;
+            q->since = frame;
+            r = QUIT_ASK;
+        }
+        break;
+    case QC_ASK:
+        if (a_down) {
+            q->state = QC_RELEASE;
+            r = QUIT_YES;
+        } else if (b_down || frame - q->since >= QUIT_ASK_FRAMES) {
+            q->state = QC_RELEASE;
+            r = QUIT_CANCEL;
+        }
+        break;
+    default:   /* QC_RELEASE */
+        if (!back && !start && !a && !b)
+            q->state = QC_IDLE;
+        break;
+    }
+    return r;
+}
+
+int quit_combo_masks(const quit_combo *q)
+{
+    return q->state != QC_IDLE;
+}

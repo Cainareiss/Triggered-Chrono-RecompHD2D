@@ -50,4 +50,31 @@ void key_filter_init(key_filter *kf);
 void key_filter_key(key_filter *kf, SDL_Scancode sc, int down, long frame);
 void key_filter_button(key_filter *kf, long frame);
 
+/* port: the controller's quit combo (docs/HANDHELD.md), for handhelds
+   without a keyboard. Hold View (Back) and Menu (Start) together for
+   QUIT_HOLD_FRAMES: the frontend asks "quit?"; then A quits, B (or
+   QUIT_ASK_FRAMES with no answer) goes back to the game. While both are
+   held, while the question is up and until A, B, View and Menu are all
+   released after it, the pad's buttons are kept from the game, so the
+   combo opens no menu and the answer presses nothing. */
+#define QUIT_HOLD_FRAMES 120   /* 2 s */
+#define QUIT_ASK_FRAMES 600    /* 10 s */
+
+enum { QUIT_NONE, QUIT_ASK, QUIT_CANCEL, QUIT_YES };
+
+typedef struct {
+    int state;        /* idle, holding, asking, releasing */
+    long since;       /* frame the hold or the question started */
+    int prev_a, prev_b;
+} quit_combo;
+
+void quit_combo_init(quit_combo *q);
+/* Once per frame with the pad's buttons. Returns QUIT_ASK on the frame the
+   question should appear, QUIT_YES / QUIT_CANCEL on the answer, else
+   QUIT_NONE. */
+int quit_combo_update(quit_combo *q, long frame,
+                      int (*button)(void *ctx, SDL_GameControllerButton b), void *ctx);
+/* The controller's input should not reach the game this frame. */
+int quit_combo_masks(const quit_combo *q);
+
 #endif

@@ -166,7 +166,8 @@ if(NOT SDL2_FOUND AND CT_SDL2_SYSTEM_LIB)
 endif()
 if(SDL2_FOUND)
     # port: the on-screen touch controller (touch.h) and its GL drawer.
-    add_library(ct_input STATIC frontend/input.c frontend/touch.c frontend/touch_gl.c)
+    add_library(ct_input STATIC frontend/input.c frontend/touch.c frontend/touch_gl.c
+        frontend/device.c)   # port: device.c: Steam Game Mode, Steam Deck (HANDHELD.md)
     target_include_directories(ct_input PUBLIC frontend)
     target_link_libraries(ct_input PUBLIC SDL2::SDL2 m)
     target_compile_options(ct_input PRIVATE ${CT_WARN})
@@ -336,6 +337,11 @@ if(SDL2_FOUND)
     target_link_libraries(test_touch ct_input)
     target_compile_options(test_touch PRIVATE ${CT_WARN})
     add_test(NAME touch COMMAND test_touch)
+    # port: handheld controls through an SDL virtual game controller
+    add_executable(test_handheld test/test_handheld.c)
+    target_link_libraries(test_handheld ct_input)
+    target_compile_options(test_handheld PRIVATE ${CT_WARN})
+    add_test(NAME handheld COMMAND test_handheld)
 endif()
 
 # No game-specific names, addresses, or words outside game/.

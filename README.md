@@ -8,7 +8,9 @@ You need your own copy of the game. Put your headerless 4 MB dump in `rom/` and 
 extracted assets, keys) is ever committed to this repository.
 
 **Players:** the [player's guide](docs/USER-GUIDE.md) covers installing the AppImage or
-Flatpak, the first launch, controls, where files live and troubleshooting.
+Flatpak, the first launch, controls, where files live and troubleshooting. On a Steam Deck or
+ROG Ally, follow [docs/HANDHELD.md](docs/HANDHELD.md): Game Mode, controller-only setup,
+the controls and the Deck preset.
 
 CI for the port (`.github/workflows/port.yml`) runs without a ROM: an engine-only build
 and its tests, a check for generated code in the engine programs, the game-agnostic and

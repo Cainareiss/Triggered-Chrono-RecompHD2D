@@ -162,6 +162,8 @@ typedef struct {
     float side_dim;
     float tilt;   /* diorama tilt: foreground enlargement about the focus */
     int effects;
+    int bloom_quarter_only;   /* one bloom level, no 1/8 one */
+    int side_fill_wide_only;  /* side fill only where the bars are over 20% of the width */
 } settings;
 
 static const settings presets[HD2D_PRESETS] = {
@@ -177,9 +179,18 @@ static const settings presets[HD2D_PRESETS] = {
                    .exposure = 1.06f, .saturation = 1.12f, .contrast = 1.04f, .vignette = 0.35f,
                    .grain = 0.018f, .split = 0.35f, .side_dim = 0.42f, .tilt = 0.022f,
                    .effects = 1},
+    /* The Steam Deck: HD2D_FULL with a shorter blur, one bloom level (the
+       1/4 one, read for both of the final pass's bloom taps) and, at
+       16:10, black bars without the side fill. */
+    [HD2D_DECK] = {.relief = 0.55f, .shadow = 0.85f, .ao = 0.7f, .rim = 0.6f, .haze = 0.5f, .point_light = 1.2f,
+                   .dof_tilt = 0.9f, .dof_depth = 0.5f, .focus_band = 0.18f, .focus_ramp = 0.34f,
+                   .dof_radius = 3.5f, .bloom = 0.4f, .bloom_threshold = 0.7f,
+                   .exposure = 1.06f, .saturation = 1.12f, .contrast = 1.04f, .vignette = 0.35f,
+                   .grain = 0.018f, .split = 0.35f, .side_dim = 0.42f, .tilt = 0.022f,
+                   .effects = 1, .bloom_quarter_only = 1, .side_fill_wide_only = 1},
 };
 
-static const char *const preset_names[HD2D_PRESETS] = {"off", "subtle", "hd2d"};
+static const char *const preset_names[HD2D_PRESETS] = {"off", "subtle", "hd2d", "deck"};
 
 static int cur_preset = HD2D_FULL, debug_view, aspect_mode, timing;
 static double last_ms;
@@ -731,15 +742,20 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
         /* 4: bloom, two levels. */
         bright(&g.scene, &g.quarter[0], s->bloom_threshold);
         gauss(&g.quarter[0], &g.quarter[1], &g.quarter[0]);
-        bright(&g.quarter[0], &g.eighth[0], -1.0f);
-        gauss(&g.eighth[0], &g.eighth[1], &g.eighth[0]);
+        if (!s->bloom_quarter_only) {
+            bright(&g.quarter[0], &g.eighth[0], -1.0f);
+            gauss(&g.eighth[0], &g.eighth[1], &g.eighth[0]);
+        }
     }
     /* Side fill: a soft copy of the scene. */
-    bright(&g.scene, &g.quarter[1], -1.0f);
-    bright(&g.quarter[1], &g.soft[0], -1.0f);
-    gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
-    gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
-    gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
+    int side_fill = !s->side_fill_wide_only || (ow - pw) * 5 > ow;
+    if (side_fill) {
+        bright(&g.scene, &g.quarter[1], -1.0f);
+        bright(&g.quarter[1], &g.soft[0], -1.0f);
+        gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
+        gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
+        gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
+    }
 
     /* 5: final, with the on-screen message if any. */
     float osd_alpha = 0.0f;
@@ -769,7 +785,7 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     bind_tex(0, g.scene.tex);
     bind_tex(1, g.half[0].tex);
     bind_tex(2, g.quarter[0].tex);
-    bind_tex(3, g.eighth[0].tex);
+    bind_tex(3, s->bloom_quarter_only ? g.quarter[0].tex : g.eighth[0].tex);
     bind_tex(4, g.soft[0].tex);
     bind_tex(5, g.t_mat);
     bind_tex(6, g.t_color);
@@ -786,7 +802,7 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     p_glUniform4f(U(P_FINAL, "uGrade2"), s->grain, s->split, s->contrast, (float)s->effects);
     p_glUniform3f(U(P_FINAL, "uShadowTint"), 0.92f, 0.98f, 1.08f);
     p_glUniform3f(U(P_FINAL, "uHighTint"), 1.06f, 1.0f, 0.9f);
-    p_glUniform1f(U(P_FINAL, "uSideDim"), s->side_dim);
+    p_glUniform1f(U(P_FINAL, "uSideDim"), side_fill ? s->side_dim : 0.0f);
     p_glUniform1f(U(P_FINAL, "uTime"), (float)(g.frame % 997) / 997.0f);
     p_glUniform1i(U(P_FINAL, "uDebug"), debug_view);
     draw_to(offscreen ? g.out.fbo : 0, ow, oh);
