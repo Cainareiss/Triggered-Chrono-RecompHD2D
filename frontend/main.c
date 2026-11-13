@@ -59,7 +59,15 @@
  *       --data-dir DIR (default: the source tree) holds game/ and tools/;
  *       --game ID picks DIR/game/ID (default: the game it was configured
  *       with). --shot status:PATH writes the setup screen each time it
- *       changes (a %d in PATH numbers the shots). */
+ *       changes (a %d in PATH numbers the shots).
+ *   --touch [--touch-hide SECS] [--touch-test FILE]
+ *       the on-screen touch controller (touch.h): shown on touchscreens
+ *       once touched (from the start on Android); --touch shows it from
+ *       the start and lets the left mouse button act as one finger. It
+ *       hides when a controller is used and after SECS (default 15, 0:
+ *       never) without a touch. --touch-test FILE injects scripted
+ *       touches (format in touch.h). While it is shown, plain-path --shot
+ *       PNGs are --shot-size with the overlay, as HD-2D ones are. */
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -81,6 +89,8 @@
 #include "replay.h"
 #include "resample.h"
 #include "sched.h"
+#include "touch.h"      /* port: on-screen touch controller */
+#include "touch_gl.h"
 
 #define RATE 48000
 /* Device buffer: 960 samples, exactly 20 ms at 48 kHz. Queue target: two
@@ -185,6 +195,36 @@ static int hd2d_mode, log_gpu;
 static struct { long frame; const char *path; } shots[MAX_SHOTS];
 static int n_shots, shot_w = 1920, shot_h = 1080;
 
+/* port: the touch overlay (touch.h); its GL drawer for the HD-2D path. */
+static int touch_gl_ok;
+static touch_opts touch_o = {0, 15};
+
+/* port: where the picture is: HD-2D's aspect, or the plain integer scale. */
+static touch_rect picture_rect(int w, int h)
+{
+    if (!hd2d_mode)
+        return touch_picture_plain(w, h);
+    int a = hd2d_aspect();
+    return touch_picture_aspect(w, h, a == HD2D_ASPECT_PIXEL ? (SCHED_WIDTH * 8.0 / 7.0) / SCHED_HEIGHT
+                                      : a == HD2D_ASPECT_STRETCH ? 0.0 : 4.0 / 3.0);
+}
+
+/* port: the plain path: the frame integer-scaled and centered, the touch
+   overlay over it. No logical size: SDL would clamp touches to it. */
+static void present_plain(const uint8_t *bgrx)
+{
+    int w, h;
+    SDL_GetRendererOutputSize(ren, &w, &h);
+    touch_rect p = touch_picture_plain(w, h);
+    SDL_Rect dst = {p.x, p.y, p.w, p.h};
+    SDL_UpdateTexture(tex, NULL, bgrx, SCHED_WIDTH * 4);
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+    SDL_RenderClear(ren);
+    SDL_RenderCopy(ren, tex, NULL, &dst);
+    touch_draw_sdl(ren);
+    SDL_RenderPresent(ren);
+}
+
 /* One screenshot of a frame: HD-2D at shot_w x shot_h, else as is. */
 static int write_shot(const char *path, const uint8_t *bgrx, const uint8_t *layers,
                       const uint8_t *behind, const uint8_t *behind_layers,
@@ -194,7 +234,15 @@ static int write_shot(const char *path, const uint8_t *bgrx, const uint8_t *laye
     if (hd2d_mode) {
         uint8_t *buf = malloc((size_t)shot_w * shot_h * 4);
         hd2d_render(bgrx, layers, behind, behind_layers, st, shot_w, shot_h, 1);
-        ok = buf && !hd2d_read(buf, shot_w, shot_h) && !png_write_bgrx(path, buf, shot_w, shot_h);
+        ok = buf && !hd2d_read(buf, shot_w, shot_h) &&
+             (!touch_gl_ok || !touch_gl_shot(buf, shot_w, shot_h, picture_rect(shot_w, shot_h))) &&
+             !png_write_bgrx(path, buf, shot_w, shot_h);
+        free(buf);
+    } else if (touch_visible()) {   /* port: with the touch overlay */
+        uint8_t *buf = malloc((size_t)shot_w * shot_h * 4);
+        SDL_UpdateTexture(tex, NULL, bgrx, SCHED_WIDTH * 4);
+        ok = buf && !touch_shot_sdl(ren, tex, shot_w, shot_h, buf) &&
+             !png_write_bgrx(path, buf, shot_w, shot_h);
         free(buf);
     } else {
         ok = !png_write_bgrx(path, bgrx, SCHED_WIDTH, SCHED_HEIGHT);
@@ -220,6 +268,8 @@ static void present_hd2d(void)
     SDL_GL_GetDrawableSize(win, &w, &h);
     hd2d_render(sched_frame(), sched_layers(), sched_behind(), sched_behind_layers(),
                 sched_ppu_state_get(), w, h, 0);
+    if (touch_gl_ok)
+        touch_gl_draw(w, h);   /* port: touch overlay */
     SDL_GL_SwapWindow(win);
     if (log_gpu && sched_frame_count() % 60 == 0)
         fprintf(stderr, "ct_sdl: frame %ld hd2d %dx%d %.2f ms\n", sched_frame_count(), w, h,
@@ -320,8 +370,19 @@ static int parse_preset(const char *v)
 static void poll_input(long f)
 {
     keys.controller = pad != NULL;
+    {   /* port: lay the touch overlay out; scripted touches for frame f+1 */
+        int w = 0, h = 0;
+        if (hd2d_mode)
+            SDL_GL_GetDrawableSize(win, &w, &h);
+        else
+            SDL_GetRendererOutputSize(ren, &w, &h);
+        touch_set_screen(win, w, h, picture_rect(w, h));
+        touch_test_inject(f + 1);
+    }
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
+        if (touch_event(&ev, f))
+            continue;   /* port: a touch, used by the overlay */
         if (log_input && (ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) && !ev.key.repeat)
             fprintf(stderr, "ct_sdl: frame %ld key %s %s (scancode %d)\n", f,
                     SDL_GetScancodeName(ev.key.keysym.scancode),
@@ -362,6 +423,7 @@ static void poll_input(long f)
     uint16_t buttons = input_keyboard(keys.held);
     if (pad)
         buttons |= input_controller(pad_button, pad_axis, pad);
+    buttons |= touch_buttons(f);   /* port */
     live_buttons = buttons;
 }
 
@@ -415,10 +477,7 @@ static void on_frame(long f)
         /* The PPU's behind G-buffer only while the look uses it. */
         sched_set_behind(hd2d_wants_behind());
     } else {
-        SDL_UpdateTexture(tex, NULL, fb, SCHED_WIDTH * 4);
-        SDL_RenderClear(ren);
-        SDL_RenderCopy(ren, tex, NULL, NULL);
-        SDL_RenderPresent(ren);
+        present_plain(fb);   /* port: with the touch overlay */
     }
     if (n_shots)
         take_shots(f);
@@ -477,6 +536,8 @@ static int open_window(const char *title, int scale, int fullscreen)
                 SDL_GL_DeleteContext(glctx);
                 glctx = NULL;
             }
+            if (glctx)   /* port: the touch overlay's GL drawer */
+                touch_gl_ok = !touch_gl_init(want_gl[k].gles);
             if (!glctx && win) {
                 SDL_DestroyWindow(win);
                 win = NULL;
@@ -502,8 +563,7 @@ static int open_window(const char *title, int scale, int fullscreen)
             set_exit_reason("window or renderer creation failed");
             return 1;
         }
-        SDL_RenderSetLogicalSize(ren, SCHED_WIDTH, SCHED_HEIGHT);
-        SDL_RenderSetIntegerScale(ren, SDL_TRUE);
+        /* port: integer scaling is done by present_plain (touch.h) */
     }
     return 0;
 }
@@ -520,10 +580,7 @@ static void present_status(const uint8_t *bgrx)
         hd2d_render(bgrx, status_layers, NULL, NULL, NULL, w, h, 0);
         SDL_GL_SwapWindow(win);
     } else {
-        SDL_UpdateTexture(tex, NULL, bgrx, SCHED_WIDTH * 4);
-        SDL_RenderClear(ren);
-        SDL_RenderCopy(ren, tex, NULL, NULL);
-        SDL_RenderPresent(ren);
+        present_plain(bgrx);
     }
 }
 
@@ -633,6 +690,13 @@ int main(int argc, char **argv)
             shots[n_shots].frame = atol(v);
             shots[n_shots].path = colon + 1;
             n_shots++;
+        } else if (!strcmp(argv[k], "--touch")) {   /* port: touch overlay */
+            touch_o.force = 1;
+        } else if (!strcmp(argv[k], "--touch-hide") && k + 1 < argc) {
+            touch_o.hide_seconds = atoi(argv[++k]);
+        } else if (!strcmp(argv[k], "--touch-test") && k + 1 < argc) {
+            if (touch_test_load(argv[++k]))
+                return 2;
         } else if (!strcmp(argv[k], "--shot-size") && k + 1 < argc) {
             if (sscanf(argv[++k], "%dx%d", &shot_w, &shot_h) != 2 || shot_w < 16 || shot_h < 16) {
                 fprintf(stderr, "ct_sdl: --shot-size WxH\n");
@@ -645,7 +709,7 @@ int main(int argc, char **argv)
                             "[--require-no-underrun] [--hd2d] [--preset off|subtle|hd2d] "
                             "[--aspect 4:3|pixel|stretch] [--debug-view N] [--fullscreen] "
                             "[--log-gpu] [--shot F:PATH]... [--shot-size WxH] [--module FILE] "
-                            "[--rom FILE]"
+                            "[--rom FILE] [--touch] [--touch-hide SECS] [--touch-test FILE]"
 #ifdef CT_FIRSTRUN
                             " [--data-dir DIR] [--game ID] [--shot status:PATH]"
 #endif
@@ -655,6 +719,7 @@ int main(int argc, char **argv)
     }
     if (scale < 1)
         scale = 1;
+    touch_init(&touch_o);   /* port */
     atexit(report_exit);
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER)) {
@@ -778,6 +843,7 @@ int main(int argc, char **argv)
     if (audio)
         SDL_CloseAudioDevice(audio);
     if (glctx) {
+        touch_gl_shutdown();   /* port */
         hd2d_shutdown();
         SDL_GL_DeleteContext(glctx);
     }

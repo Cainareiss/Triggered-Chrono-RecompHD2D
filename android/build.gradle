@@ -1,0 +1,7 @@
+// SPDX-FileCopyrightText: 2026 jerbanpls
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Top-level build file: only the Android Gradle plugin version.
+plugins {
+    id 'com.android.application' version '8.7.3' apply false
+}
