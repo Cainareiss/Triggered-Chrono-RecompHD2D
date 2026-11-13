@@ -7,6 +7,13 @@ You need your own copy of the game. Put your headerless 4 MB dump in `rom/` and 
 `CT_ROM` at it (see Build below). That folder is git-ignored, and no game data (ROMs,
 extracted assets, keys) is ever committed to this repository.
 
+**Players:** the [player's guide](docs/USER-GUIDE.md) covers installing the AppImage or
+Flatpak, the first launch, controls, where files live and troubleshooting.
+
+CI for the port (`.github/workflows/port.yml`) runs without a ROM: an engine-only build
+and its tests, a check for generated code in the engine programs, the game-agnostic and
+REUSE lints, and `tools/check_dist.py` on the installed engine before it is uploaded.
+
 ## License
 
 This project is licensed under the GNU General Public License, version 3 or (at your

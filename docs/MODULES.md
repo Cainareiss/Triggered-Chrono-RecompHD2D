@@ -108,6 +108,9 @@ inside `.zip`, `.tar(.gz/.bz2/.xz)` and `.AppImage` files (the last needs
   the 4 KiB pieces and all of the 16 KiB ones. `--samples N` raises coverage for
   shorter pieces.
 
+Without `--rom`, as in CI (`.github/workflows/port.yml`), the name, ELF-export and
+generated-name checks still run and the ROM-window check is skipped with a notice.
+
 The ctest `check_dist` runs it on the engine programs, which must pass, and on
 `ct_game.so`, `ct_boot` and `ct_sdl`, and on ROM pieces hidden in nested archives,
 which must all fail. It takes about 3 s.

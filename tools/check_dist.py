@@ -4,7 +4,7 @@
 """Check a package for content derived from the ROM: nothing built from
 the user's ROM may be distributed (docs/MODULES.md).
 
-usage: check_dist.py PATH... --rom ROM [--samples N] [--quiet]
+usage: check_dist.py PATH... [--rom ROM] [--samples N] [--quiet]
 
 PATH is a directory (scanned recursively, symlinks not followed) or a
 file. Archives are looked inside, nested ones too: .zip, .tar (also
@@ -28,6 +28,10 @@ A file fails the check if
     of random pieces of non-padding ROM data hidden in other bytes, the
     default found about 99% of 4 KiB pieces, all 16 KiB ones, and 70% of
     1 KiB ones (more --samples find more of the short ones).
+
+Without --rom (CI, which never has one) the name, ELF-export and
+generated-name checks still run, and the ROM-window check is skipped
+with a notice.
 
 Exit status: 0 clean, 1 ROM-derived content found, 2 usage error.
 """
@@ -115,7 +119,7 @@ def elf_defines(data: bytes, symbol: bytes) -> bool:
 
 
 class Checker:
-    def __init__(self, samples: RomSamples, quiet: bool):
+    def __init__(self, samples: RomSamples | None, quiet: bool):
         self.samples = samples
         self.quiet = quiet
         self.files = 0
@@ -144,7 +148,7 @@ class Checker:
         m = SYMBOL_RE.search(data)
         if m:
             self.fail(where, f'generated function name {m.group().decode()} at offset {m.start()}')
-        off = self.samples.find(data)
+        off = self.samples.find(data) if self.samples else -1
         if off >= 0:
             self.fail(where, f'a 64-byte window of the ROM at offset {off}')
         if not self.quiet and len(self.findings) == before:
@@ -235,19 +239,24 @@ class Checker:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('paths', nargs='+', metavar='PATH')
-    ap.add_argument('--rom', required=True)
+    ap.add_argument('--rom', help='the ROM, for the ROM-window check (skipped without it)')
     ap.add_argument('--samples', type=int, default=4096)
     ap.add_argument('--quiet', action='store_true', help='print only failures and the summary')
     a = ap.parse_args(argv[1:])
-    try:
-        with open(a.rom, 'rb') as f:
-            rom = f.read()
-    except OSError as e:
-        print(f'check_dist: cannot read the ROM: {e}', file=sys.stderr)
-        return 2
-    samples = RomSamples(rom, a.samples)
-    print(f'check_dist: {len(samples.windows)} ROM windows sampled '
-          f'(anchors {samples.anchors.hex(" ")})')
+    samples = None
+    if a.rom is None:
+        print('check_dist: notice: no --rom given: the ROM-window check is skipped; '
+              'the name, ELF-export and generated-name checks still run')
+    else:
+        try:
+            with open(a.rom, 'rb') as f:
+                rom = f.read()
+        except OSError as e:
+            print(f'check_dist: cannot read the ROM: {e}', file=sys.stderr)
+            return 2
+        samples = RomSamples(rom, a.samples)
+        print(f'check_dist: {len(samples.windows)} ROM windows sampled '
+              f'(anchors {samples.anchors.hex(" ")})')
     c = Checker(samples, a.quiet)
     for p in a.paths:
         if not os.path.exists(p):

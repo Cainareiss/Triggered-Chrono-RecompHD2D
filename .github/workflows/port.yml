@@ -1,0 +1,117 @@
+# SPDX-FileCopyrightText: 2026 jerbanpls
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The port's checks, with no ROM: CI never has one, so nothing here can
+# generate game code. Every build is engine-only (-DCT_ENGINE_ONLY=ON),
+# and CT_ROM is unset in every step that runs CMake.
+#
+# The only artifacts uploaded are the engine install (dist-check) and, on
+# tags, the engine AppImage, each uploaded only after tools/check_dist.py
+# has passed on the exact file being uploaded (docs/PACKAGING.md).
+#
+# Upstream's ci.yml is left as it is; this file adds to it.
+name: port
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    name: engine-only build and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SDL2
+        # libsdl2-dev ships SDL2Config.cmake, so find_package(SDL2 CONFIG)
+        # finds it and the tarball-headers fallback is not used.
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - name: Configure
+        run: env -u CT_ROM cmake -S . -B build -DCT_ENGINE_ONLY=ON -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+      - name: Build
+        run: cmake --build build -j "$(nproc)"
+      - name: Test
+        run: ctest --test-dir build -LE rom --output-on-failure
+      - name: No generated functions in the engine programs
+        run: |
+          status=0
+          for exe in build/ct_sdl_engine build/ct_boot_engine; do
+            test -x "$exe" || { echo "::error::$exe was not built"; status=1; continue; }
+            n=$(nm "$exe" | grep -cE ' f_[0-9A-F]{6}_' || true)
+            echo "$exe: $n generated symbols"
+            if [ "$n" -ne 0 ]; then
+              echo "::error::$exe contains generated functions"
+              nm "$exe" | grep -E ' f_[0-9A-F]{6}_' | head -20
+              status=1
+            fi
+          done
+          exit $status
+
+  lint:
+    name: lint (game-agnostic, REUSE)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No game words or symbols in the engine sources
+        run: python3 tools/check_agnostic.py .
+      - name: REUSE
+        run: pipx run --spec reuse==6.3.0 reuse lint
+
+  dist-check:
+    name: install and package check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SDL2
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - name: Configure
+        run: |
+          env -u CT_ROM cmake -S . -B build -DCT_ENGINE_ONLY=ON -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DCMAKE_INSTALL_PREFIX=/usr
+      - name: Build the engine
+        run: cmake --build build -j "$(nproc)" --target ct_sdl_engine
+      - name: Install
+        run: DESTDIR="$PWD/stage" cmake --install build
+      - name: Pack
+        run: tar -C stage -czf ct-recomp-engine-x86_64.tar.gz usr
+      - name: check_dist (no ROM; the ROM-window check is skipped)
+        run: python3 tools/check_dist.py --quiet stage ct-recomp-engine-x86_64.tar.gz
+      - name: Upload the engine (only after check_dist passed)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ct-recomp-engine-x86_64
+          path: ct-recomp-engine-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  # NOT YET TESTED IN CI: packaging/appimage/build.sh has only been run on a
+  # developer machine. It is allowed to fail until it has passed here.
+  appimage:
+    name: AppImage (tags only, not yet tested in CI)
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, lint, dist-check]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        # libsdl2-dev: the engine links the system SDL2 and build.sh bundles
+        # it (SDL2=system); squashfs-tools: check_dist looks inside the image.
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev squashfs-tools
+      - name: Build the AppImage
+        run: env -u CT_ROM packaging/appimage/build.sh "$PWD/build-appimage"
+      - name: check_dist (no ROM; the ROM-window check is skipped)
+        run: python3 tools/check_dist.py --quiet build-appimage/CT_Recomp-x86_64.AppImage
+      - name: Upload the AppImage (only after check_dist passed)
+        uses: actions/upload-artifact@v4
+        with:
+          name: CT_Recomp-x86_64.AppImage
+          path: build-appimage/CT_Recomp-x86_64.AppImage
+          if-no-files-found: error
+          retention-days: 30
