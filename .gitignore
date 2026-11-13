@@ -1,0 +1,22 @@
+# game data: never commit
+rom/*
+!rom/.gitkeep
+*.sfc
+*.smc
+*.nds
+*.nsp
+*.xci
+*.nup
+prod.keys
+title.keys
+
+# build output
+build/
+out/
+*.o
+*.obj
+*.so
+*.dll
+*.exe
+*.AppImage
+__pycache__/
