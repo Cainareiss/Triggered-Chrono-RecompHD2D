@@ -57,13 +57,14 @@ add_library(ct_gen STATIC ${CT_GEN_SOURCES} hooks.c)
 target_include_directories(ct_gen PUBLIC ${CT_OUT})
 target_link_libraries(ct_gen PUBLIC ct_runtime ct_sched)
 target_compile_options(ct_gen PRIVATE ${CT_WARN} -Wno-unused-label)
-target_compile_definitions(ct_gen PRIVATE CT_TEST_BUILD)
+target_compile_definitions(ct_gen PRIVATE CT_TEST_BUILD CT_TABLES_DEFINE)
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(ct_gen PRIVATE ${CT_GEN_OPT})   # see CT_GEN_OPT
 endif()
 
 # The tables (func_table.h), as objects so they precede ct_interp.
-add_library(ct_gen_tables OBJECT ${CT_OUT}/ct_funcs.c)
+add_library(ct_gen_tables OBJECT ${CT_OUT}/ct_funcs.c ${CMAKE_SOURCE_DIR}/runtime/func_table_static.c)
+target_compile_definitions(ct_gen_tables PRIVATE CT_TABLES_DEFINE)
 target_include_directories(ct_gen_tables PUBLIC ${CT_OUT})
 target_link_libraries(ct_gen_tables PUBLIC ct_runtime)
 target_compile_options(ct_gen_tables PRIVATE ${CT_WARN})
@@ -88,7 +89,46 @@ if(SDL2_FOUND)
 endif()
 
 # ---- tests (all ROM-dependent) ----
+# port: the same game code as a loadable module (runtime/module.h), and
+# engine-only programs that load it with --module. The engine programs
+# contain no game code: built from the runtime and the empty tables only.
+add_library(ct_game_module MODULE ${CT_GEN_SOURCES} hooks.c ${CT_OUT}/ct_funcs.c
+    ${CMAKE_SOURCE_DIR}/runtime/module_entry.c)
+target_include_directories(ct_game_module PRIVATE ${CT_OUT} ${CMAKE_SOURCE_DIR}/runtime)
+target_compile_definitions(ct_game_module PRIVATE CT_TEST_BUILD CT_TABLES_DEFINE)
+target_compile_options(ct_game_module PRIVATE ${CT_WARN} -Wno-unused-label)
+set_target_properties(ct_game_module PROPERTIES PREFIX "" OUTPUT_NAME ct_game
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR} C_VISIBILITY_PRESET hidden)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(ct_game_module PRIVATE ${CT_GEN_OPT})
+endif()
+add_dependencies(ct_game_module ct_gen)   # the generated sources
+
+function(ct_engine_exe name)
+    add_executable(${name} ${ARGN})
+    target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR}/test)
+    # Whole archives: the module calls into parts of the engine the
+    # program itself may not, so every engine object must be present and
+    # exported (ENABLE_EXPORTS: -rdynamic).
+    target_link_libraries(${name} ct_tables_empty
+        "$<LINK_LIBRARY:WHOLE_ARCHIVE,ct_sched,ct_interp,ct_runtime>")
+    target_compile_options(${name} PRIVATE ${CT_WARN})
+    set_target_properties(${name} PROPERTIES ENABLE_EXPORTS ON
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+endfunction()
+ct_engine_exe(ct_boot_engine ${CMAKE_SOURCE_DIR}/tools/ct_boot.c)
+if(SDL2_FOUND)
+    ct_engine_exe(ct_sdl_engine ${CMAKE_SOURCE_DIR}/frontend/main.c)
+    target_link_libraries(ct_sdl_engine ct_input ct_hd2d)
+endif()
+
 set(ct_game_tests)
+
+# port: the module build must match the static one frame for frame.
+add_test(NAME module_parity COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_module_parity.py
+    $<TARGET_FILE:ct_boot> $<TARGET_FILE:ct_boot_engine> $<TARGET_FILE:ct_game_module>
+    ${GAME_DIR}/test/replay/leene_square.txt 3000)
+list(APPEND ct_game_tests module_parity)
 
 ct_game_exe(test_c1_math test/test_c1_math.c)
 foreach(t mul8 mulaccum divide shifts)

@@ -59,4 +59,34 @@ typedef struct {
 extern const ct_overlay_func ct_overlay_funcs[];
 extern const unsigned ct_overlay_func_count;
 
+/* port: the engine reads the tables through ct_tables_cur, which the
+   linked tables install at startup (static builds: func_table_static.c,
+   func_table_empty.c) or a loaded game module replaces (module.h). Code
+   that reads the tables uses the names above unchanged; files that define
+   them compile with CT_TABLES_DEFINE so the names stay the arrays. */
+typedef struct {
+    const ct_func *funcs;
+    unsigned func_count;
+    const ct_extern *externs;
+    unsigned extern_count;
+    const ct_jumptable *jumptables;
+    unsigned jumptable_count;
+    const ct_overlay_func *overlay_funcs;
+    unsigned overlay_func_count;
+} ct_tables;
+
+extern ct_tables ct_tables_cur;
+void ct_tables_install(const ct_tables *t);
+
+#ifndef CT_TABLES_DEFINE
+#define ct_funcs (ct_tables_cur.funcs)
+#define ct_func_count (ct_tables_cur.func_count)
+#define ct_externs (ct_tables_cur.externs)
+#define ct_extern_count (ct_tables_cur.extern_count)
+#define ct_jumptables (ct_tables_cur.jumptables)
+#define ct_jumptable_count (ct_tables_cur.jumptable_count)
+#define ct_overlay_funcs (ct_tables_cur.overlay_funcs)
+#define ct_overlay_func_count (ct_tables_cur.overlay_func_count)
+#endif
+
 #endif

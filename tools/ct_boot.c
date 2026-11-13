@@ -110,6 +110,7 @@
 #include "apu.h"
 #include "dsp.h"
 #include "wav.h"
+#include "module.h"   /* port: --module */
 
 static jmp_buf fatal_jmp;
 static char fatal_msg[256];
@@ -420,6 +421,7 @@ static int script_reset(long frame)
 
 int main(int argc, char **argv)
 {
+    static const char *module_path;
     static long frames = 60, min_nmis;    /* static: survive the longjmp */
     static int require_render, require_audio;
     static const char *wav_path, *hash_path;
@@ -523,6 +525,8 @@ int main(int argc, char **argv)
             }
         } else if (!strcmp(argv[k], "--interp-only")) {
             sched_set_native(0);
+        } else if (!strcmp(argv[k], "--module") && k + 1 < argc) {
+            module_path = argv[++k];   /* port: game code from a module */
         } else if (!strcmp(argv[k], "--expect-wram") && k + 1 < argc && n_expect_wram < MAX_EXPECT) {
             long f;
             unsigned a, v;
@@ -565,13 +569,21 @@ int main(int argc, char **argv)
             fprintf(stderr, "usage: ct_boot [--frames N] [--dump DIR] [--needed-hw FILE] "
                             "[--min-nmis K] [--require-render] [--wav FILE] "
                             "[--require-audio] [--input F1-F2:BUTTONS] [--script FILE] "
-                            "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only]\n");
+                            "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE]\n");
             return 2;
         }
     }
 
     static char stop[512];
     bus_init(NULL);
+    if (module_path) {
+        const char *err;
+        if (ct_module_load(module_path, &err)) {
+            fprintf(stderr, "ct_boot: --module: %s\n", err);
+            return 2;
+        }
+        fprintf(stderr, "ct_boot: game module %s: %u functions\n", module_path, ct_func_count);
+    }
     interp_reset(&cpu);
     sched_init(&cpu);
     ct_fatal_hook = on_fatal;

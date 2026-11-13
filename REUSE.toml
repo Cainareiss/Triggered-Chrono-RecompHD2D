@@ -64,6 +64,8 @@ path = [
   "runtime/sched.h",
   "frontend/main.c",
   "game/ct/CMakeLists.txt",
+  "runtime/func_table.h",
+  "tools/ct_boot.c",
 ]
 precedence = "closest"
 SPDX-FileCopyrightText = ["2022 snesrev", "2021 elzo_d", "2026 Akhil Moola", "2026 jerbanpls"]

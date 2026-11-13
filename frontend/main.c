@@ -46,7 +46,10 @@
  *   --shot F:PATH (repeatable) [--shot-size WxH]
  *       at the end of frame F, render the HD-2D picture offscreen at
  *       WxH (default 1920x1080) and write it to PATH as PNG; with
- *       --hd2d unset, writes the plain 256x224 frame. */
+ *       --hd2d unset, writes the plain 256x224 frame.
+ *   --module FILE
+ *       take the game code from a game module (runtime/module.h): the
+ *       engine-only build (ct_sdl_engine) contains none of its own. */
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -56,6 +59,7 @@
 #include <SDL.h>
 
 #include "bus.h"
+#include "module.h"   /* port: --module */
 #include "hd2d/hd2d.h"
 #include "hwlog.h"
 #include "input.h"
@@ -421,7 +425,7 @@ int main(int argc, char **argv)
 {
     static long frames = -1;           /* static: survive the longjmp */
     static int scale = 3, require_render, require_no_underrun, fullscreen;
-    static const char *needed;
+    static const char *needed, *module_path;
     settings_load();   /* port: saved HD-2D settings; options below override */
     for (int k = 1; k < argc; k++) {
         if (!strcmp(argv[k], "--scale") && k + 1 < argc)
@@ -455,6 +459,8 @@ int main(int argc, char **argv)
                 fprintf(stderr, "ct_sdl: bad --script %s\n", argv[k]);
                 return 2;
             }
+        } else if (!strcmp(argv[k], "--module") && k + 1 < argc) {
+            module_path = argv[++k];
         } else if (!strcmp(argv[k], "--hd2d")) {
             hd2d_mode = 1;
         } else if (!strcmp(argv[k], "--preset") && k + 1 < argc) {
@@ -496,7 +502,7 @@ int main(int argc, char **argv)
                             "[--interp-only] [--record FILE] [--script FILE] [--log-audio] "
                             "[--require-no-underrun] [--hd2d] [--preset off|subtle|hd2d] "
                             "[--aspect 4:3|pixel|stretch] [--debug-view N] [--fullscreen] "
-                            "[--log-gpu] [--shot F:PATH]... [--shot-size WxH]\n");
+                            "[--log-gpu] [--shot F:PATH]... [--shot-size WxH] [--module FILE]\n");
             return 2;
         }
     }
@@ -511,6 +517,15 @@ int main(int argc, char **argv)
     }
     static CPU cpu;
     bus_init(NULL);
+    if (module_path) {   /* port: game code from a module (runtime/module.h) */
+        const char *err;
+        if (ct_module_load(module_path, &err)) {
+            fprintf(stderr, "ct_sdl: --module: %s\n", err);
+            set_exit_reason("game module failed to load");
+            return 2;
+        }
+        fprintf(stderr, "ct_sdl: game module %s: %u functions\n", module_path, ct_func_count);
+    }
     char title[22];   /* ROM header title, $FFC0, 21 bytes, space padded */
     memcpy(title, bus_rom() + 0xFFC0, 21);
     title[21] = 0;

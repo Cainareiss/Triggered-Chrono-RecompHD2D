@@ -49,9 +49,10 @@ target_include_directories(ct_snes_vendor PUBLIC third_party/snes third_party)
 add_library(ct_runtime STATIC runtime/cpu.c runtime/bus.c
     runtime/snes_adapter.c runtime/png.c runtime/wav.c runtime/hwlog.c
     runtime/cycles.c runtime/replay.c runtime/resample.c
-    runtime/spc700_host.cpp)
+    runtime/spc700_host.cpp
+    runtime/func_table.c runtime/module.c)   # port: table indirection, game modules
 target_include_directories(ct_runtime PUBLIC runtime)
-target_link_libraries(ct_runtime PUBLIC ct_snes_vendor m)
+target_link_libraries(ct_runtime PUBLIC ct_snes_vendor m ${CMAKE_DL_LIBS})
 # ares's SPC700 core (ISC), compiled inside runtime/spc700_host.cpp.
 target_include_directories(ct_runtime PRIVATE third_party/ares/spc700)
 target_compile_options(ct_runtime PRIVATE ${CT_WARN})
@@ -59,7 +60,8 @@ target_compile_options(ct_runtime PRIVATE ${CT_WARN})
 # Function tables (func_table.h): a game's generated ct_funcs.c, or these
 # empty ones. OBJECT libraries, so the tables are always on the link line
 # ahead of the interpreter that reads them.
-add_library(ct_tables_empty OBJECT runtime/func_table_empty.c)
+add_library(ct_tables_empty OBJECT runtime/func_table_empty.c runtime/func_table_static.c)
+target_compile_definitions(ct_tables_empty PRIVATE CT_TABLES_DEFINE)
 target_link_libraries(ct_tables_empty PUBLIC ct_runtime)
 target_compile_options(ct_tables_empty PRIVATE ${CT_WARN})
 
@@ -164,7 +166,8 @@ foreach(t snes_bus hw_map interp_modes interp_system sched stack_guard replay re
 endforeach()
 
 # Native dispatch: provides its own function table instead of the empty one.
-add_executable(test_native test/test_native.c)
+add_executable(test_native test/test_native.c runtime/func_table_static.c)
+target_compile_definitions(test_native PRIVATE CT_TABLES_DEFINE)
 target_include_directories(test_native PRIVATE test)
 target_link_libraries(test_native ct_sched)
 target_compile_options(test_native PRIVATE ${CT_WARN})
