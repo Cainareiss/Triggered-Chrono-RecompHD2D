@@ -1,12 +1,17 @@
 // SPDX-FileCopyrightText: 2026 jerbanpls
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Pass 5, at the output size: depth of field, bloom, color grade, vignette
-// and grain, with the UI put back sharp and ungraded on top, and the
-// screen's sides (outside the picture's 4:3 rectangle) filled with a soft,
-// dimmed extension of the picture.
+// Pass 5, at the output size: depth of field (the blurred foreground plane
+// over the blurred background plane), bloom, color grade, vignette and
+// grain, with the UI put back sharp and ungraded on top, and the screen's
+// sides (outside the picture's 4:3 rectangle) filled with a soft, dimmed
+// extension of the picture.
 uniform sampler2D uScene;    // picture size: rgb, a = depth
-uniform sampler2D uDof;      // half size: rgb blurred, a = coc
+uniform sampler2D uBack;     // picture size: background plane rgb, a = foreground coverage
+uniform sampler2D uDof;      // half size: background plane blurred, a = coc
+uniform sampler2D uFgDof;    // half size: foreground plane blurred, premultiplied
+uniform vec4 uFocus;         // as coc.frag: for the foreground's blur amount
+uniform vec3 uDof3;
 uniform sampler2D uBloomA;   // quarter size
 uniform sampler2D uBloomB;   // eighth size
 uniform sampler2D uSoft;     // eighth size, unthresholded: side fill
@@ -24,12 +29,19 @@ uniform float uTime;
 uniform sampler2D uOsd;      // message mask, nearest
 uniform vec4 uOsdRect;       // its rectangle in output pixels (top-left origin)
 uniform float uOsdAlpha;     // 0: no message
-uniform int uDebug;          // 0 off, 1 classes, 2 depth, 3 blur amount, 4 split compare
+uniform int uDebug;          // 0 off, 1 classes, 2 depth, 3 blur amount, 4 split compare,
+                             // 5 background plane
 out vec4 oColor;
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
 float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+float fgCoc(float y)
+{
+    float tilt = smoothstep(uFocus.y, uFocus.y + uFocus.z, abs(y - uFocus.x));
+    return max(tilt * uDof3.x, smoothstep(0.08, 0.45, abs(uDof3.z - uFocus.w)) * uDof3.y);
+}
 
 vec3 classColor(float c)
 {
@@ -94,6 +106,7 @@ vec3 shade(vec2 fc)
     if (uDebug == 1) { return mix(classColor(mat.b), scene.rgb, 0.35); }
     if (uDebug == 2) { return vec3(scene.a); }
     if (uDebug == 3) { return vec3(texture(uDof, uv).a); }
+    if (uDebug == 5) { return texture(uBack, uv).rgb; }
     if (uDebug == 4 && uv.x < 0.5) {
         // Split compare: the console's own pixels left of center.
         float line_ = 1.0 - step(1.5 / uRect.z, abs(uv.x - 0.5));
@@ -105,8 +118,15 @@ vec3 shade(vec2 fc)
         return scene.rgb;
     }
 
+    // The background plane, blurred by its own amount, then the
+    // foreground plane over it: sharp where it is in focus, otherwise its
+    // blurred copy, whose soft edge lets the background through.
+    vec4 back = texture(uBack, uv);
     vec4 dof = texture(uDof, uv);
-    vec3 c = mix(scene.rgb, dof.rgb, smoothstep(0.0, 0.6, dof.a));
+    vec3 bg = mix(back.rgb, dof.rgb, smoothstep(0.0, 0.6, dof.a));
+    vec4 fg = mix(vec4(scene.rgb * back.a, back.a), texture(uFgDof, uv),
+                  smoothstep(0.0, 0.6, fgCoc(uv.y)));
+    vec3 c = bg * (1.0 - fg.a) + fg.rgb;
     c += uGrade.x * (texture(uBloomA, uv).rgb * 0.6 + texture(uBloomB, uv).rgb * 0.8);
     c = grade(c, uv);
     c += (hash(fc + fract(uTime) * 61.0) - 0.5) * uGrade2.x;

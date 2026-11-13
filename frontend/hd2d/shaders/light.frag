@@ -10,9 +10,18 @@
 // picture (texture order); only the final pass flips for the screen.
 //
 // Outputs: oLit  = lit color (linear-ish RGB), depth (0 near .. 1 far)
-//          oMat  = UI mask, actor mask, class / 8, 1
+//          oMat  = UI mask, actor mask, class / 8, (z level + 16 if a
+//                  foreground pixel has a real pixel behind it) / 31
+//          oBack = the background plane: oLit, except under foreground
+//                  pixels, where it is the behind G-buffer's pixel (the
+//                  layer the foreground hides), lit the same way but
+//                  without relief; a = that pixel's depth. Where only the
+//                  backdrop is behind (nothing was drawn there, so its
+//                  color means nothing) the foreground stands in.
 uniform sampler2D uColor;     // bytes B G R x uploaded as RGBA: use .bgr
 uniform usampler2D uLayer;
+uniform sampler2D uBehind;    // behind G-buffer: the runner-up's color (.bgr)
+uniform usampler2D uBLayer;   // and its layer byte
 uniform int uUiZ;             // z level treated as UI (HUD, text), -1: none
 uniform vec4 uAmount;         // relief, shadow, ao, rim
 uniform vec4 uAmount2;        // haze, point lights, -, -
@@ -25,6 +34,7 @@ uniform ivec2 uShadowOffset;  // where an actor's shadow falls, in pixels
 
 layout(location = 0) out vec4 oLit;
 layout(location = 1) out vec4 oMat;
+layout(location = 2) out vec4 oBack;
 
 const int C_BACKDROP = 0, C_FAR = 1, C_GROUND = 2, C_FORE = 3, C_ACTOR = 4, C_UI = 5;
 
@@ -78,12 +88,18 @@ void main()
     gSize = textureSize(uColor, 0);
     ivec2 p = ivec2(gl_FragCoord.xy);
     vec3 col = colorAt(p);
-    int c = classAt(p);
+    uint lb = texelFetch(uLayer, p, 0).r;
+    int c = classOf(lb);
     float depth = depthOf(c);
+    uint bl = texelFetch(uBLayer, p, 0).r;
+    int bc = classOf(bl);
+    bool bvalid = c == C_FORE && bc != C_BACKDROP;
+    float zl = float(int(lb >> 4) + (bvalid ? 16 : 0)) / 31.0;
 
     if (c == C_UI) {
         oLit = vec4(col, depth);
-        oMat = vec4(1.0, 0.0, float(c) / 8.0, 1.0);
+        oMat = vec4(1.0, 0.0, float(c) / 8.0, zl);
+        oBack = oLit;
         return;
     }
 
@@ -107,8 +123,8 @@ void main()
 
     // Actor shadows on everything behind the actors: their silhouette,
     // offset away from the light and softened over a 3x3 block.
+    float s = 0.0;
     if (c != C_ACTOR) {
-        float s = 0.0;
         for (int dy = -1; dy <= 1; dy++)
             for (int dx = -1; dx <= 1; dx++)
                 s += isActor(p - uShadowOffset + ivec2(dx, dy));
@@ -148,5 +164,21 @@ void main()
                                   smoothstep(0.03, 0.18, luma(col)));
 
     oLit = vec4(lit, depth);
-    oMat = vec4(0.0, c == C_ACTOR ? 1.0 : 0.0, float(c) / 8.0, 1.0);
+    oMat = vec4(0.0, c == C_ACTOR ? 1.0 : 0.0, float(c) / 8.0, zl);
+
+    // The background plane under foreground: what the foreground hides,
+    // with the same shadows, point lights and haze (no relief, which
+    // would need its neighbors).
+    oBack = oLit;
+    if (bvalid) {
+        vec3 bcol = texelFetch(uBehind, p, 0).bgr;
+        vec3 b = bcol;
+        if (bc != C_ACTOR)
+            b *= 1.0 - uAmount.y * 0.7 * s;
+        b += bcol * pl * uAmount2.y * (1.0 - 0.6 * smoothstep(0.6, 0.9, luma(bcol)));
+        if (bc == C_FAR || bc == C_BACKDROP)
+            b = mix(b, uHaze, uAmount2.x * (bc == C_BACKDROP ? 0.35 : 0.2) *
+                                  smoothstep(0.03, 0.18, luma(bcol)));
+        oBack = vec4(b, depthOf(bc));
+    }
 }

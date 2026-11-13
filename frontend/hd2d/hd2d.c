@@ -6,8 +6,12 @@
  *   1 light     source size   classify pixels from the layer G-buffer,
  *                             relief lighting, actor shadows, contact
  *                             occlusion, rim light, haze  -> lit, mat
- *   2 upscale   picture size  sharp bilinear               -> scene
- *   3 coc/dof   half size     blur amount, then H and V variable blur
+ *   2 upscale   picture size  sharp bilinear, split into a foreground
+ *                             and a background plane (the behind
+ *                             G-buffer fills in under the foreground),
+ *                             diorama tilt                 -> scene, back
+ *   3 coc/dof   half size     blur amount, then H and V variable blur,
+ *                             both planes at once
  *   4 bloom     1/4 and 1/8   threshold, Gaussian H and V; plus an
  *                             unthresholded 1/8 copy for the side fill
  *   5 final     output size   DOF mix, bloom, grade, vignette, grain, UI
@@ -73,6 +77,7 @@ typedef char GLchar;
 #define GL_FRAMEBUFFER_COMPLETE     0x8CD5
 #define GL_COLOR_ATTACHMENT0        0x8CE0
 #define GL_COLOR_ATTACHMENT1        0x8CE1
+#define GL_COLOR_ATTACHMENT2        0x8CE2
 #define GL_READ_FRAMEBUFFER         0x8CA8
 #define GL_DRAW_FRAMEBUFFER         0x8CA9
 
@@ -155,6 +160,7 @@ typedef struct {
     float bloom, bloom_threshold;
     float exposure, saturation, contrast, vignette, grain, split;
     float side_dim;
+    float tilt;   /* diorama tilt: foreground enlargement about the focus */
     int effects;
 } settings;
 
@@ -164,12 +170,13 @@ static const settings presets[HD2D_PRESETS] = {
                      .dof_tilt = 0.45f, .dof_depth = 0.25f, .focus_band = 0.2f, .focus_ramp = 0.4f,
                      .dof_radius = 4.0f, .bloom = 0.25f, .bloom_threshold = 0.78f,
                      .exposure = 1.03f, .saturation = 1.06f, .contrast = 1.02f, .vignette = 0.2f,
-                     .grain = 0.01f, .split = 0.2f, .side_dim = 0.42f, .effects = 1},
+                     .grain = 0.01f, .split = 0.2f, .side_dim = 0.42f, .tilt = 0.0f, .effects = 1},
     [HD2D_FULL] = {.relief = 0.55f, .shadow = 0.85f, .ao = 0.7f, .rim = 0.6f, .haze = 0.5f, .point_light = 1.2f,
                    .dof_tilt = 0.9f, .dof_depth = 0.5f, .focus_band = 0.18f, .focus_ramp = 0.34f,
                    .dof_radius = 6.0f, .bloom = 0.45f, .bloom_threshold = 0.7f,
                    .exposure = 1.06f, .saturation = 1.12f, .contrast = 1.04f, .vignette = 0.35f,
-                   .grain = 0.018f, .split = 0.35f, .side_dim = 0.42f, .effects = 1},
+                   .grain = 0.018f, .split = 0.35f, .side_dim = 0.42f, .tilt = 0.022f,
+                   .effects = 1},
 };
 
 static const char *const preset_names[HD2D_PRESETS] = {"off", "subtle", "hd2d"};
@@ -185,6 +192,7 @@ int hd2d_debug(void) { return debug_view; }
 void hd2d_set_aspect(int a) { aspect_mode = a < 0 || a >= HD2D_ASPECTS ? 0 : a; }
 int hd2d_aspect(void) { return aspect_mode; }
 void hd2d_set_timing(int on) { timing = on; }
+int hd2d_wants_behind(void) { return presets[cur_preset].effects; }
 double hd2d_last_ms(void) { return last_ms; }
 
 /* ---- GL objects ---- */
@@ -202,8 +210,13 @@ static struct {
     GLuint prog[P_COUNT];
     GLuint vao;
     GLuint t_color, t_layer;        /* uploads, source size */
-    GLuint t_lit, t_mat, fbo_light; /* pass 1 targets, source size */
-    target scene, half[2], quarter[2], eighth[2], soft[2], out;
+    GLuint t_behind, t_blayer;      /* the behind G-buffer, source size */
+    GLuint t_lit, t_mat, t_back, fbo_light; /* pass 1 targets, source size */
+    target scene, back;             /* pass 2: composite, background plane */
+    GLuint fbo_compose;             /* both of them */
+    target half[2], fgh[2];         /* pass 3: background, foreground plane */
+    GLuint fbo_dof[2];              /* half[k] and fgh[k] */
+    target quarter[2], eighth[2], soft[2], out;
     target emit[2];                 /* point-light map, source / 4 */
     int pic_w, pic_h, out_w, out_h;
     float focus_y;
@@ -311,7 +324,8 @@ static GLuint make_tex(int w, int h, GLint ifmt, GLenum fmt, GLenum type, GLint 
 
 static int fbo_for(GLuint *fbo, const GLuint *tex, int n)
 {
-    static const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+    static const GLenum bufs[3] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1,
+                                   GL_COLOR_ATTACHMENT2};
     p_glGenFramebuffers(1, fbo);
     p_glBindFramebuffer(GL_FRAMEBUFFER, *fbo);
     for (int k = 0; k < n; k++)
@@ -372,6 +386,9 @@ int hd2d_init(int gles)
     g.t_color = make_tex(SCHED_WIDTH, SCHED_HEIGHT, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_NEAREST);
     g.t_layer = make_tex(SCHED_WIDTH, SCHED_HEIGHT, GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE,
                          GL_NEAREST);
+    g.t_behind = make_tex(SCHED_WIDTH, SCHED_HEIGHT, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_NEAREST);
+    g.t_blayer = make_tex(SCHED_WIDTH, SCHED_HEIGHT, GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE,
+                          GL_NEAREST);
 
     /* Half-float targets where they render (desktop GL 3.3 always; ES 3.0
        with EXT_color_buffer_float), else 8-bit. */
@@ -380,16 +397,21 @@ int hd2d_init(int gles)
     g.t_lit = make_tex(SCHED_WIDTH, SCHED_HEIGHT, (GLint)g.float_fmt, GL_RGBA, g.float_type,
                        GL_LINEAR);
     g.t_mat = make_tex(SCHED_WIDTH, SCHED_HEIGHT, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_NEAREST);
-    GLuint lt[2] = {g.t_lit, g.t_mat};
-    if (fbo_for(&g.fbo_light, lt, 2)) {
+    g.t_back = make_tex(SCHED_WIDTH, SCHED_HEIGHT, (GLint)g.float_fmt, GL_RGBA, g.float_type,
+                        GL_LINEAR);
+    GLuint lt[3] = {g.t_lit, g.t_mat, g.t_back};
+    if (fbo_for(&g.fbo_light, lt, 3)) {
         fprintf(stderr, "hd2d: half-float targets not renderable: using RGBA8\n");
         p_glDeleteFramebuffers(1, &g.fbo_light);
         p_glDeleteTextures(1, &g.t_lit);
+        p_glDeleteTextures(1, &g.t_back);
         g.float_fmt = GL_RGBA8;
         g.float_type = GL_UNSIGNED_BYTE;
         g.t_lit = make_tex(SCHED_WIDTH, SCHED_HEIGHT, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_LINEAR);
+        g.t_back = make_tex(SCHED_WIDTH, SCHED_HEIGHT, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_LINEAR);
         lt[0] = g.t_lit;
-        if (fbo_for(&g.fbo_light, lt, 2)) {
+        lt[2] = g.t_back;
+        if (fbo_for(&g.fbo_light, lt, 3)) {
             fprintf(stderr, "hd2d: cannot make the lighting target\n");
             return -1;
         }
@@ -412,13 +434,15 @@ void hd2d_shutdown(void)
 {
     if (!g.ready)
         return;
-    target *ts[] = {&g.scene, &g.half[0], &g.half[1], &g.quarter[0], &g.quarter[1],
-                    &g.eighth[0], &g.eighth[1], &g.soft[0], &g.soft[1], &g.out,
-                    &g.emit[0], &g.emit[1]};
+    target *ts[] = {&g.scene, &g.back, &g.half[0], &g.half[1], &g.fgh[0], &g.fgh[1],
+                    &g.quarter[0], &g.quarter[1], &g.eighth[0], &g.eighth[1], &g.soft[0],
+                    &g.soft[1], &g.out, &g.emit[0], &g.emit[1]};
     for (size_t k = 0; k < sizeof ts / sizeof *ts; k++)
         target_free(ts[k]);
-    GLuint tex[4] = {g.t_color, g.t_layer, g.t_lit, g.t_mat};
-    p_glDeleteTextures(4, tex);
+    GLuint fbos[3] = {g.fbo_compose, g.fbo_dof[0], g.fbo_dof[1]};
+    p_glDeleteFramebuffers(3, fbos);
+    GLuint tex[7] = {g.t_color, g.t_layer, g.t_behind, g.t_blayer, g.t_lit, g.t_mat, g.t_back};
+    p_glDeleteTextures(7, tex);
     if (g.t_osd)
         p_glDeleteTextures(1, &g.t_osd);
     p_glDeleteFramebuffers(1, &g.fbo_light);
@@ -450,11 +474,24 @@ static int resize(int ow, int oh, int pw, int ph)
         g.pic_w = pw;
         g.pic_h = ph;
         int ok = !target_make(&g.scene, pw, ph, 1);
+        ok &= !target_make(&g.back, pw, ph, 1);
         for (int k = 0; k < 2; k++) {
             ok &= !target_make(&g.half[k], pw / 2, ph / 2, 1);
+            ok &= !target_make(&g.fgh[k], pw / 2, ph / 2, 1);
             ok &= !target_make(&g.quarter[k], pw / 4, ph / 4, 1);
             ok &= !target_make(&g.eighth[k], pw / 8, ph / 8, 1);
             ok &= !target_make(&g.soft[k], pw / 8, ph / 8, 1);
+        }
+        /* Two-plane targets for passes 2 and 3. */
+        GLuint fbos[3] = {g.fbo_compose, g.fbo_dof[0], g.fbo_dof[1]};
+        if (g.fbo_compose)
+            p_glDeleteFramebuffers(3, fbos);
+        GLuint two[2] = {g.scene.tex, g.back.tex};
+        ok &= !fbo_for(&g.fbo_compose, two, 2);
+        for (int k = 0; k < 2; k++) {
+            two[0] = g.half[k].tex;
+            two[1] = g.fgh[k].tex;
+            ok &= !fbo_for(&g.fbo_dof[k], two, 2);
         }
         if (!ok) {
             fprintf(stderr, "hd2d: cannot make %dx%d targets\n", pw, ph);
@@ -549,8 +586,9 @@ static void analyze(const uint8_t *bgrx, const uint8_t *layers, const sched_ppu_
     *focus_target = actors > 24 ? (float)(ysum / wsum / SCHED_HEIGHT) : 0.55f;
 }
 
-void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const sched_ppu_state *st,
-                 int ow, int oh, int offscreen)
+void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behind,
+                 const uint8_t *behind_layers, const sched_ppu_state *st, int ow, int oh,
+                 int offscreen)
 {
     if (!g.ready || ow < 8 || oh < 8)
         return;
@@ -599,6 +637,16 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const sched_ppu_sta
     bind_tex(1, g.t_layer);
     p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, SCHED_WIDTH, SCHED_HEIGHT, GL_RED_INTEGER,
                       GL_UNSIGNED_BYTE, layers);
+    /* Without the behind G-buffer the front layer stands in for it: the
+       planes then match the old single-plane depth of field, and the
+       tilt is off (it would have nothing to reveal). */
+    int have_behind = behind && behind_layers;
+    bind_tex(3, g.t_behind);
+    p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, SCHED_WIDTH, SCHED_HEIGHT, GL_RGBA, GL_UNSIGNED_BYTE,
+                      have_behind ? behind : bgrx);
+    bind_tex(4, g.t_blayer);
+    p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, SCHED_WIDTH, SCHED_HEIGHT, GL_RED_INTEGER,
+                      GL_UNSIGNED_BYTE, have_behind ? behind_layers : layers);
 
     /* 0: light sources -> blurred light map. */
     p_glUseProgram(g.prog[P_EMIT]);
@@ -622,6 +670,8 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const sched_ppu_sta
     p_glUniform4f(U(P_LIGHT, "uAmount2"), s->haze * a, s->point_light * a * (0.25f + 0.75f * dark_amt),
                   0, 0);
     p_glUniform1i(U(P_LIGHT, "uLightMap"), 2);
+    p_glUniform1i(U(P_LIGHT, "uBehind"), 3);
+    p_glUniform1i(U(P_LIGHT, "uBLayer"), 4);
     bind_tex(2, g.emit[0].tex);
     p_glUniform3f(U(P_LIGHT, "uLightDir"), -0.5f, -0.65f, 0.58f);
     p_glUniform3f(U(P_LIGHT, "uKey"), 0.55f, 0.51f, 0.44f);
@@ -630,35 +680,53 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const sched_ppu_sta
     p_glUniform2i(U(P_LIGHT, "uShadowOffset"), 3, 4);
     draw_to(g.fbo_light, SCHED_WIDTH, SCHED_HEIGHT);
 
-    /* 2: upscale. */
+    /* 2: upscale into the two planes, with the tilt. */
+    float tilt = have_behind ? s->tilt * scene_amt * field_amt : 0.0f;
     p_glUseProgram(g.prog[P_UPSCALE]);
     p_glUniform1i(U(P_UPSCALE, "uSrc"), 0);
+    p_glUniform1i(U(P_UPSCALE, "uBack"), 1);
+    p_glUniform1i(U(P_UPSCALE, "uMat"), 2);
     p_glUniform2f(U(P_UPSCALE, "uScale"), (float)pw / SCHED_WIDTH, (float)ph / SCHED_HEIGHT);
+    p_glUniform3f(U(P_UPSCALE, "uTilt"), 0.5f, g.focus_y, tilt);
     bind_tex(0, g.t_lit);
-    draw_to(g.scene.fbo, pw, ph);
+    bind_tex(1, g.t_back);
+    bind_tex(2, g.t_mat);
+    draw_to(g.fbo_compose, pw, ph);
 
+    /* Depth of field settings, shared by passes 3 and 5. */
+    float dof_tilt = s->dof_tilt * scene_amt * field_amt;
+    float dof_depth = s->dof_depth * scene_amt * field_amt;
+    const float fore_depth = 0.22f;   /* light.frag's depthOf(C_FORE) */
     if (s->effects) {
-        /* 3: blur amount, then the variable blur, H and V. */
+        /* 3: blur amount, then the variable blur, H and V, both planes. */
         p_glUseProgram(g.prog[P_COC]);
         p_glUniform1i(U(P_COC, "uScene"), 0);
         p_glUniform1i(U(P_COC, "uMat"), 1);
+        p_glUniform1i(U(P_COC, "uBack"), 2);
+        p_glUniform1i(U(P_COC, "uBackSrc"), 3);
         p_glUniform4f(U(P_COC, "uFocus"), g.focus_y, s->focus_band, s->focus_ramp, 0.5f);
-        p_glUniform2f(U(P_COC, "uDof"), s->dof_tilt * scene_amt * field_amt,
-                      s->dof_depth * scene_amt * field_amt);
+        p_glUniform3f(U(P_COC, "uDof"), dof_tilt, dof_depth, fore_depth);
         bind_tex(0, g.scene.tex);
         bind_tex(1, g.t_mat);
-        draw_to(g.half[0].fbo, g.half[0].w, g.half[0].h);
+        bind_tex(2, g.back.tex);
+        bind_tex(3, g.t_back);
+        draw_to(g.fbo_dof[0], g.half[0].w, g.half[0].h);
 
         p_glUseProgram(g.prog[P_DOFBLUR]);
         p_glUniform1i(U(P_DOFBLUR, "uSrc"), 0);
+        p_glUniform1i(U(P_DOFBLUR, "uFg"), 1);
+        p_glUniform4f(U(P_DOFBLUR, "uFocus"), g.focus_y, s->focus_band, s->focus_ramp, 0.5f);
+        p_glUniform3f(U(P_DOFBLUR, "uDof"), dof_tilt, dof_depth, fore_depth);
         float radius = s->dof_radius * (float)ph / 1080.0f * 2.0f;
         p_glUniform1f(U(P_DOFBLUR, "uRadius"), radius);
         bind_tex(0, g.half[0].tex);
+        bind_tex(1, g.fgh[0].tex);
         p_glUniform2f(U(P_DOFBLUR, "uDir"), 1.0f / g.half[0].w, 0.0f);
-        draw_to(g.half[1].fbo, g.half[1].w, g.half[1].h);
+        draw_to(g.fbo_dof[1], g.half[1].w, g.half[1].h);
         bind_tex(0, g.half[1].tex);
+        bind_tex(1, g.fgh[1].tex);
         p_glUniform2f(U(P_DOFBLUR, "uDir"), 0.0f, 1.0f / g.half[1].h);
-        draw_to(g.half[0].fbo, g.half[0].w, g.half[0].h);
+        draw_to(g.fbo_dof[0], g.half[0].w, g.half[0].h);
 
         /* 4: bloom, two levels. */
         bright(&g.scene, &g.quarter[0], s->bloom_threshold);
@@ -705,6 +773,12 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const sched_ppu_sta
     bind_tex(4, g.soft[0].tex);
     bind_tex(5, g.t_mat);
     bind_tex(6, g.t_color);
+    p_glUniform1i(U(P_FINAL, "uBack"), 8);
+    p_glUniform1i(U(P_FINAL, "uFgDof"), 9);
+    bind_tex(8, g.back.tex);
+    bind_tex(9, g.fgh[0].tex);
+    p_glUniform4f(U(P_FINAL, "uFocus"), g.focus_y, s->focus_band, s->focus_ramp, 0.5f);
+    p_glUniform3f(U(P_FINAL, "uDof3"), dof_tilt, dof_depth, fore_depth);
     p_glUniform4f(U(P_FINAL, "uRect"), (float)px, (float)py, (float)pw, (float)ph);
     p_glUniform2f(U(P_FINAL, "uOut"), (float)ow, (float)oh);
     p_glUniform1i(U(P_FINAL, "uFlip"), offscreen ? 0 : 1);
