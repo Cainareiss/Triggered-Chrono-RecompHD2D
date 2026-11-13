@@ -222,6 +222,17 @@ add_test(NAME stack_field_replay COMMAND $<TARGET_FILE:ct_boot> --frames 10600
 list(APPEND ct_game_tests lockstep_boot lockstep_leene_square lockstep_gato_battle
     lockstep_gato_win stack_field_replay)
 
+# port: the world-map menu and an in-game save (replay/world_map_save.txt):
+# opening the menu runs decimal-mode ADC/SBC ($C2F15E), fatal before D=1
+# was implemented; SRAM must change at the save (frame 8001) and nowhere
+# else, through a reset and Continue. Native, then native vs interpreter.
+add_test(NAME save_replay COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_save_replay.py
+    $<TARGET_FILE:ct_boot>)
+add_test(NAME lockstep_world_map_save COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_SOURCE_DIR}/tools/lockstep.py $<TARGET_FILE:ct_boot> --frames 10100
+    --script ${GAME_DIR}/test/replay/world_map_save.txt --expect-pc C2F15E)
+list(APPEND ct_game_tests save_replay lockstep_world_map_save)
+
 # Battle sprites must not drop out on alternate frames (Gato's fight from
 # its start; broken until OAMADD kept its own reload value, test_hw_map).
 add_test(NAME battle_no_flicker COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_flicker.py
