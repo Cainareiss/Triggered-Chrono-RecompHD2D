@@ -39,10 +39,31 @@ SPDX-License-Identifier: GPL-3.0-or-later
      - relief lighting, actor shadows, contact occlusion and rim light
      - tilt-shift depth of field that keeps actors sharp
      - bloom, a filmic grade, and side fill around the picture
-   - Presets, debug views, a split-compare view, controller shortcuts and saved settings.
-   - Frame time: about 2 ms at roughly 1080p on this Ally's Radeon 780M.
-   - Tests: 59/59 pass on the `hd2d` build. The long `diff_all_*` shards weren't rerun
-     after the PPU change, but frame and state hashes match on the replay.
+   - Point lights (`62739cc`): taken from the frame's own light sources and gated by
+     local contrast and scene darkness, so interiors glow and daylight barely changes.
+     Blacks stay black.
+   - Presets, debug views, a split-compare view, controller shortcuts (R3/L3) and saved
+     settings.
+   - On-screen messages (`36263a0`), using a built-in 5x7 font I wrote for this, so
+     there's no font asset.
+   - Frame time: 1.9 ms median and 2.3 ms at p95, at 1706x1120 on this Ally's Radeon
+     780M.
+   - Tests: 59/59 pass on the `hd2d` build. The full ROM suite, including the long
+     `diff_all_*` shards, was still running when this was written. To check it:
+     `ctest --test-dir build-hd -j16`.
+4. **Engine and game-module split** (`8077c70`, `edebf23`), documented in
+   `docs/MODULES.md`:
+   - The engine reads its function tables through pointers. A game module (`ct_game.so`)
+     installs them at load time.
+   - `ct_boot_engine` and `ct_sdl_engine` contain none of the generated game code: about
+     1.1 MB, against 42 MB for the static build.
+   - `tools/build_module.py` builds the module from your ROM without CMake, in about
+     40 s with `-march=native`, then deletes the ROM-derived C.
+   - A new `module_parity` ctest checks that the engine plus the module matches the
+     static build frame for frame. I also verified all 9,200 frames, which match the
+     original upstream baseline too.
+   - Without a module, interpreter-only runs at about 290 fps headless, so it's a usable
+     fallback.
 
 ### Things that need your decision
 - **krtp0028 fork merge:** the permission check blocked building and running this
@@ -60,11 +81,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
 - I now stage explicit paths and review them before committing.
 
 ### Next, in plan order
-1. **HD-2D, next level:**
-   - per-layer PPU output (not just the winning pixel), for real parallax and camera tilt
-   - point lights from emissive pixels
-   - a settings overlay
-2. **Engine and game-module split:** needed before any package can ship without
-   ROM-derived code.
-3. **AppImage and Flatpak.**
+1. **First-run flow** in `ct_sdl_engine`: pick the ROM, build the module (progress
+   screen), then play. Also a `tools/check_dist.py` scan for ROM-derived content in
+   packages.
+2. **AppImage and Flatpak** of the engine, bundling Python and a compiler for
+   `build_module.py`.
+3. **HD-2D, next level:** per-layer PPU output (not just the winning pixel), for real
+   parallax and camera tilt.
 4. **Android:** needs the fork merge.
