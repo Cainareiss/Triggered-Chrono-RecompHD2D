@@ -8,6 +8,14 @@
  *                  last one written
  * --shot-every N DIR  write DIR/shot_NNNNNNN.png at every Nth frame edge (all
  *                  frames, black or not): checkpoints along a long replay
+ * --resync REF LAG OUT [--resync-jobs N]  play the --script movie against a
+ *                  video of it (REF: 64x56 gray frames; script frame s is
+ *                  video frame s+LAG), shifting inputs where the run falls
+ *                  out of step, with N trial runs at a time (default 8);
+ *                  OUT gets the inputs as played (tools/tas_resync.c)
+ * --thumbs FILE    append every frame to FILE as a 64x56 8-bit luma thumbnail
+ *                  (4x4 box average of (R+2G+B)/4), 3584 bytes a frame: for
+ *                  lining a long replay up with a video of the same inputs
  * --needed-hw FILE write FILE: the fatal error that stopped the run, if any
  *                  (where the boot stops next), and the hardware stubbed
  *                  on purpose along the way
@@ -115,6 +123,7 @@
 #include "dsp.h"
 #include "wav.h"
 #include "module.h"   /* port: --module */
+#include "tas_resync.h"
 
 static jmp_buf fatal_jmp;
 static char fatal_msg[256];
@@ -343,6 +352,23 @@ static int nonblack(const uint8_t *p, size_t n)
 static const char *dump;
 static const char *shot_dir;   /* --shot-every */
 static long shot_every;
+static FILE *thumbs;   /* --thumbs */
+
+static void write_thumb(FILE *out, const uint8_t *bgrx)
+{
+    uint8_t t[56][64];
+    for (int ty = 0; ty < 56; ty++)
+        for (int tx = 0; tx < 64; tx++) {
+            unsigned sum = 0;
+            for (int y = ty * 4; y < ty * 4 + 4; y++)
+                for (int x = tx * 4; x < tx * 4 + 4; x++) {
+                    const uint8_t *p = bgrx + ((size_t)y * SCHED_WIDTH + x) * 4;
+                    sum += p[0] + 2u * p[1] + p[2];
+                }
+            t[ty][tx] = (uint8_t)(sum / 64);
+        }
+    fwrite(t, 1, sizeof t, out);
+}
 static FILE *wav, *hash_log, *ref_log;
 static const char *wram_path, *vram_path, *aram_path;
 static long last_frame;
@@ -398,7 +424,9 @@ static void on_frame(long f)
                        expect_wram[k].addr, v, expect_wram[k].neq ? "not " : "", expect_wram[k].val);
         }
     static int16_t audio[2048 * 2];   /* this frame's DSP output, 32 kHz */
-    sched_set_joypad(0, replay_buttons(&input, f + 1));
+    resync_frame(f, sched_frame());
+    sched_set_joypad(0, resync_active() ? resync_buttons(&input, f + 1)
+                                        : replay_buttons(&input, f + 1));
     int n = sched_audio_take(audio, 2048);
     for (int k = 0; k < n * 2; k++)
         if (audio[k]) {
@@ -415,6 +443,8 @@ static void on_frame(long f)
         if (png_write_bgrx(path, sched_frame(), SCHED_WIDTH, SCHED_HEIGHT) != 0)
             fprintf(stderr, "ct_boot: cannot write %s\n", path);
     }
+    if (thumbs)
+        write_thumb(thumbs, sched_frame());
     if (hash_log)
         write_state_hashes(hash_log, f);
     if (f == last_frame && (wram_path || vram_path || aram_path))
@@ -440,6 +470,9 @@ int main(int argc, char **argv)
     static int profile_top = -1;
     static double min_native = -1;
     static const char *needed;
+    static const char *resync_ref, *resync_out;
+    static long resync_lag;
+    static int resync_jobs;
     for (int k = 1; k < argc; k++) {
         if (!strcmp(argv[k], "--frames") && k + 1 < argc)
             frames = atol(argv[++k]);
@@ -448,6 +481,17 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[k], "--shot-every") && k + 2 < argc && atol(argv[k + 1]) > 0) {
             shot_every = atol(argv[++k]);
             shot_dir = argv[++k];
+        } else if (!strcmp(argv[k], "--resync") && k + 3 < argc) {
+            resync_ref = argv[++k];
+            resync_lag = atol(argv[++k]);
+            resync_out = argv[++k];
+        } else if (!strcmp(argv[k], "--resync-jobs") && k + 1 < argc) {
+            resync_jobs = atoi(argv[++k]);
+        } else if (!strcmp(argv[k], "--thumbs") && k + 1 < argc) {
+            if (!(thumbs = fopen(argv[++k], "wb"))) {
+                fprintf(stderr, "ct_boot: cannot write %s\n", argv[k]);
+                return 2;
+            }
         } else if (!strcmp(argv[k], "--needed-hw") && k + 1 < argc)
             needed = argv[++k];
         else if (!strcmp(argv[k], "--min-nmis") && k + 1 < argc)
@@ -583,7 +627,7 @@ int main(int argc, char **argv)
         } else if (!strcmp(argv[k], "--expect-pc") && k + 1 < argc && n_expect < MAX_EXPECT)
             expect_pc[n_expect++] = (uint32_t)strtoul(argv[++k], NULL, 16);
         else {
-            fprintf(stderr, "usage: ct_boot [--frames N] [--dump DIR] [--shot-every N DIR] [--needed-hw FILE] "
+            fprintf(stderr, "usage: ct_boot [--frames N] [--dump DIR] [--shot-every N DIR] [--thumbs FILE] [--resync REF LAG OUT] [--needed-hw FILE] "
                             "[--min-nmis K] [--require-render] [--wav FILE] "
                             "[--require-audio] [--input F1-F2:BUTTONS] [--script FILE] "
                             "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE] [--behind]\n");
@@ -614,8 +658,12 @@ int main(int argc, char **argv)
         fprintf(stderr, "ct_boot: cannot write %s\n", hash_path);
         return 2;
     }
+    if (resync_ref && resync_init(resync_ref, resync_lag, resync_out, resync_jobs))
+        return 2;
     if (setjmp(fatal_jmp)) {
         long f = sched_frame_count();
+        resync_fatal(f);
+        resync_finish(f);
         int l = sched_line();
         printf("ct_boot: stopped in frame %ld, line %d, PC $%02X%04X: %s\n", f, l, cpu.PB,
                cpu.PC, fatal_msg);
@@ -637,10 +685,13 @@ int main(int argc, char **argv)
     sched_set_reset_hook(script_reset);
     while (sched_frame_count() < frames)
         sched_run_frame();
+    resync_finish(sched_frame_count());
     if (wav)
         wav_close(wav);
     if (hash_log)
         fclose(hash_log);
+    if (thumbs)
+        fclose(thumbs);
     if (first_exec)
         fclose(first_exec);
     if (trace_out)

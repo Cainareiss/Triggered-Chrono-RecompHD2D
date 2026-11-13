@@ -237,7 +237,7 @@ if(CT_ANDROID)
     target_compile_options(main PRIVATE ${CT_WARN})
     return()   # no tests, games or install() rules on Android
 endif()
-ct_engine_exe(ct_boot_engine ${CMAKE_SOURCE_DIR}/tools/ct_boot.c)
+ct_engine_exe(ct_boot_engine ${CMAKE_SOURCE_DIR}/tools/ct_boot.c ${CMAKE_SOURCE_DIR}/tools/tas_resync.c)
 if(SDL2_FOUND)
     # port: without --module it runs the first-run flow (frontend/firstrun.h):
     # find the ROM, build the module with tools/build_module.py, load it.
