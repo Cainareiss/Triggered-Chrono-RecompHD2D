@@ -18,8 +18,10 @@
 /* Bump when CPU, the table entry layouts, or what generated code expects
    of the engine change. The ops.h helpers are compiled into the module, so
    a change to what they do counts too: 2 is decimal-mode ADC/SBC (a module
-   built for 1 stops on the first ADC/SBC run with D=1). */
-#define CT_MODULE_ABI 2
+   built for 1 stops on the first ADC/SBC run with D=1); 3 is a compiled
+   callee that comes back elsewhere handing the caller's rest to the
+   executor (ops.h cpu_return_ok) instead of stopping. */
+#define CT_MODULE_ABI 3
 
 typedef struct {
     uint32_t abi;            /* CT_MODULE_ABI the module was built with */

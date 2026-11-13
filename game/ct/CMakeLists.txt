@@ -80,7 +80,7 @@ function(ct_game_exe name)
 endfunction()
 
 # ---- frontends, at the top of the build tree ----
-ct_game_exe(ct_boot ${CMAKE_SOURCE_DIR}/tools/ct_boot.c)
+ct_game_exe(ct_boot ${CMAKE_SOURCE_DIR}/tools/ct_boot.c ${CMAKE_SOURCE_DIR}/tools/tas_resync.c)
 set_target_properties(ct_boot PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 if(SDL2_FOUND)
     ct_game_exe(ct_sdl ${CMAKE_SOURCE_DIR}/frontend/main.c ${CMAKE_SOURCE_DIR}/frontend/saves.c)
@@ -232,6 +232,18 @@ add_test(NAME lockstep_world_map_save COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/tools/lockstep.py $<TARGET_FILE:ct_boot> --frames 10100
     --script ${GAME_DIR}/test/replay/world_map_save.txt --expect-pc C2F15E)
 list(APPEND ct_game_tests save_replay lockstep_world_map_save)
+
+# port: a soft reset (replay/soft_reset.txt): L+R+Start+Select in the field
+# jumps from deep in native code to the program's start ($C28523), which
+# reloads S; the native frames it leaves must give way to the executor, not
+# stop the game (fatal before CT_MODULE_ABI 3). Back to the title, native,
+# then native vs interpreter.
+add_test(NAME soft_reset_replay COMMAND $<TARGET_FILE:ct_boot> --frames 9800
+    --script ${GAME_DIR}/test/replay/soft_reset.txt --expect-pc C28523 --require-render)
+add_test(NAME lockstep_soft_reset COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_SOURCE_DIR}/tools/lockstep.py $<TARGET_FILE:ct_boot> --frames 9800
+    --script ${GAME_DIR}/test/replay/soft_reset.txt --expect-pc C28523)
+list(APPEND ct_game_tests soft_reset_replay lockstep_soft_reset)
 
 # Battle sprites must not drop out on alternate frames (Gato's fight from
 # its start; broken until OAMADD kept its own reload value, test_hw_map).
