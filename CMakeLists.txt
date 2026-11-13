@@ -105,6 +105,25 @@ if(SDL2_FOUND)
     target_include_directories(ct_input PUBLIC frontend)
     target_link_libraries(ct_input PUBLIC SDL2::SDL2)
     target_compile_options(ct_input PRIVATE ${CT_WARN})
+
+    # chrono-recomp: HD-2D renderer (frontend/hd2d), OpenGL 3.3 / ES 3.0
+    # through SDL; shaders are embedded as strings at build time.
+    set(CT_HD2D_SHADERS fullscreen.vert light.frag upscale.frag coc.frag dofblur.frag
+        bright.frag gauss.frag final.frag)
+    list(TRANSFORM CT_HD2D_SHADERS PREPEND ${CMAKE_SOURCE_DIR}/frontend/hd2d/shaders/)
+    set(CT_HD2D_GEN ${CMAKE_BINARY_DIR}/hd2d_gen/hd2d_shaders.h)
+    add_custom_command(
+        OUTPUT ${CT_HD2D_GEN}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/hd2d_gen
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/embed_text.py ${CT_HD2D_GEN}
+                hd2d_src ${CT_HD2D_SHADERS}
+        DEPENDS ${CT_HD2D_SHADERS} ${CMAKE_SOURCE_DIR}/tools/embed_text.py
+        COMMENT "hd2d shaders"
+        VERBATIM)
+    add_library(ct_hd2d STATIC frontend/hd2d/hd2d.c ${CT_HD2D_GEN})
+    target_include_directories(ct_hd2d PUBLIC frontend PRIVATE ${CMAKE_BINARY_DIR}/hd2d_gen)
+    target_link_libraries(ct_hd2d PUBLIC SDL2::SDL2 ct_runtime m)
+    target_compile_options(ct_hd2d PRIVATE ${CT_WARN} -Wno-overlength-strings)
 else()
     message(STATUS "SDL2 not found: frontends not built")
 endif()

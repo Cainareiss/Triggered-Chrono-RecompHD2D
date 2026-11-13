@@ -53,3 +53,18 @@ path = "third_party/ares/**"
 precedence = "closest"
 SPDX-FileCopyrightText = "2004-2025 ares team, Near et al"
 SPDX-License-Identifier = "ISC"
+
+# Upstream files with our (GPL-3.0-or-later) changes: the PPU layer G-buffer,
+# its scheduler plumbing, the HD-2D frontend integration and build wiring.
+[[annotations]]
+path = [
+  "third_party/snes/ppu.c",
+  "third_party/snes/ppu.h",
+  "runtime/sched.c",
+  "runtime/sched.h",
+  "frontend/main.c",
+  "game/ct/CMakeLists.txt",
+]
+precedence = "closest"
+SPDX-FileCopyrightText = ["2022 snesrev", "2021 elzo_d", "2026 Akhil Moola", "2026 jerbanpls"]
+SPDX-License-Identifier = "MIT AND GPL-3.0-or-later"

@@ -14,7 +14,7 @@ static const uint8 kSpriteSizes[8][2] = {
 };
 
 static void ppu_handlePixel(Ppu* ppu, int x, int y);
-static int ppu_getPixel(Ppu* ppu, int x, int y, bool sub, int* r, int* g, int* b);
+static int ppu_getPixel(Ppu* ppu, int x, int y, bool sub, int* r, int* g, int* b, int *z);
 static int ppu_getPixelForBgLayer(Ppu *ppu, int x, int y, int layer, bool priority);
 static void ppu_offsetPerTile(Ppu *ppu, int layer, int x, int y, int *hoff, int *voff);
 static void ppu_offsetPerTileLine(Ppu *ppu);
@@ -37,6 +37,8 @@ enum {
 
 Ppu* ppu_init() {
   Ppu* ppu = (Ppu * )malloc(sizeof(Ppu));
+  ppu->layerBuffer = NULL;   // port
+  ppu->layerPitch = 0;
   ppu->extraLeftRight = kPpuExtraLeftRight;
   return ppu;
 }
@@ -151,6 +153,19 @@ static void ppu_updateBrightness(Ppu *ppu) {
     // Store 31 extra entries to remove the need for clamping to 31.
     memset(&ppu->brightnessMult[32], ppu->brightnessMult[31], 31);
   }
+}
+
+// port: see Ppu.layerBuffer.
+void PpuSetLayerBuffer(Ppu *ppu, uint8_t *buffer, size_t pitch) {
+  ppu->layerBuffer = buffer;
+  ppu->layerPitch = (uint32_t)pitch;
+}
+
+// port: where line y's G-buffer row goes; a scratch row when the
+// buffer is off, so the composite loops need no per-pixel test.
+static uint8 g_layerScratch[kPpuXPixels];
+static inline uint8 *PpuLayerRow(Ppu *ppu, uint y) {
+  return ppu->layerBuffer ? ppu->layerBuffer + (y - 1) * ppu->layerPitch : g_layerScratch;
 }
 
 void PpuBeginDrawing(Ppu *ppu, uint8_t *pixels, size_t pitch, uint32_t render_flags) {
@@ -880,6 +895,7 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
     uint8 *dst = &ppu->renderBuffer[(y - 1) * ppu->renderPitch];
     size_t n = sizeof(uint32) * (256 + ppu->extraLeftRight * 2);
     memset(dst, 0, n);
+    memset(PpuLayerRow(ppu, y), 0, 256 + ppu->extraLeftRight * 2);   // port
     return;
   }
 
@@ -920,6 +936,8 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
   uint32 *dst = (uint32*)&ppu->renderBuffer[(y - 1) * ppu->renderPitch], *dst_org = dst;
   
   dst += (ppu->extraLeftRight - ppu->extraLeftCur);
+  // port: G-buffer row, advanced with dst.
+  uint8 *lb = PpuLayerRow(ppu, y) + (ppu->extraLeftRight - ppu->extraLeftCur);
 
   uint32 windex = 0;
   do {
@@ -936,7 +954,8 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
         dst[0] = ppu->brightnessMult[color & clip_color_mask] << 16 |
                  ppu->brightnessMult[(color >> 5) & clip_color_mask] << 8 |
                  ppu->brightnessMult[(color >> 10) & clip_color_mask];
-      } while (dst++, ++i < right);
+        lb[0] = (ppu->bgBuffers[0].data[i] >> 8) & 0xf7;   // port
+      } while (dst++, lb++, ++i < right);
     } else {
       uint8 *half_color_map = ppu->halfColor ? ppu->brightnessMultHalf : ppu->brightnessMult;
       // Store this in locals
@@ -950,6 +969,8 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
         uint32 g = (color >> 5) & clip_color_mask;
         uint32 b = (color >> 10) & clip_color_mask;
         uint8 *color_map = ppu->brightnessMult;
+        uint8 math_bit = (math_enabled_cur & (1 << main_layer)) ? 8 : 0;   // port
+        lb[0] = ((ppu->bgBuffers[0].data[i] >> 8) & 0xf7) | math_bit;
         if (math_enabled_cur & (1 << main_layer)) {
           if (math_enabled_cur & 0x100) {  // addSubscreen ?
             if ((ppu->bgBuffers[1].data[i] & 0xff) != 0)
@@ -971,7 +992,7 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
           }
         }
         dst[0] = color_map[b] | color_map[g] << 8 | color_map[r] << 16;
-      } while (dst++, ++i < right);
+      } while (dst++, lb++, ++i < right);
     }
   } while (cw_clip_math >>= 1, ++windex < cwin.nr);
 
@@ -988,7 +1009,8 @@ static void ppu_handlePixel(Ppu* ppu, int x, int y) {
   int g = 0, g2 = 0;
   int b = 0, b2 = 0;
   if (!ppu->forcedBlank) {
-    int mainLayer = ppu_getPixel(ppu, x, y, false, &r, &g, &b);
+    int mainZ = 0;
+    int mainLayer = ppu_getPixel(ppu, x, y, false, &r, &g, &b, &mainZ);
 
     bool colorWindowState = ppu_getWindowState(ppu, 5, x);
     if (
@@ -1005,7 +1027,7 @@ static void ppu_handlePixel(Ppu* ppu, int x, int y) {
       (ppu->preventMathMode == 1 && !colorWindowState)
       );
     if ((mathEnabled && ppu->addSubscreen) || ppu->mode == 5 || ppu->mode == 6) {
-      secondLayer = ppu_getPixel(ppu, x, y, true, &r2, &g2, &b2);
+      secondLayer = ppu_getPixel(ppu, x, y, true, &r2, &g2, &b2, NULL);
     }
     // TODO: subscreen pixels can be clipped to black as well
     // TODO: math for subscreen pixels (add/sub sub to main)
@@ -1034,6 +1056,11 @@ static void ppu_handlePixel(Ppu* ppu, int x, int y) {
     if (!(ppu->mode == 5 || ppu->mode == 6)) {
       r2 = r; g2 = g; b2 = b;
     }
+    // port: layer G-buffer
+    PpuLayerRow(ppu, y)[x + ppu->extraLeftRight] =
+        (uint8)(mainZ << 4 | (mathEnabled ? 8 : 0) | (mainLayer & 7));
+  } else {
+    PpuLayerRow(ppu, y)[x + ppu->extraLeftRight] = 0;
   }
   int row = y - 1;
   uint8 *pixelBuffer = (uint8*) &ppu->renderBuffer[row * ppu->renderPitch + (x + ppu->extraLeftRight) * 4];
@@ -1060,7 +1087,7 @@ static const int bitDepthsPerMode[10][4] = {
   {8, 7, 5, 5}
 };
 
-static int ppu_getPixel(Ppu *ppu, int x, int y, bool sub, int *r, int *g, int *b) {
+static int ppu_getPixel(Ppu *ppu, int x, int y, bool sub, int *r, int *g, int *b, int *z) {
   // array for layer definitions per mode:
 //   0-7: mode 0-7; 8: mode 1 + l3prio; 9: mode 7 + extbg
 
@@ -1147,9 +1174,22 @@ static int ppu_getPixel(Ppu *ppu, int x, int y, bool sub, int *r, int *g, int *b
     }
     if (pixel > 0) {
       layer = curLayer;
+      // port: z level on the whole-line renderer's scale
+      // (see PpuDrawBackgrounds), for the layer G-buffer.
+      if (z) {
+        static const uint8 kBgZ[4][2] = { {8, 12}, {7, 11}, {1, 3}, {4, 5} };
+        if (curLayer == 4)
+          *z = curPriority * 4 + 2;
+        else if (curLayer == 2 && curPriority && ppu->bg3Priority)
+          *z = 15;
+        else
+          *z = kBgZ[curLayer][curPriority ? 1 : 0];
+      }
       break;
     }
   }
+  if (layer == 5 && z)
+    *z = 0;
   uint16_t color = ppu->cgram[pixel & 0xff];
   *r = color & 0x1f;
   *g = (color >> 5) & 0x1f;

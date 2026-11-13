@@ -83,7 +83,7 @@ ct_game_exe(ct_boot ${CMAKE_SOURCE_DIR}/tools/ct_boot.c)
 set_target_properties(ct_boot PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 if(SDL2_FOUND)
     ct_game_exe(ct_sdl ${CMAKE_SOURCE_DIR}/frontend/main.c)
-    target_link_libraries(ct_sdl ct_input)
+    target_link_libraries(ct_sdl ct_input ct_hd2d)
     set_target_properties(ct_sdl PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 endif()
 

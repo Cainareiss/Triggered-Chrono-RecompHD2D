@@ -20,6 +20,10 @@
 static CPU *cpu;
 static uint8_t fb[SCHED_WIDTH * SCHED_HEIGHT * 4];        /* PPU draws here */
 static uint8_t present[SCHED_WIDTH * SCHED_HEIGHT * 4];   /* copied at VBlank */
+/* port: layer G-buffer, drawn and presented alongside fb */
+static uint8_t fb_layers[SCHED_WIDTH * SCHED_HEIGHT];
+static uint8_t present_layers[SCHED_WIDTH * SCHED_HEIGHT];
+static sched_ppu_state present_state;
 static int line;
 static unsigned hclock;         /* master clocks into the current line */
 static uint64_t line_start;     /* master clocks since sched_init at line start */
@@ -438,6 +442,9 @@ void sched_init(CPU *c)
     memset(joy, 0, sizeof joy);
     memset(fb, 0, sizeof fb);
     memset(present, 0, sizeof present);
+    memset(fb_layers, 0, sizeof fb_layers);
+    memset(present_layers, 0, sizeof present_layers);
+    memset(&present_state, 0, sizeof present_state);
     bus_hook(0x4200, bus_open_bus, nmitimen_write);   /* write-only: open bus */
     bus_hook(0x4201, bus_open_bus, wrio_write);
     for (uint16_t r = 0x4207; r <= 0x420A; r++)
@@ -476,11 +483,20 @@ static void start_line(void)
         in_vblank = 0;
         rdnmi_set = rdnmi_cleared = 0;
         PpuBeginDrawing(ppu, fb, SCHED_WIDTH * 4, 0);
+        PpuSetLayerBuffer(ppu, fb_layers, SCHED_WIDTH);   /* port */
         dma_initHdma(dma);
     }
     if (line == SCHED_VBLANK_LINE) {
         ppu_drawTo(ppu, 256);   /* the last line's rest */
         memcpy(present, fb, sizeof present);   /* rows 0-223 are final */
+        memcpy(present_layers, fb_layers, sizeof present_layers);   /* port */
+        present_state = (sched_ppu_state){
+            .mode = ppu->mode, .bg3_priority = ppu->bg3Priority,
+            .main_enabled = ppu->screenEnabled[0], .sub_enabled = ppu->screenEnabled[1],
+            .brightness = ppu->brightness, .forced_blank = ppu->forcedBlank,
+            .math_enabled = ppu->mathEnabled, .add_subscreen = ppu->addSubscreen,
+            .subtract_color = ppu->subtractColor, .half_color = ppu->halfColor,
+        };
         if (reset_armed && reset_hook && reset_hook(frames + 1))
             longjmp(reset_jmp, 1);   /* see soft_reset */
         in_vblank = 1;
@@ -1536,6 +1552,8 @@ void sched_set_reset_hook(int (*fn)(long frame)) { reset_hook = fn; }
 
 
 const uint8_t *sched_frame(void) { return present; }
+const uint8_t *sched_layers(void) { return present_layers; }
+const sched_ppu_state *sched_ppu_state_get(void) { return &present_state; }
 long sched_frame_count(void) { return frames; }
 void sched_set_frame_hook(void (*fn)(long frame)) { frame_hook = fn; }
 uint64_t sched_clock(void) { return line_start + hclock; }

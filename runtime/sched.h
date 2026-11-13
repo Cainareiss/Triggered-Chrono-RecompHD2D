@@ -73,6 +73,25 @@ int sched_audio_take(int16_t *stereo, int max);
 /* Last rendered frame: SCHED_WIDTH x SCHED_HEIGHT pixels, bytes B G R 0. */
 const uint8_t *sched_frame(void);
 
+/* port: the last frame's layer G-buffer, SCHED_WIDTH x
+   SCHED_HEIGHT bytes, one per pixel: z level << 4 | math << 3 | layer
+   (see Ppu.layerBuffer in third_party/snes/ppu.h). */
+const uint8_t *sched_layers(void);
+
+/* port: PPU state latched with the last frame (at VBlank), for
+   renderers that treat scenes differently. */
+typedef struct {
+    uint8_t mode;              /* BG mode 0-7 */
+    uint8_t bg3_priority;      /* BGMODE bit 3 */
+    uint8_t main_enabled;      /* TM: bit 0-3 BG1-4, bit 4 OBJ */
+    uint8_t sub_enabled;       /* TS */
+    uint8_t brightness;        /* INIDISP 0-15 */
+    uint8_t forced_blank;
+    uint8_t math_enabled;      /* CGADSUB layer bits */
+    uint8_t add_subscreen, subtract_color, half_color;
+} sched_ppu_state;
+const sched_ppu_state *sched_ppu_state_get(void);
+
 /* Buttons held on controller port 0-3, read by the next auto-joypad read
    (VBlank start, NMITIMEN bit 0). Bit 15 B, 14 Y, 13 Select, 12 Start,
    11 Up, 10 Down, 9 Left, 8 Right, 7 A, 6 X, 5 L, 4 R. Default 0. */

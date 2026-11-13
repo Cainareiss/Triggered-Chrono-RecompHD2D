@@ -33,7 +33,18 @@
  *
  * Every exit prints its reason ("ct_sdl: exit: ..."); startup prints each
  * joystick and the button mapping. --log-input prints every key and
- * controller button event. */
+ * controller button event.
+ *
+ * port additions (GPL-3.0-or-later):
+ *   --hd2d [--preset off|subtle|hd2d] [--aspect 4:3|pixel|stretch]
+ *          [--debug-view N] [--fullscreen] [--log-gpu]
+ *       draw through the HD-2D renderer (frontend/hd2d) in an OpenGL 3.3
+ *       (or ES 3.0) window. F1 cycles the preset, F2 the debug view
+ *       (layer classes, depth, blur), F3 the aspect, F11 fullscreen.
+ *   --shot F:PATH (repeatable) [--shot-size WxH]
+ *       at the end of frame F, render the HD-2D picture offscreen at
+ *       WxH (default 1920x1080) and write it to PATH as PNG; with
+ *       --hd2d unset, writes the plain 256x224 frame. */
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -43,6 +54,7 @@
 #include <SDL.h>
 
 #include "bus.h"
+#include "hd2d/hd2d.h"
 #include "hwlog.h"
 #include "input.h"
 #include "interp.h"
@@ -146,6 +158,77 @@ static uint64_t perf_freq, next_frame;
 static int running = 1, fast, log_input, log_audio;
 static const char *dump;
 
+/* port: HD-2D presentation and screenshots. */
+static SDL_Window *win;
+static SDL_GLContext glctx;
+static int hd2d_mode, log_gpu;
+#define MAX_SHOTS 64
+static struct { long frame; const char *path; } shots[MAX_SHOTS];
+static int n_shots, shot_w = 1920, shot_h = 1080;
+
+static void take_shots(long f)
+{
+    for (int k = 0; k < n_shots; k++) {
+        if (shots[k].frame != f)
+            continue;
+        int ok;
+        if (hd2d_mode) {
+            uint8_t *buf = malloc((size_t)shot_w * shot_h * 4);
+            hd2d_render(sched_frame(), sched_layers(), sched_ppu_state_get(), shot_w, shot_h, 1);
+            ok = buf && !hd2d_read(buf, shot_w, shot_h) &&
+                 !png_write_bgrx(shots[k].path, buf, shot_w, shot_h);
+            free(buf);
+        } else {
+            ok = !png_write_bgrx(shots[k].path, sched_frame(), SCHED_WIDTH, SCHED_HEIGHT);
+        }
+        fprintf(stderr, "ct_sdl: frame %ld: %s %s\n", f, ok ? "wrote" : "cannot write",
+                shots[k].path);
+    }
+}
+
+static void present_hd2d(void)
+{
+    int w, h;
+    SDL_GL_GetDrawableSize(win, &w, &h);
+    hd2d_render(sched_frame(), sched_layers(), sched_ppu_state_get(), w, h, 0);
+    SDL_GL_SwapWindow(win);
+    if (log_gpu && sched_frame_count() % 60 == 0)
+        fprintf(stderr, "ct_sdl: frame %ld hd2d %dx%d %.2f ms\n", sched_frame_count(), w, h,
+                hd2d_last_ms());
+}
+
+/* F1-F3, F11: the HD-2D controls. Returns 1 if the key was one of them. */
+static int hd2d_key(SDL_Scancode sc)
+{
+    if (sc == SDL_SCANCODE_F11) {
+        int fs = SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP;
+        SDL_SetWindowFullscreen(win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+        return 1;
+    }
+    if (!hd2d_mode)
+        return 0;
+    if (sc == SDL_SCANCODE_F1) {
+        hd2d_set_preset((hd2d_preset() + 1) % HD2D_PRESETS);
+        fprintf(stderr, "ct_sdl: hd2d preset %s\n", hd2d_preset_name(hd2d_preset()));
+    } else if (sc == SDL_SCANCODE_F2) {
+        hd2d_set_debug((hd2d_debug() + 1) % HD2D_DEBUGS);
+        fprintf(stderr, "ct_sdl: hd2d debug view %d\n", hd2d_debug());
+    } else if (sc == SDL_SCANCODE_F3) {
+        hd2d_set_aspect((hd2d_aspect() + 1) % HD2D_ASPECTS);
+    } else {
+        return 0;
+    }
+    return 1;
+}
+
+static int parse_preset(const char *v)
+{
+    for (int k = 0; k < HD2D_PRESETS; k++)
+        if (!strcmp(v, hd2d_preset_name(k)))
+            return k;
+    return -1;
+}
+
 /* Window, keyboard and controller events; live_buttons for pad 1. */
 static void poll_input(long f)
 {
@@ -168,6 +251,8 @@ static void poll_input(long f)
                    (ev.key.keysym.mod & KMOD_CTRL)) {
             set_exit_reason("Ctrl+Q");
             running = 0;
+        } else if (ev.type == SDL_KEYDOWN && !ev.key.repeat && hd2d_key(ev.key.keysym.scancode)) {
+            /* port: renderer controls, not game input */
         } else if ((ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) && !ev.key.repeat) {
             key_filter_key(&keys, ev.key.keysym.scancode, ev.type == SDL_KEYDOWN, f);
         } else if (ev.type == SDL_CONTROLLERBUTTONDOWN) {
@@ -231,10 +316,16 @@ static void on_frame(long f)
     exit_frame = f;
     queue_audio(f);
     const uint8_t *fb = sched_frame();   /* B G R x = ARGB8888 little-endian */
-    SDL_UpdateTexture(tex, NULL, fb, SCHED_WIDTH * 4);
-    SDL_RenderClear(ren);
-    SDL_RenderCopy(ren, tex, NULL, NULL);
-    SDL_RenderPresent(ren);
+    if (hd2d_mode) {
+        present_hd2d();
+    } else {
+        SDL_UpdateTexture(tex, NULL, fb, SCHED_WIDTH * 4);
+        SDL_RenderClear(ren);
+        SDL_RenderCopy(ren, tex, NULL, NULL);
+        SDL_RenderPresent(ren);
+    }
+    if (n_shots)
+        take_shots(f);
     if (dump)
         png_dump_frame(dump, f, fb, SCHED_WIDTH, SCHED_HEIGHT);
     if (!fast) {
@@ -263,7 +354,7 @@ static int script_reset(long frame)
 int main(int argc, char **argv)
 {
     static long frames = -1;           /* static: survive the longjmp */
-    static int scale = 3, require_render, require_no_underrun;
+    static int scale = 3, require_render, require_no_underrun, fullscreen;
     static const char *needed;
     for (int k = 1; k < argc; k++) {
         if (!strcmp(argv[k], "--scale") && k + 1 < argc)
@@ -297,11 +388,48 @@ int main(int argc, char **argv)
                 fprintf(stderr, "ct_sdl: bad --script %s\n", argv[k]);
                 return 2;
             }
+        } else if (!strcmp(argv[k], "--hd2d")) {
+            hd2d_mode = 1;
+        } else if (!strcmp(argv[k], "--preset") && k + 1 < argc) {
+            int p = parse_preset(argv[++k]);
+            if (p < 0) {
+                fprintf(stderr, "ct_sdl: --preset: off, subtle or hd2d\n");
+                return 2;
+            }
+            hd2d_set_preset(p);
+        } else if (!strcmp(argv[k], "--aspect") && k + 1 < argc) {
+            const char *v = argv[++k];
+            hd2d_set_aspect(!strcmp(v, "pixel") ? HD2D_ASPECT_PIXEL
+                            : !strcmp(v, "stretch") ? HD2D_ASPECT_STRETCH
+                                                    : HD2D_ASPECT_4_3);
+        } else if (!strcmp(argv[k], "--debug-view") && k + 1 < argc) {
+            hd2d_set_debug(atoi(argv[++k]));
+        } else if (!strcmp(argv[k], "--fullscreen")) {
+            fullscreen = 1;
+        } else if (!strcmp(argv[k], "--log-gpu")) {
+            log_gpu = 1;
+            hd2d_set_timing(1);
+        } else if (!strcmp(argv[k], "--shot") && k + 1 < argc) {
+            char *v = argv[++k], *colon = strchr(v, ':');
+            if (!colon || n_shots == MAX_SHOTS) {
+                fprintf(stderr, "ct_sdl: --shot FRAME:PATH\n");
+                return 2;
+            }
+            shots[n_shots].frame = atol(v);
+            shots[n_shots].path = colon + 1;
+            n_shots++;
+        } else if (!strcmp(argv[k], "--shot-size") && k + 1 < argc) {
+            if (sscanf(argv[++k], "%dx%d", &shot_w, &shot_h) != 2 || shot_w < 16 || shot_h < 16) {
+                fprintf(stderr, "ct_sdl: --shot-size WxH\n");
+                return 2;
+            }
         } else {
             fprintf(stderr, "usage: ct_sdl [--scale N] [--frames N] [--dump DIR] "
                             "[--needed-hw FILE] [--fast] [--require-render] [--log-input] "
                             "[--interp-only] [--record FILE] [--script FILE] [--log-audio] "
-                            "[--require-no-underrun]\n");
+                            "[--require-no-underrun] [--hd2d] [--preset off|subtle|hd2d] "
+                            "[--aspect 4:3|pixel|stretch] [--debug-view N] [--fullscreen] "
+                            "[--log-gpu] [--shot F:PATH]... [--shot-size WxH]\n");
             return 2;
         }
     }
@@ -321,22 +449,59 @@ int main(int argc, char **argv)
     title[21] = 0;
     for (int k = 20; k >= 0 && (title[k] == ' ' || !title[k]); k--)
         title[k] = 0;
-    SDL_Window *win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED,
-                                       SDL_WINDOWPOS_CENTERED, SCHED_WIDTH * scale,
-                                       SCHED_HEIGHT * scale, SDL_WINDOW_RESIZABLE);
-    ren = win ? SDL_CreateRenderer(win, -1, 0) : NULL;
-    if (win && !ren)
-        ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
-    tex = ren ? SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888,
-                                               SDL_TEXTUREACCESS_STREAMING, SCHED_WIDTH,
-                                               SCHED_HEIGHT) : NULL;
-    if (!tex) {
-        fprintf(stderr, "ct_sdl: window: %s\n", SDL_GetError());
-        set_exit_reason("window or renderer creation failed");
-        return 1;
+    /* port: under gamescope (Steam Game Mode, handheld PCs) the
+       window is the whole screen anyway: start fullscreen. */
+    if (getenv("GAMESCOPE_WAYLAND_DISPLAY") || getenv("SteamDeck"))
+        fullscreen = 1;
+    Uint32 wflags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI |
+                    (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+    if (hd2d_mode) {
+        /* OpenGL 3.3 core, else OpenGL ES 3.0. */
+        static const struct { int profile, major, minor, gles; } want_gl[] = {
+            {SDL_GL_CONTEXT_PROFILE_CORE, 3, 3, 0},
+            {SDL_GL_CONTEXT_PROFILE_ES, 3, 0, 1},
+        };
+        for (size_t k = 0; k < sizeof want_gl / sizeof *want_gl && !glctx; k++) {
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, want_gl[k].profile);
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, want_gl[k].major);
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, want_gl[k].minor);
+            SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+            win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                   SCHED_WIDTH * scale * 4 / 3, SCHED_HEIGHT * scale,
+                                   wflags | SDL_WINDOW_OPENGL);
+            glctx = win ? SDL_GL_CreateContext(win) : NULL;
+            if (glctx && hd2d_init(want_gl[k].gles)) {
+                SDL_GL_DeleteContext(glctx);
+                glctx = NULL;
+            }
+            if (!glctx && win) {
+                SDL_DestroyWindow(win);
+                win = NULL;
+            }
+        }
+        if (!glctx) {
+            fprintf(stderr, "ct_sdl: no usable OpenGL 3.3 / ES 3.0 context: %s\n", SDL_GetError());
+            set_exit_reason("HD-2D renderer setup failed");
+            return 1;
+        }
+        SDL_GL_SetSwapInterval(0);   /* paced by the frame timer below */
+    } else {
+        win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                               SCHED_WIDTH * scale, SCHED_HEIGHT * scale, wflags);
+        ren = win ? SDL_CreateRenderer(win, -1, 0) : NULL;
+        if (win && !ren)
+            ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
+        tex = ren ? SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888,
+                                                   SDL_TEXTUREACCESS_STREAMING, SCHED_WIDTH,
+                                                   SCHED_HEIGHT) : NULL;
+        if (!tex) {
+            fprintf(stderr, "ct_sdl: window: %s\n", SDL_GetError());
+            set_exit_reason("window or renderer creation failed");
+            return 1;
+        }
+        SDL_RenderSetLogicalSize(ren, SCHED_WIDTH, SCHED_HEIGHT);
+        SDL_RenderSetIntegerScale(ren, SDL_TRUE);
     }
-    SDL_RenderSetLogicalSize(ren, SCHED_WIDTH, SCHED_HEIGHT);
-    SDL_RenderSetIntegerScale(ren, SDL_TRUE);
 
     SDL_AudioSpec want = {0}, have;
     want.freq = RATE;
@@ -396,6 +561,10 @@ int main(int argc, char **argv)
         SDL_GameControllerClose(pad);
     if (audio)
         SDL_CloseAudioDevice(audio);
+    if (glctx) {
+        hd2d_shutdown();
+        SDL_GL_DeleteContext(glctx);
+    }
     SDL_Quit();
     if (require_no_underrun && audio_underruns)
         return 1;

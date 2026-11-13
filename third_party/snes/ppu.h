@@ -54,6 +54,13 @@ struct Ppu {
   int drawLine, drawX;   // ct-recomp: line being drawn, next pixel (256: done)
   uint32_t renderPitch;
   uint8_t *renderBuffer;
+  // port: optional per-pixel layer G-buffer (NULL: off), one byte
+  // per output pixel: z level << 4 | math << 3 | layer. z level is the
+  // whole-line renderer's priority scale (0 backdrop .. 15 front), layer
+  // is 0-3 BG1-4, 4/6 OBJ (palettes 4-7 / 0-3), 5 backdrop; math is set
+  // when color math changed the pixel. Used by the HD-2D renderer.
+  uint8_t *layerBuffer;
+  uint32_t layerPitch;
   uint8_t extraLeftCur, extraRightCur, extraLeftRight, extraBottomCur;
   float mode7PerspectiveLow, mode7PerspectiveHigh;
 
@@ -140,6 +147,7 @@ uint8_t ppu_read(Ppu* ppu, uint8_t adr);
 void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val);
 void ppu_saveload(Ppu *ppu, SaveLoadFunc *func, void *ctx);
 void PpuBeginDrawing(Ppu *ppu, uint8_t *buffer, size_t pitch, uint32_t render_flags);
+void PpuSetLayerBuffer(Ppu *ppu, uint8_t *buffer, size_t pitch);   // port
 
 // Returns the current render scale, 1x = 256px, 2x=512px, 4x=1024px
 int PpuGetCurrentRenderScale(Ppu *ppu, uint32_t render_flags);
