@@ -1,7 +1,7 @@
 #include "sched.h"
 
 #include <setjmp.h>
-#include <ucontext.h>
+#include "compat/ucontext.h"   /* port: <ucontext.h>, or ours (bionic, musl) */
 #include <string.h>
 #include <stdio.h>
 
@@ -1280,7 +1280,7 @@ static void overlay_bail(CPU *c, overlay_act *a, uint32_t at)
     while (!ct_exec_done(c, &u))
         exec_one();
     ct_tail_fn = NULL;   /* nothing of the dropped frames runs */
-    __builtin_longjmp(a->jb, 1);
+    CT_LONGJMP(a->jb);   /* port: overlay.h */
 }
 
 static void tick(CPU *c, uint32_t at, uint8_t op)
@@ -1338,7 +1338,7 @@ static void tick(CPU *c, uint32_t at, uint8_t op)
 static __attribute__((noinline)) void run_overlay(const ct_overlay_func *o)
 {
     overlay_act *a = overlay_enter(o, overlay_last_idx, cpu->S);
-    if (!__builtin_setjmp(a->jb))
+    if (!CT_SETJMP(a->jb))   /* port: overlay.h */
         o->fn(cpu);
     overlay_leave(a);   /* returned, or left for the interpreter (overlay_bail) */
 }

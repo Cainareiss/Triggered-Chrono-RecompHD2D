@@ -13,6 +13,26 @@
 #include "cpu.h"
 #include "func_table.h"
 
+/* port: the jump that drops stale native overlay frames (overlay_act).
+   __builtin_setjmp saves only frame, stack and resume address, cheap
+   enough for every dispatch, but Clang rejects it on aarch64 ("not
+   supported for the current target", the NDK's and zig's alike). So on
+   aarch64, whatever the compiler (one layout per target), or anywhere
+   with CT_PORTABLE_SETJMP: _setjmp/_longjmp, which save the callee-saved
+   registers too, but never the signal mask (bionic's setjmp saves it with
+   a system call). Both are only ever used as here: setjmp in a noinline
+   function that does nothing else, longjmp from deeper down. */
+#if !defined(CT_PORTABLE_SETJMP) && !defined(__aarch64__)
+typedef void *ct_jmp_buf[5];
+#define CT_SETJMP(b) __builtin_setjmp(b)
+#define CT_LONGJMP(b) __builtin_longjmp(b, 1)
+#else
+#include <setjmp.h>
+typedef jmp_buf ct_jmp_buf;
+#define CT_SETJMP(b) _setjmp(b)
+#define CT_LONGJMP(b) _longjmp(b, 1)
+#endif
+
 /* (Re)build the lookup from ct_overlay_funcs; none with CT_OVERLAYS=0 in
    the environment (for bisecting a divergence). */
 void overlay_init(void);
@@ -39,10 +59,9 @@ typedef struct {
     uint16_t s0;        /* S at entry: it has returned once S is above */
     int dormant;        /* handed its rest to the interpreter: no more of its code runs */
     uint32_t lo, len;   /* the watched range before it entered (restored on leave) */
-    /* __builtin_setjmp buffer (GCC/Clang: saves only frame, stack and
-       resume address, cheap enough for every dispatch); the matching
-       __builtin_longjmp always comes from a deeper function */
-    void *jb[5];
+    /* CT_SETJMP buffer (below); the matching CT_LONGJMP always comes
+       from a deeper function */
+    ct_jmp_buf jb;
 } overlay_act;
 
 extern int ct_overlay_strict;
