@@ -1026,6 +1026,17 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
         last_ms = ms_since(t0);
     }
     prof.total_ms[prof.slot] = timing ? last_ms : 0.0;
+
+    /* CT_HD2D_GLERR=1: report GL errors a lenient driver lets through
+       (a strict one, NVIDIA's for example, may drop the draw). */
+    static int check = -1, reported;
+    if (check < 0) {
+        const char *e = getenv("CT_HD2D_GLERR");
+        check = e && *e && *e != '0';
+    }
+    if (check)
+        for (GLenum err; reported < 20 && (err = p_glGetError()) != GL_NO_ERROR; reported++)
+            fprintf(stderr, "hd2d: GL error 0x%x after frame %u\n", err, g.frame);
 }
 
 int hd2d_read(uint8_t *bgrx, int ow, int oh)

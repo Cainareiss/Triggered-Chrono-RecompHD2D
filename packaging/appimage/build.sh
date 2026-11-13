@@ -74,6 +74,19 @@ appdir="$work/AppDir"
 rm -rf "$appdir"
 mkdir -p "$appdir/usr/lib"
 
+# ---- Python 3.13 (python-build-standalone, stripped) for tools/build_module.py ----
+mkdir -p "$appdir/usr/lib/python"
+tar -xzf "$dl/python-stripped.tar.gz" -C "$appdir/usr/lib/python" --strip-components=1
+pyroot="$appdir/usr/lib/python"
+pylib=$(echo "$pyroot"/lib/python3.*)
+# No Tk, IDLE, pip or test suite: build_module.py needs the standard library.
+rm -rf "$pylib/test" "$pylib/idlelib" "$pylib/tkinter" "$pylib/turtledemo" \
+    "$pylib/ensurepip" "$pylib/lib2to3" "$pylib"/site-packages/pip* \
+    "$pyroot"/lib/libtcl* "$pyroot"/lib/libtk* "$pyroot"/lib/tcl* "$pyroot"/lib/tk* \
+    "$pyroot"/lib/itcl* "$pyroot"/lib/thread* "$pyroot/include" "$pyroot/share" \
+    "$pyroot"/bin/idle* "$pyroot"/bin/pip*
+"$pyroot/bin/python3" -c 'import tomllib, concurrent.futures'
+
 # ---- SDL2 built from source (SDL2=build) ----
 sdl_args=
 if [ "$sdl2" = build ]; then
@@ -92,7 +105,7 @@ fi
 # shellcheck disable=SC2086
 env -u CT_ROM "$cmake" -S "$repo" -B "$work/engine" -DCT_ENGINE_ONLY=ON \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
-    '-DCMAKE_INSTALL_RPATH=$ORIGIN/../lib' $sdl_args
+    '-DCMAKE_INSTALL_RPATH=$ORIGIN/../lib' "-DPython3_EXECUTABLE=$pyroot/bin/python3" $sdl_args
 "$cmake" --build "$work/engine" -j "$jobs" --target ct_sdl_engine
 DESTDIR="$appdir" "$cmake" --install "$work/engine"
 
@@ -118,18 +131,7 @@ else
     fi
 fi
 
-# ---- Python 3.13 (python-build-standalone, stripped) for tools/build_module.py ----
-mkdir -p "$appdir/usr/lib/python"
-tar -xzf "$dl/python-stripped.tar.gz" -C "$appdir/usr/lib/python" --strip-components=1
-pyroot="$appdir/usr/lib/python"
-pylib=$(echo "$pyroot"/lib/python3.*)
-# No Tk, IDLE, pip or test suite: build_module.py needs the standard library.
-rm -rf "$pylib/test" "$pylib/idlelib" "$pylib/tkinter" "$pylib/turtledemo" \
-    "$pylib/ensurepip" "$pylib/lib2to3" "$pylib"/site-packages/pip* \
-    "$pyroot"/lib/libtcl* "$pyroot"/lib/libtk* "$pyroot"/lib/tcl* "$pyroot"/lib/tk* \
-    "$pyroot"/lib/itcl* "$pyroot"/lib/thread* "$pyroot/include" "$pyroot/share" \
-    "$pyroot"/bin/idle* "$pyroot"/bin/pip*
-"$pyroot/bin/python3" -c 'import tomllib, concurrent.futures'
+find "$pyroot" -name __pycache__ -prune -exec rm -rf {} +
 
 # ---- zig, run as zig cc by libexec/ct-recomp/zig-cc ----
 mkdir -p "$appdir/usr/lib/zig"
