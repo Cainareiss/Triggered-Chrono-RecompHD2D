@@ -56,9 +56,17 @@ static void tick(long n)
 
 int main(void)
 {
-    /* Keep the user's saved layout out of it. */
+    /* Keep any saved layout out of it: the user's, and one an earlier run
+       saved from edit mode (a fixed TMPDIR would keep it). A fresh
+       directory every run. */
     const char *tmp = getenv("TMPDIR");
-    setenv("XDG_DATA_HOME", tmp ? tmp : ".", 1);
+    static char dir[4096];
+    snprintf(dir, sizeof dir, "%s/test_touch.XXXXXX", tmp && *tmp ? tmp : "/tmp");
+    if (!mkdtemp(dir)) {
+        perror("test_touch: mkdtemp");
+        return 1;
+    }
+    setenv("XDG_DATA_HOME", dir, 1);
     touch_opts o = {1, 2};
     touch_init(&o);
     CHECK(touch_visible(), "--touch: shown from the start");
