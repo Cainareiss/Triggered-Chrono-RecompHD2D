@@ -17,6 +17,7 @@ title.keys
 build/
 build2/
 build-dbg/
+build-*/
 out/
 *.o
 *.obj

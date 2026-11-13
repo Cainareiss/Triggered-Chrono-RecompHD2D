@@ -75,6 +75,31 @@ target_compile_options(ct_sched PRIVATE ${CT_WARN})
 
 # ---- SDL2 input mapping (optional: skipped when SDL2 isn't installed) ----
 find_package(SDL2 CONFIG QUIET)
+# Hosts with the SDL2 runtime but no development package (immutable distros
+# such as Bazzite): take the headers from the official release tarball and
+# link the system library. Packaging builds (Flatpak, AppImage) have a full
+# SDK and use find_package or a source build instead.
+option(CT_SDL2_SYSTEM_LIB "Use the system libSDL2 with release-tarball headers" ON)
+if(NOT SDL2_FOUND AND CT_SDL2_SYSTEM_LIB)
+    find_library(CT_SDL2_LIB NAMES SDL2-2.0 libSDL2-2.0.so.0)
+    if(CT_SDL2_LIB)
+        include(FetchContent)
+        FetchContent_Declare(sdl2_headers
+            URL https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz
+            URL_HASH SHA256=5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+        FetchContent_GetProperties(sdl2_headers)
+        if(NOT sdl2_headers_POPULATED)
+            FetchContent_Populate(sdl2_headers)   # headers only: never built
+        endif()
+        add_library(SDL2::SDL2 UNKNOWN IMPORTED)
+        set_target_properties(SDL2::SDL2 PROPERTIES
+            IMPORTED_LOCATION ${CT_SDL2_LIB}
+            INTERFACE_INCLUDE_DIRECTORIES ${sdl2_headers_SOURCE_DIR}/include)
+        set(SDL2_FOUND TRUE)
+        message(STATUS "SDL2: system ${CT_SDL2_LIB}, headers from 2.32.10")
+    endif()
+endif()
 if(SDL2_FOUND)
     add_library(ct_input STATIC frontend/input.c)
     target_include_directories(ct_input PUBLIC frontend)
