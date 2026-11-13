@@ -30,6 +30,11 @@ set -eu
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mkdir -p "${1:-$repo/build-appimage}" && cd "${1:-$repo/build-appimage}" && pwd)
 cmake=${CMAKE:-cmake}
+# Fail before the downloads, not after them.
+command -v "$cmake" >/dev/null 2>&1 || {
+    echo "build.sh: cmake not found ('$cmake'): install CMake 3.24+ or set CMAKE=/path/to/cmake" >&2
+    exit 2
+}
 jobs=${JOBS:-$(nproc)}
 sdl2=${SDL2:-system}
 app_id=io.github.jerbanpls.CtRecomp

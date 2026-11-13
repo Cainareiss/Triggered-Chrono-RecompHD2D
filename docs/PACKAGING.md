@@ -169,23 +169,27 @@ from the local repo, run headless with `--env=SDL_VIDEODRIVER=offscreen
 | `--shot` | 1920x1080 PNG of the title screen |
 | GL in the sandbox | `hd2d: AMD / AMD Ryzen Z1 Extreme (radeonsi, phoenix, ACO, DRM 3.64, ...) / 4.6 (Core Profile) Mesa 26.2.5`. That is hardware radeonsi through the runtime's Mesa (GL.default 26.2.5), not llvmpipe. |
 | Bundle size | 45,652,624 bytes (44 MiB). The installed app is 245 MiB, of which zig is 242 MiB. |
-| `check_dist.py --rom` on `build-flatpak/files`, the OSTree export and the bundle's imported contents | 1 hit, a false positive in `lib/zig/zig` (see below). With `--allow packaging/check_dist_allow.txt`: 8,024 files, 0 problems. |
+| `check_dist.py --rom` on `build-flatpak/files`, the OSTree export and the bundle's imported contents | At first 1 hit, a false positive in `lib/zig/zig` (see below). Since check_dist skips generic tables: 8,024 files, 0 problems. |
 
-The single `check_dist` hit is the unmodified upstream zig 0.15.2 binary, byte-identical
-to the one in the SHA-256-pinned tarball. At file offset 34131568 it holds the standard
-256-byte bit-reversal table (`00 80 40 c0 20 a0 60 e0 ...`). The ROM has the same table
-at 0xFD00, so the ROM-window check matches it. Nothing from the ROM is in the package.
-`packaging/check_dist_allow.txt` lists that binary by its SHA-256, and
-`--allow packaging/check_dist_allow.txt` exempts files with exactly a listed hash from
-the ROM-window check only. The name, ELF-export and generated-name checks still apply
-to them. Check packages, including the AppImage, which bundles the same zig, with:
+The first run's single hit was in the unmodified upstream zig 0.15.2 binary,
+byte-identical to the one in the SHA-256-pinned tarball. At file offset 34131568 it
+holds the standard 256-byte bit-reversal table (`00 80 40 c0 20 a0 60 e0 ...`). The ROM
+has the same table at 0xFD00, so the ROM-window check matched it. Nothing from the ROM
+was in the package.
+
+`check_dist` now never samples a ROM window that lies inside a table that is part of no
+game's data: bit reversal, identity, and reversed identity. The same table also turns
+up in the AppImage's squashfs, where a per-file rule can't catch it. With that,
+packages pass without exemptions:
 
 ```
-python3 tools/check_dist.py PACKAGE --rom ROM --allow packaging/check_dist_allow.txt
+python3 tools/check_dist.py PACKAGE --rom ROM
 ```
 
-Add an entry only for an unmodified upstream binary whose download is pinned in
-`packaging/`. When zig's pin changes, update its hash in the list.
+`--allow packaging/check_dist_allow.txt` remains for an unmodified, pinned upstream
+binary that matches some other ROM window by chance. Listed files skip the ROM-window
+check only; the name, ELF-export and generated-name checks still apply. It lists the
+zig binary. When zig's pin changes, update its hash there.
 
 Not tested yet: a windowed session on Wayland or X11, audio through PulseAudio or
 PipeWire, controllers in the sandbox, a system-wide install, Flathub's linter, and
@@ -216,6 +220,26 @@ SDL2 comes from one of two places:
 
 The engine and SDL link against the build host's glibc, so build on the oldest
 distribution the image should run on.
+
+`cmake` must be on PATH, or set `CMAKE=/path/to/cmake`. The script checks for it before
+anything is downloaded.
+
+### Test results
+
+These were run on 2026-11-13 on the ROG Ally (Bazzite, Fedora 45 base), building the
+`hd2d` branch with the first-run, saves, touch and arm64 work merged:
+
+| Check | Result |
+| --- | --- |
+| Build (`SDL2=system`) | `CT_Recomp-x86_64.AppImage`, 86,858,232 bytes |
+| `check_dist.py --rom` on the image, looking inside its squashfs | 8,093 files, 0 problems, with no `--allow` |
+| First launch: `APPIMAGE_EXTRACT_AND_RUN=1`, `PATH=/usr/bin:/bin` (no host cmake or zig), `--rom ROM --hd2d --fast --frames 600 --require-render` | Built the module with the bundled Python and zig (8,033 KiB, 41 s), loaded 1,482 functions, exit 0 |
+| Second launch, no `--rom` | Remembered ROM, module "up to date", exit 0 |
+| `ct-recomp --build-module ROM` | Module "up to date", exit 0 |
+| Saves | No save file without an SRAM change. With `--poke-sram`, written after frame 61, equal to the SRAM dump. Reloaded identically on the next start. |
+
+Not tested yet: a windowed session, real audio, controllers, and running the image on
+another distribution.
 
 ## The compliance guarantee
 

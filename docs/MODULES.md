@@ -94,8 +94,7 @@ time it changes, and a `%d` in PATH numbers the shots.
 ## Checking a package
 
 ```
-python3 tools/check_dist.py PACKAGE_DIR_OR_FILE... --rom rom/your_dump.sfc \
-    --allow packaging/check_dist_allow.txt   # pinned third-party binaries (zig)
+python3 tools/check_dist.py PACKAGE_DIR_OR_FILE... --rom rom/your_dump.sfc
 ```
 
 It exits 1 if anything in the package was built from the ROM, and also looks

@@ -54,6 +54,13 @@ def main(argv: list[str]) -> int:
             for p in passing:
                 t.add(p, arcname='bin/' + os.path.basename(p))
         expect([clean], 0, 'engine in a .tar.gz')
+        # Generic tables that also occur in the ROM (the bit-reversal table,
+        # as in the bundled compiler) are not ROM data: a file of them passes.
+        generic = os.path.join(d, 'tables.bin')
+        rev = bytes(int(f'{i:08b}'[::-1], 2) for i in range(256))
+        with open(generic, 'wb') as f:
+            f.write(os.urandom(500) + rev * 3 + bytes(range(256)) + os.urandom(500))
+        expect([generic], 0, 'generic byte tables (bit reversal, identity)')
         piece = os.urandom(777) + data[0x123457:0x123457 + 6144] + os.urandom(999)
         inner = io.BytesIO()
         with tarfile.open(fileobj=inner, mode='w') as t:

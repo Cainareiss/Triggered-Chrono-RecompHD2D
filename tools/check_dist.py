@@ -58,6 +58,23 @@ SYMBOL_RE = re.compile(rb'f_[0-9A-F]{6}_m[01]x[01]')
 MODULE_ENTRY = b'ct_module_get'   # runtime/module.h
 
 
+# Byte tables that are part of no game's data but turn up in many programs
+# (compilers, codecs, libc): a ROM window inside one of them proves nothing,
+# so none is ever sampled. 256-byte tables, each also doubled so a window
+# that wraps the end is covered.
+def _generic_tables() -> list[bytes]:
+    bitrev = bytes(int(f'{i:08b}'[::-1], 2) for i in range(256))
+    ident = bytes(range(256))
+    return [t + t for t in (bitrev, ident, ident[::-1])]
+
+
+GENERIC_TABLES = _generic_tables()
+
+
+def is_generic(window: bytes) -> bool:
+    return any(window in t for t in GENERIC_TABLES)
+
+
 class RomSamples:
     """A hash set of sampled ROM windows and the anchor bytes they start with."""
 
@@ -78,7 +95,8 @@ class RomSamples:
             bank = rom[base:base + BANK + WINDOW - 1]
             cands = [w for w in (bank[m.start():m.start() + WINDOW]
                                  for m in anchor_re.finditer(bank))
-                     if len(w) == WINDOW and len(set(w)) >= MIN_DISTINCT]
+                     if len(w) == WINDOW and len(set(w)) >= MIN_DISTINCT
+                     and not is_generic(w)]
             n = min(per_bank, len(cands))   # evenly spaced through the bank
             self.windows.update(cands[k * len(cands) // n] for k in range(n))
         self.anchor_re = anchor_re
