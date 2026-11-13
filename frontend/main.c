@@ -40,7 +40,9 @@
  *          [--debug-view N] [--fullscreen] [--log-gpu]
  *       draw through the HD-2D renderer (frontend/hd2d) in an OpenGL 3.3
  *       (or ES 3.0) window. F1 cycles the preset, F2 the debug view
- *       (layer classes, depth, blur), F3 the aspect, F11 fullscreen.
+ *       (layer classes, depth, blur), F3 the aspect, F11 fullscreen; on a
+ *       controller, R3 cycles the preset and L3 the aspect. Preset and
+ *       aspect are saved (SDL pref path ct-recomp/hd2d/settings.ini).
  *   --shot F:PATH (repeatable) [--shot-size WxH]
  *       at the end of frame F, render the HD-2D picture offscreen at
  *       WxH (default 1920x1080) and write it to PATH as PNG; with
@@ -197,6 +199,8 @@ static void present_hd2d(void)
                 hd2d_last_ms());
 }
 
+static void settings_save(void);
+
 /* F1-F3, F11: the HD-2D controls. Returns 1 if the key was one of them. */
 static int hd2d_key(SDL_Scancode sc)
 {
@@ -210,15 +214,61 @@ static int hd2d_key(SDL_Scancode sc)
     if (sc == SDL_SCANCODE_F1) {
         hd2d_set_preset((hd2d_preset() + 1) % HD2D_PRESETS);
         fprintf(stderr, "ct_sdl: hd2d preset %s\n", hd2d_preset_name(hd2d_preset()));
+        settings_save();
     } else if (sc == SDL_SCANCODE_F2) {
         hd2d_set_debug((hd2d_debug() + 1) % HD2D_DEBUGS);
         fprintf(stderr, "ct_sdl: hd2d debug view %d\n", hd2d_debug());
     } else if (sc == SDL_SCANCODE_F3) {
         hd2d_set_aspect((hd2d_aspect() + 1) % HD2D_ASPECTS);
+        settings_save();
     } else {
         return 0;
     }
     return 1;
+}
+
+/* port: HD-2D settings persist in SDL's per-user preferences folder
+   (settings.ini: preset=NAME, aspect=N). */
+static char *settings_path(void)
+{
+    char *dir = SDL_GetPrefPath("ct-recomp", "hd2d");
+    if (!dir)
+        return NULL;
+    size_t n = strlen(dir) + sizeof "settings.ini";
+    char *p = malloc(n);
+    if (p)
+        snprintf(p, n, "%ssettings.ini", dir);
+    SDL_free(dir);
+    return p;
+}
+
+static int parse_preset(const char *v);
+
+static void settings_load(void)
+{
+    char *path = settings_path(), line[128], val[64];
+    FILE *f = path ? fopen(path, "r") : NULL;
+    while (f && fgets(line, sizeof line, f)) {
+        int n;
+        if (sscanf(line, "preset=%63s", val) == 1 && parse_preset(val) >= 0)
+            hd2d_set_preset(parse_preset(val));
+        else if (sscanf(line, "aspect=%d", &n) == 1)
+            hd2d_set_aspect(n);
+    }
+    if (f)
+        fclose(f);
+    free(path);
+}
+
+static void settings_save(void)
+{
+    char *path = settings_path();
+    FILE *f = path ? fopen(path, "w") : NULL;
+    if (f) {
+        fprintf(f, "preset=%s\naspect=%d\n", hd2d_preset_name(hd2d_preset()), hd2d_aspect());
+        fclose(f);
+    }
+    free(path);
 }
 
 static int parse_preset(const char *v)
@@ -255,6 +305,13 @@ static void poll_input(long f)
             /* port: renderer controls, not game input */
         } else if ((ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) && !ev.key.repeat) {
             key_filter_key(&keys, ev.key.keysym.scancode, ev.type == SDL_KEYDOWN, f);
+        } else if (ev.type == SDL_CONTROLLERBUTTONDOWN && hd2d_mode &&
+                   (ev.cbutton.button == SDL_CONTROLLER_BUTTON_RIGHTSTICK ||
+                    ev.cbutton.button == SDL_CONTROLLER_BUTTON_LEFTSTICK)) {
+            /* port: stick clicks (no SNES button) drive the renderer on
+               handhelds without function keys: R3 preset, L3 aspect. */
+            hd2d_key(ev.cbutton.button == SDL_CONTROLLER_BUTTON_RIGHTSTICK ? SDL_SCANCODE_F1
+                                                                            : SDL_SCANCODE_F3);
         } else if (ev.type == SDL_CONTROLLERBUTTONDOWN) {
             key_filter_button(&keys, f);
         } else if (ev.type == SDL_CONTROLLERDEVICEADDED && !pad)
@@ -356,6 +413,7 @@ int main(int argc, char **argv)
     static long frames = -1;           /* static: survive the longjmp */
     static int scale = 3, require_render, require_no_underrun, fullscreen;
     static const char *needed;
+    settings_load();   /* port: saved HD-2D settings; options below override */
     for (int k = 1; k < argc; k++) {
         if (!strcmp(argv[k], "--scale") && k + 1 < argc)
             scale = atoi(argv[++k]);

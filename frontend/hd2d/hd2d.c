@@ -162,12 +162,12 @@ static const settings presets[HD2D_PRESETS] = {
                      .dof_tilt = 0.45f, .dof_depth = 0.25f, .focus_band = 0.2f, .focus_ramp = 0.4f,
                      .dof_radius = 4.0f, .bloom = 0.25f, .bloom_threshold = 0.78f,
                      .exposure = 1.1f, .saturation = 1.06f, .contrast = 1.02f, .vignette = 0.2f,
-                     .grain = 0.01f, .split = 0.2f, .side_dim = 0.5f, .effects = 1},
+                     .grain = 0.01f, .split = 0.2f, .side_dim = 0.42f, .effects = 1},
     [HD2D_FULL] = {.relief = 0.55f, .shadow = 0.85f, .ao = 0.7f, .rim = 0.6f, .haze = 0.5f,
                    .dof_tilt = 0.9f, .dof_depth = 0.5f, .focus_band = 0.18f, .focus_ramp = 0.34f,
                    .dof_radius = 6.0f, .bloom = 0.45f, .bloom_threshold = 0.7f,
                    .exposure = 1.25f, .saturation = 1.12f, .contrast = 1.04f, .vignette = 0.35f,
-                   .grain = 0.018f, .split = 0.35f, .side_dim = 0.55f, .effects = 1},
+                   .grain = 0.018f, .split = 0.35f, .side_dim = 0.42f, .effects = 1},
 };
 
 static const char *const preset_names[HD2D_PRESETS] = {"off", "subtle", "hd2d"};
@@ -600,12 +600,14 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const sched_ppu_sta
     p_glUniform1i(U(P_FINAL, "uBloomB"), 3);
     p_glUniform1i(U(P_FINAL, "uSoft"), 4);
     p_glUniform1i(U(P_FINAL, "uMat"), 5);
+    p_glUniform1i(U(P_FINAL, "uOrig"), 6);
     bind_tex(0, g.scene.tex);
     bind_tex(1, g.half[0].tex);
     bind_tex(2, g.quarter[0].tex);
     bind_tex(3, g.eighth[0].tex);
     bind_tex(4, g.soft[0].tex);
     bind_tex(5, g.t_mat);
+    bind_tex(6, g.t_color);
     p_glUniform4f(U(P_FINAL, "uRect"), (float)px, (float)py, (float)pw, (float)ph);
     p_glUniform2f(U(P_FINAL, "uOut"), (float)ow, (float)oh);
     p_glUniform1i(U(P_FINAL, "uFlip"), offscreen ? 0 : 1);

@@ -23,7 +23,7 @@ build/ct_sdl --hd2d --fullscreen    # or press F11; automatic under gamescope
 | Key | Action |
 | --- | --- |
 | F1 | Cycle the preset: `off`, `subtle`, `hd2d` (default) |
-| F2 | Cycle the debug view: layer classes, depth, blur amount, off |
+| F2 | Cycle the debug view: layer classes, depth, blur amount, split compare (original pixels on the left), off |
 | F3 | Cycle the aspect: 4:3 (default), 8:7 pixel aspect, stretch |
 | F11 | Toggle fullscreen |
 
@@ -31,7 +31,7 @@ build/ct_sdl --hd2d --fullscreen    # or press F11; automatic under gamescope
 | --- | --- |
 | `--preset off\|subtle\|hd2d` | Choose the starting preset |
 | `--aspect 4:3\|pixel\|stretch` | Choose the picture shape |
-| `--debug-view N` | Start in debug view N (0 off, 1 classes, 2 depth, 3 blur) |
+| `--debug-view N` | Start in debug view N (0 off, 1 classes, 2 depth, 3 blur, 4 split compare) |
 | `--log-gpu` | Print the renderer's frame time every 60 frames (stalls the GPU to measure) |
 | `--shot F:PATH` | At frame F, render offscreen and save a PNG (repeatable) |
 | `--shot-size WxH` | Size of those screenshots (default 1920x1080) |

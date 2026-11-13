@@ -18,6 +18,7 @@ build/
 build2/
 build-dbg/
 build-*/
+shots/
 out/
 *.o
 *.obj

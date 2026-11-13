@@ -11,6 +11,7 @@ uniform sampler2D uBloomA;   // quarter size
 uniform sampler2D uBloomB;   // eighth size
 uniform sampler2D uSoft;     // eighth size, unthresholded: side fill
 uniform sampler2D uMat;      // source size, nearest: r = UI, b = class / 8
+uniform sampler2D uOrig;     // source size, nearest: the console's frame (.bgr)
 uniform vec4 uRect;          // picture rectangle in output pixels: x, y, w, h (top-left origin)
 uniform vec2 uOut;           // output size
 uniform int uFlip;           // 1: drawing to the window (bottom-left origin)
@@ -20,7 +21,7 @@ uniform vec3 uShadowTint;
 uniform vec3 uHighTint;
 uniform float uSideDim;
 uniform float uTime;
-uniform int uDebug;          // 0 off, 1 classes, 2 depth, 3 blur amount
+uniform int uDebug;          // 0 off, 1 classes, 2 depth, 3 blur amount, 4 split compare
 out vec4 oColor;
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
@@ -70,7 +71,14 @@ void main()
         float out_ = max(-uv.x, uv.x - 1.0);
         q.x = uv.x < 0.0 ? -uv.x * 0.7 : uv.x > 1.0 ? 1.0 - (uv.x - 1.0) * 0.7 : uv.x;
         q = clamp(q, vec2(0.002), vec2(0.998));
-        vec3 c = texture(uSoft, q).rgb * uSideDim;
+        // A 9-tap disc on top of the soft copy's blur: no visible blobs.
+        vec2 r = 2.5 / vec2(textureSize(uSoft, 0));
+        vec3 c = texture(uSoft, q).rgb * 0.2;
+        for (int k = 0; k < 8; k++) {
+            float a = float(k) * 0.785398;
+            c += texture(uSoft, clamp(q + vec2(cos(a), sin(a)) * r, vec2(0.002), vec2(0.998))).rgb * 0.1;
+        }
+        c *= uSideDim;
         float fade = 1.0 - smoothstep(0.0, 0.35, out_);
         oColor = vec4(c * (0.35 + 0.65 * fade), 1.0);
         return;
@@ -82,6 +90,12 @@ void main()
     if (uDebug == 1) { oColor = vec4(mix(classColor(mat.b), scene.rgb, 0.35), 1.0); return; }
     if (uDebug == 2) { oColor = vec4(vec3(scene.a), 1.0); return; }
     if (uDebug == 3) { oColor = vec4(vec3(texture(uDof, uv).a), 1.0); return; }
+    if (uDebug == 4 && uv.x < 0.5) {
+        // Split compare: the console's own pixels left of center.
+        float line_ = 1.0 - step(1.5 / uRect.z, abs(uv.x - 0.5));
+        oColor = vec4(mix(texture(uOrig, uv).bgr, vec3(1.0), line_), 1.0);
+        return;
+    }
 
     if (uGrade2.w < 0.5 || mat.r > 0.5) {
         // Effects off, or UI: the plain upscaled picture.
