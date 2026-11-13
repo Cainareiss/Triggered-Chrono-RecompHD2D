@@ -83,7 +83,10 @@ endfunction()
 ct_game_exe(ct_boot ${CMAKE_SOURCE_DIR}/tools/ct_boot.c)
 set_target_properties(ct_boot PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 if(SDL2_FOUND)
-    ct_game_exe(ct_sdl ${CMAKE_SOURCE_DIR}/frontend/main.c)
+    ct_game_exe(ct_sdl ${CMAKE_SOURCE_DIR}/frontend/main.c ${CMAKE_SOURCE_DIR}/frontend/saves.c)
+    # port: the game id names its saves folder, as for ct_sdl_engine
+    get_filename_component(ct_game_id ${GAME_DIR} NAME)
+    target_compile_definitions(ct_sdl PRIVATE CT_GAME_ID="${ct_game_id}")
     target_link_libraries(ct_sdl ct_input ct_hd2d)
     set_target_properties(ct_sdl PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 endif()
@@ -234,8 +237,9 @@ add_test(NAME native_coverage COMMAND ct_boot --frames 11000 --min-native 49
 list(APPEND ct_game_tests native_coverage)
 
 if(SDL2_FOUND)
-    # The frontend itself, headless (SDL dummy drivers), unpaced.
-    add_test(NAME sdl_boot COMMAND ct_sdl --frames 300 --fast --require-render)
+    # The frontend itself, headless (SDL dummy drivers), unpaced. port: every
+    # ct_sdl test runs with --no-save, so none reads or writes a save file.
+    add_test(NAME sdl_boot COMMAND ct_sdl --frames 300 --fast --require-render --no-save)
     # --record while playing the Leene Square replay; the recording must
     # reproduce the run frame for frame in ct_boot.
     add_test(NAME sdl_record COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_record.py
@@ -243,7 +247,7 @@ if(SDL2_FOUND)
     # 60 s of boot in real time through the SDL audio queue (dummy driver,
     # 960-sample buffer = 20 ms, which it consumes at the true rate): no
     # underrun once playback starts.
-    add_test(NAME sdl_audio_60s COMMAND ct_sdl --frames 3606 --require-no-underrun)
+    add_test(NAME sdl_audio_60s COMMAND ct_sdl --frames 3606 --require-no-underrun --no-save)
     # Real-time pacing: other tests running beside it starve the audio queue.
     set_tests_properties(sdl_audio_60s PROPERTIES RUN_SERIAL TRUE)
     list(APPEND ct_game_tests sdl_boot sdl_record sdl_audio_60s)

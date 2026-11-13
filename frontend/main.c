@@ -59,7 +59,12 @@
  *       --data-dir DIR (default: the source tree) holds game/ and tools/;
  *       --game ID picks DIR/game/ID (default: the game it was configured
  *       with). --shot status:PATH writes the setup screen each time it
- *       changes (a %d in PATH numbers the shots). */
+ *       changes (a %d in PATH numbers the shots).
+ *   --save FILE | --no-save, --dump-sram FILE, --poke-sram F:ADDR=VAL
+ *       the save RAM file (frontend/saves.h; default GAME_ID.srm in the
+ *       per-game preferences folder), or none. For testing, --dump-sram
+ *       writes the save RAM as it is at exit, and --poke-sram changes a
+ *       byte of it after frame F. */
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -80,6 +85,7 @@
 #include "png.h"
 #include "replay.h"
 #include "resample.h"
+#include "saves.h"    /* port: save RAM on disk */
 #include "sched.h"
 
 #define RATE 48000
@@ -432,6 +438,7 @@ static void on_frame(long f)
         else if (now - next_frame > perf_freq / 10)
             next_frame = now;   /* more than 100 ms behind: resync, don't sprint */
     }
+    saves_frame(f);   /* port */
     poll_input(f);
     set_input(f + 1);
 }
@@ -552,7 +559,11 @@ int main(int argc, char **argv)
     static const char *data_dir = CT_FIRSTRUN_DATA_DIR, *game_id = CT_FIRSTRUN_GAME,
                       *status_shot;
     static int interp_only;
+#else
+    static const char *game_id = CT_GAME_ID;   /* port: names the saves folder */
 #endif
+    static const char *save_path;   /* port: --save */
+    static int no_save;
     settings_load();   /* port: saved HD-2D settings; options below override */
     for (int k = 1; k < argc; k++) {
         if (!strcmp(argv[k], "--scale") && k + 1 < argc)
@@ -603,6 +614,17 @@ int main(int argc, char **argv)
                    !strncmp(argv[k + 1], "status:", 7)) {
             status_shot = argv[++k] + 7;
 #endif
+        } else if (!strcmp(argv[k], "--save") && k + 1 < argc) {
+            save_path = argv[++k];
+        } else if (!strcmp(argv[k], "--no-save")) {
+            no_save = 1;
+        } else if (!strcmp(argv[k], "--dump-sram") && k + 1 < argc) {
+            saves_dump_at_exit(argv[++k]);
+        } else if (!strcmp(argv[k], "--poke-sram") && k + 1 < argc) {
+            if (saves_poke(argv[++k])) {
+                fprintf(stderr, "ct_sdl: --poke-sram FRAME:ADDR=VAL (ADDR, VAL hex)\n");
+                return 2;
+            }
         } else if (!strcmp(argv[k], "--hd2d")) {
             hd2d_mode = 1;
         } else if (!strcmp(argv[k], "--preset") && k + 1 < argc) {
@@ -645,7 +667,8 @@ int main(int argc, char **argv)
                             "[--require-no-underrun] [--hd2d] [--preset off|subtle|hd2d] "
                             "[--aspect 4:3|pixel|stretch] [--debug-view N] [--fullscreen] "
                             "[--log-gpu] [--shot F:PATH]... [--shot-size WxH] [--module FILE] "
-                            "[--rom FILE]"
+                            "[--rom FILE] [--save FILE] [--no-save] [--dump-sram FILE] "
+                            "[--poke-sram F:ADDR=VAL]..."
 #ifdef CT_FIRSTRUN
                             " [--data-dir DIR] [--game ID] [--shot status:PATH]"
 #endif
@@ -700,6 +723,8 @@ int main(int argc, char **argv)
         }
         fprintf(stderr, "ct_sdl: game module %s: %u functions\n", module_path, ct_func_count);
     }
+    if (!no_save)   /* port: the save RAM from disk (saves.h) */
+        saves_open(save_path, game_id);
     char title[22];   /* ROM header title, $FFC0, 21 bytes, space padded */
     memcpy(title, bus_rom() + 0xFFC0, 21);
     title[21] = 0;

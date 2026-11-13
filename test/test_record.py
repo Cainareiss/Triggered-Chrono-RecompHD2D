@@ -22,8 +22,10 @@ def main() -> int:
     env = dict(os.environ, SDL_VIDEODRIVER="dummy", SDL_AUDIODRIVER="dummy")
     with tempfile.TemporaryDirectory() as tmp:
         rec = os.path.join(tmp, "rec.txt")
+        # port: --no-save: never a save file
         run = subprocess.run([frontend, "--fast", "--frames", frames, "--script", script,
-                              "--record", rec], env=env, capture_output=True, text=True)
+                              "--record", rec, "--no-save"],
+                             env=env, capture_output=True, text=True)
         if run.returncode:
             print(f"test_record: frontend exit {run.returncode}: {run.stderr.strip()[-300:]}")
             return 1
