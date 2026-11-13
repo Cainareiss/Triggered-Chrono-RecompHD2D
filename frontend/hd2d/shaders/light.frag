@@ -15,7 +15,8 @@ uniform sampler2D uColor;     // bytes B G R x uploaded as RGBA: use .bgr
 uniform usampler2D uLayer;
 uniform int uUiZ;             // z level treated as UI (HUD, text), -1: none
 uniform vec4 uAmount;         // relief, shadow, ao, rim
-uniform vec4 uAmount2;        // haze, -, -, -
+uniform vec4 uAmount2;        // haze, point lights, -, -
+uniform sampler2D uLightMap;  // blurred light sources (emit.frag), linear
 uniform vec3 uLightDir;       // towards the light, x right, y down, z viewer
 uniform vec3 uKey;            // key light color
 uniform vec3 uAmbient;        // ambient color
@@ -135,9 +136,16 @@ void main()
         lit += uAmount.w * 0.35 * edge * uKey * (0.4 + luma(col));
     }
 
+    // Point lights: light sources found in the frame, blurred, light
+    // the surfaces around them (the sources themselves gain little).
+    vec3 pl = texture(uLightMap, (vec2(p) + 0.5) / vec2(gSize)).rgb;
+    lit += col * pl * uAmount2.y * (1.0 - 0.6 * smoothstep(0.6, 0.9, luma(col)));
+
     // Distance haze on the far planes.
+    // (Not on black: a void or letterbox stays black.)
     if (c == C_FAR || c == C_BACKDROP)
-        lit = mix(lit, uHaze, uAmount2.x * (c == C_BACKDROP ? 0.35 : 0.2));
+        lit = mix(lit, uHaze, uAmount2.x * (c == C_BACKDROP ? 0.35 : 0.2) *
+                                  smoothstep(0.03, 0.18, luma(col)));
 
     oLit = vec4(lit, depth);
     oMat = vec4(0.0, c == C_ACTOR ? 1.0 : 0.0, float(c) / 8.0, 1.0);

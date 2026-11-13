@@ -63,25 +63,32 @@ SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy build/ct_sdl --hd2d --fast \
      battle HUD
 
    UI pixels skip every effect and stay sharp.
-3. **Lighting at console resolution.** Pixel-scale lighting suits pixel art, so this pass
+3. **Point lights** (`shaders/emit.frag`), at 64×56:
+   - Pixels that are bright, saturated, and clearly brighter than their surroundings
+     (flames, lamps, windows, glowing magic) become light sources.
+   - The light map is blurred twice and lights the surfaces around each source.
+   - Its strength follows the scene's darkness: full in interiors and at night, a
+     quarter in daylight.
+   - UI is never a light source.
+4. **Lighting at console resolution.** Pixel-scale lighting suits pixel art, so this pass
    runs at 256×224:
    - Relief normals from brightness give Lambert lighting from one warm key light.
    - Actor silhouettes cast soft shadows down and to the right.
    - Ground darkens where it meets foreground and actors (contact occlusion).
    - Actor edges facing the light get a rim light.
    - Distance haze is applied to the far planes.
-4. **Sharp-bilinear upscale** to the output size.
-5. **Tilt-shift depth of field** at half resolution:
+5. **Sharp-bilinear upscale** to the output size.
+6. **Tilt-shift depth of field** at half resolution:
    - A sharp band follows the actors' vertical center, and blur grows above and below it.
    - Planes away from the focal depth also blur.
    - Each sample is weighted by its own blur amount, so in-focus pixels don't bleed halos.
    - Actors stay mostly sharp wherever they stand.
    - The effect scales with how much of the screen is ground or foreground, so title
      cards and black-backed screens keep it off.
-6. **Bloom**, from two Gaussian levels at 1/4 and 1/8 resolution.
-7. **Grade:** a filmic shoulder, saturation, split toning (cool shadows, warm
+7. **Bloom**, from two Gaussian levels at 1/4 and 1/8 resolution.
+8. **Grade:** exposure and a soft highlight shoulder (identity below 0.7, so blacks stay black), saturation, split toning (cool shadows, warm
    highlights), a vignette and light grain.
-8. **Side fill:** outside the 4:3 picture, a blurred, mirrored and dimmed reflection of
+9. **Side fill:** outside the 4:3 picture, a blurred, mirrored and dimmed reflection of
    its edges.
 
 Menus that cover more than 15–30% of the screen with UI ease the scene effects off.
@@ -89,7 +96,7 @@ Menus that cover more than 15–30% of the screen with UI ease the scene effects
 ## Performance
 
 On a ROG Ally (Ryzen Z1 Extreme, Radeon 780M, Mesa radeonsi), the renderer takes about
-1.8–2.1 ms per frame at 1706×1120, which is about 1080p's pixel count. That time
+about 1.9 ms per frame (median; 2.3 ms at the 95th percentile) at 1706×1120, which is about 1080p's pixel count. That time
 includes the uploads and the CPU-side scene analysis. Desktop AMD and NVIDIA GPUs have a
 large margin.
 

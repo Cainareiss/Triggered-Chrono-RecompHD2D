@@ -41,9 +41,12 @@ vec3 classColor(float c)
 
 vec3 grade(vec3 c, vec2 uv)
 {
-    // Gentle filmic shoulder, normalized so 1.0 stays near 1.0.
-    float e = uGrade.y;
-    c = (1.0 - exp(-c * e)) / (1.0 - exp(-e));
+    // Exposure, then a soft shoulder: identity below 0.7 (blacks stay
+    // black), highlights roll off smoothly instead of clipping.
+    c *= uGrade.y;
+    const float k = 0.7;
+    vec3 over = max(c - k, 0.0);
+    c = min(c, vec3(k)) + (1.0 - k) * (1.0 - exp(-over / (1.0 - k)));
     // Contrast around mid grey.
     c = mix(vec3(0.5), c, uGrade2.z);
     // Saturation.

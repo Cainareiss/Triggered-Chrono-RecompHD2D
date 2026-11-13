@@ -148,7 +148,7 @@ static int load_gl(void)
 /* ---- settings ---- */
 
 typedef struct {
-    float relief, shadow, ao, rim, haze;
+    float relief, shadow, ao, rim, haze, point_light;
     float dof_tilt, dof_depth, focus_band, focus_ramp, dof_radius;
     float bloom, bloom_threshold;
     float exposure, saturation, contrast, vignette, grain, split;
@@ -158,15 +158,15 @@ typedef struct {
 
 static const settings presets[HD2D_PRESETS] = {
     [HD2D_OFF] = {.exposure = 1.0f, .saturation = 1.0f, .contrast = 1.0f, .side_dim = 0.45f},
-    [HD2D_SUBTLE] = {.relief = 0.3f, .shadow = 0.5f, .ao = 0.4f, .rim = 0.3f, .haze = 0.25f,
+    [HD2D_SUBTLE] = {.relief = 0.3f, .shadow = 0.5f, .ao = 0.4f, .rim = 0.3f, .haze = 0.25f, .point_light = 0.6f,
                      .dof_tilt = 0.45f, .dof_depth = 0.25f, .focus_band = 0.2f, .focus_ramp = 0.4f,
                      .dof_radius = 4.0f, .bloom = 0.25f, .bloom_threshold = 0.78f,
-                     .exposure = 1.1f, .saturation = 1.06f, .contrast = 1.02f, .vignette = 0.2f,
+                     .exposure = 1.03f, .saturation = 1.06f, .contrast = 1.02f, .vignette = 0.2f,
                      .grain = 0.01f, .split = 0.2f, .side_dim = 0.42f, .effects = 1},
-    [HD2D_FULL] = {.relief = 0.55f, .shadow = 0.85f, .ao = 0.7f, .rim = 0.6f, .haze = 0.5f,
+    [HD2D_FULL] = {.relief = 0.55f, .shadow = 0.85f, .ao = 0.7f, .rim = 0.6f, .haze = 0.5f, .point_light = 1.2f,
                    .dof_tilt = 0.9f, .dof_depth = 0.5f, .focus_band = 0.18f, .focus_ramp = 0.34f,
                    .dof_radius = 6.0f, .bloom = 0.45f, .bloom_threshold = 0.7f,
-                   .exposure = 1.25f, .saturation = 1.12f, .contrast = 1.04f, .vignette = 0.35f,
+                   .exposure = 1.06f, .saturation = 1.12f, .contrast = 1.04f, .vignette = 0.35f,
                    .grain = 0.018f, .split = 0.35f, .side_dim = 0.42f, .effects = 1},
 };
 
@@ -187,7 +187,7 @@ double hd2d_last_ms(void) { return last_ms; }
 
 /* ---- GL objects ---- */
 
-enum { P_LIGHT, P_UPSCALE, P_COC, P_DOFBLUR, P_BRIGHT, P_GAUSS, P_FINAL, P_COUNT };
+enum { P_EMIT, P_LIGHT, P_UPSCALE, P_COC, P_DOFBLUR, P_BRIGHT, P_GAUSS, P_FINAL, P_COUNT };
 
 typedef struct {
     GLuint tex, fbo;
@@ -202,6 +202,7 @@ static struct {
     GLuint t_color, t_layer;        /* uploads, source size */
     GLuint t_lit, t_mat, fbo_light; /* pass 1 targets, source size */
     target scene, half[2], quarter[2], eighth[2], soft[2], out;
+    target emit[2];                 /* point-light map, source / 4 */
     int pic_w, pic_h, out_w, out_h;
     float focus_y;
     unsigned frame;
@@ -308,6 +309,7 @@ int hd2d_init(int gles)
             p_glGetString(GL_VERSION));
 
     static const struct { const char *src, *name; } fs[P_COUNT] = {
+        [P_EMIT] = {hd2d_src_emit_frag, "emit.frag"},
         [P_LIGHT] = {hd2d_src_light_frag, "light.frag"},
         [P_UPSCALE] = {hd2d_src_upscale_frag, "upscale.frag"},
         [P_COC] = {hd2d_src_coc_frag, "coc.frag"},
@@ -349,6 +351,11 @@ int hd2d_init(int gles)
             return -1;
         }
     }
+    for (int k = 0; k < 2; k++)
+        if (target_make(&g.emit[k], SCHED_WIDTH / 4, SCHED_HEIGHT / 4, 1)) {
+            fprintf(stderr, "hd2d: cannot make the light map\n");
+            return -1;
+        }
     GLenum err = p_glGetError();
     if (err != GL_NO_ERROR) {
         fprintf(stderr, "hd2d: GL error 0x%x during setup\n", err);
@@ -363,7 +370,8 @@ void hd2d_shutdown(void)
     if (!g.ready)
         return;
     target *ts[] = {&g.scene, &g.half[0], &g.half[1], &g.quarter[0], &g.quarter[1],
-                    &g.eighth[0], &g.eighth[1], &g.soft[0], &g.soft[1], &g.out};
+                    &g.eighth[0], &g.eighth[1], &g.soft[0], &g.soft[1], &g.out,
+                    &g.emit[0], &g.emit[1]};
     for (size_t k = 0; k < sizeof ts / sizeof *ts; k++)
         target_free(ts[k]);
     GLuint tex[4] = {g.t_color, g.t_layer, g.t_lit, g.t_mat};
@@ -460,9 +468,16 @@ static void bright(const target *src, target *dst, float threshold)
 
 /* Scene analysis on the CPU: which z level is UI, how much of the screen
    is UI (menus), and where the actors are (the focus line). */
-static void analyze(const uint8_t *layers, const sched_ppu_state *st, int *ui_z, float *ui_frac,
-                    float *field_frac, float *focus_target)
+static void analyze(const uint8_t *bgrx, const uint8_t *layers, const sched_ppu_state *st,
+                    int *ui_z, float *ui_frac, float *field_frac, float *focus_target,
+                    float *mean_luma)
 {
+    /* Mean brightness of the picture, every 4th pixel. */
+    double lsum = 0;
+    for (int k = 0; k < SCHED_WIDTH * SCHED_HEIGHT; k += 4)
+        lsum += 0.114 * bgrx[k * 4] + 0.587 * bgrx[k * 4 + 1] + 0.299 * bgrx[k * 4 + 2];
+    *mean_luma = (float)(lsum / (SCHED_WIDTH * SCHED_HEIGHT / 4) / 255.0);
+
     *ui_z = st && st->mode == 1 && st->bg3_priority ? 15 : -1;
     long ui = 0, actors = 0, field = 0;
     double ysum = 0, wsum = 0;
@@ -507,8 +522,14 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const sched_ppu_sta
     g.frame++;
 
     int ui_z;
-    float ui_frac, field_frac, focus_target;
-    analyze(layers, st, &ui_z, &ui_frac, &field_frac, &focus_target);
+    float ui_frac, field_frac, focus_target, mean_luma;
+    analyze(bgrx, layers, st, &ui_z, &ui_frac, &field_frac, &focus_target, &mean_luma);
+    /* Point lights matter in the dark: full below 0.18 mean brightness,
+       gone above 0.42 (daylight). */
+    float dark_target = mean_luma < 0.18f ? 1.0f : mean_luma > 0.42f ? 0.0f
+                                                 : (0.42f - mean_luma) / 0.24f;
+    static float dark_amt = 0.5f;
+    dark_amt += (dark_target - dark_amt) * 0.1f;
     g.focus_y += (focus_target - g.focus_y) * 0.08f;
     /* Menus and full-screen text: ease the scene effects off. */
     float scene_amt = ui_frac > 0.3f ? 0.0f : ui_frac > 0.15f ? (0.3f - ui_frac) / 0.15f : 1.0f;
@@ -534,6 +555,18 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const sched_ppu_sta
     p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, SCHED_WIDTH, SCHED_HEIGHT, GL_RED_INTEGER,
                       GL_UNSIGNED_BYTE, layers);
 
+    /* 0: light sources -> blurred light map. */
+    p_glUseProgram(g.prog[P_EMIT]);
+    p_glUniform1i(U(P_EMIT, "uColor"), 0);
+    p_glUniform1i(U(P_EMIT, "uLayer"), 1);
+    p_glUniform1i(U(P_EMIT, "uUiZ"), ui_z);
+    p_glUniform1f(U(P_EMIT, "uThreshold"), 0.66f);
+    draw_to(g.emit[0].fbo, g.emit[0].w, g.emit[0].h);
+    gauss(&g.emit[0], &g.emit[1], &g.emit[0]);
+    gauss(&g.emit[0], &g.emit[1], &g.emit[0]);
+    bind_tex(0, g.t_color);
+    bind_tex(1, g.t_layer);
+
     /* 1: light. */
     p_glUseProgram(g.prog[P_LIGHT]);
     p_glUniform1i(U(P_LIGHT, "uColor"), 0);
@@ -541,7 +574,10 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const sched_ppu_sta
     p_glUniform1i(U(P_LIGHT, "uUiZ"), ui_z);
     float a = s->effects ? scene_amt : 0.0f;
     p_glUniform4f(U(P_LIGHT, "uAmount"), s->relief * a, s->shadow * a, s->ao * a, s->rim * a);
-    p_glUniform4f(U(P_LIGHT, "uAmount2"), s->haze * a, 0, 0, 0);
+    p_glUniform4f(U(P_LIGHT, "uAmount2"), s->haze * a, s->point_light * a * (0.25f + 0.75f * dark_amt),
+                  0, 0);
+    p_glUniform1i(U(P_LIGHT, "uLightMap"), 2);
+    bind_tex(2, g.emit[0].tex);
     p_glUniform3f(U(P_LIGHT, "uLightDir"), -0.5f, -0.65f, 0.58f);
     p_glUniform3f(U(P_LIGHT, "uKey"), 0.55f, 0.51f, 0.44f);
     p_glUniform3f(U(P_LIGHT, "uAmbient"), 0.47f, 0.5f, 0.58f);
