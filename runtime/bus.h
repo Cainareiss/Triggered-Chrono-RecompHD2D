@@ -1,0 +1,92 @@
+/* 24-bit bus: WRAM, SRAM, ROM, hardware register hooks. */
+#ifndef CT_BUS_H
+#define CT_BUS_H
+
+#include <stdint.h>
+
+#define CT_ROM_SIZE  0x400000u
+#define CT_WRAM_SIZE 0x20000u
+#define CT_SRAM_SIZE 0x2000u
+
+/* Load ROM from path (NULL: $CT_ROM), clear RAM, install built-in hooks.
+   Fatal on any error. */
+void bus_init(const char *rom_path);
+/* Clear WRAM, SRAM, and hardware register state. ROM is kept. */
+void bus_reset(void);
+
+uint8_t  read8(uint32_t addr);
+void     write8(uint32_t addr, uint8_t v);
+uint16_t read16(uint32_t addr);             /* lo at addr, hi at addr+1 (24-bit) */
+/* The byte at addr without an access: no clocks, no hooks (hardware
+   registers read as the last bus value). */
+uint8_t  bus_peek(uint32_t addr);
+void     write16(uint32_t addr, uint16_t v);
+/* A read-modify-write's 16-bit write: high byte first (65C816). */
+void     write16_rmw(uint32_t addr, uint16_t v);
+
+/* Hardware registers $2000-$5FFF in banks $00-$3F/$80-$BF.
+   Unhooked access is fatal. */
+typedef uint8_t (*hw_read_fn)(uint16_t reg);
+typedef void    (*hw_write_fn)(uint16_t reg, uint8_t v);
+void bus_hook(uint16_t reg, hw_read_fn rd, hw_write_fn wr);
+
+/* Test use: if set, called with the WRAM offset ($00000-$1FFFF) of every
+   WRAM byte written, whatever the path (CPU store, WRAM data port, DMA). */
+extern void (*ct_wram_write_hook)(uint32_t off);
+/* Writes per 256-byte WRAM page, ever growing (bus_reset bumps every page):
+   code in WRAM checks them to know its bytes may have changed (overlay.h). */
+extern uint32_t ct_wram_gen[CT_WRAM_SIZE >> 8];
+/* WRAM offsets covered by native overlay code that is running (overlay.h),
+   as one range [ct_wram_watch_lo, lo + ct_wram_watch_len); empty when len
+   is 0. A write inside sets ct_wram_hit, checked at the next native
+   instruction boundary. */
+extern uint32_t ct_wram_watch_lo, ct_wram_watch_len;
+extern int ct_wram_hit;
+
+/* Read handler for write-only registers: returns the last value on the
+   data bus, as hardware does (for LDA abs that is the address high byte).
+   Used for write-only and unused registers (see snes_adapter.c and
+   bus.c for the map). The interpreter's opcode and operand fetches go
+   through read8; generated code has none, so it sets bus_mdr to each
+   instruction's last byte instead (ct_insn in ops.h). */
+extern uint8_t bus_mdr;
+uint8_t bus_open_bus(uint16_t reg);
+
+/* Write handler for read-only registers ($4210-$421F): ignored, as on
+   hardware; noted once per register (hwlog.h). */
+void bus_readonly_write(uint16_t reg, uint8_t v);
+
+/* Write handler for unused addresses ($2184-$21FF, $420E-$420F,
+   $4220-$42FF, $43xC-$43xE, $4380-$43FF): ignored, noted once. */
+void bus_unused_write(uint16_t reg, uint8_t v);
+
+/* $420D MEMSEL bit 0: FastROM enabled for banks $80-$FF. */
+int bus_fastrom(void);
+
+/* Master clocks and count of every read8/write8 since last cleared, each
+   access at its address's speed (bsnes CPU::wait): 6 for $2000-$3FFF,
+   $4200-$5FFF and FastROM, 8 for WRAM, SRAM and SlowROM, 12 for
+   $4000-$41FF. The cycle model (cycles.c) charges instructions from them. */
+extern unsigned ct_bus_clocks, ct_bus_n;
+/* The current instruction's bus accesses in order (the cycle model's
+   cycle-by-cycle view): clocks | CT_BUS_WRITE for writes | CT_BUS_FETCH
+   for the interpreter's operand fetches (ct_bus_fetch set). The first
+   CT_BUS_LOG are kept. */
+#define CT_BUS_LOG   64
+#define CT_BUS_WRITE 0x80
+#define CT_BUS_FETCH 0x40
+extern uint8_t ct_bus_log[CT_BUS_LOG];
+extern uint8_t ct_bus_fetch;
+/* WRAM writes of the current instruction, by bus access number: offset + 1
+   (0: not a WRAM write), and the byte before and after. The frame
+   scheduler rolls back the ones after a frame edge inside the instruction
+   while the frame hook looks at memory. */
+extern uint32_t ct_bus_wram_off[CT_BUS_LOG];
+extern uint8_t ct_bus_wram_old[CT_BUS_LOG], ct_bus_wram_new[CT_BUS_LOG];
+unsigned bus_access_clocks(uint32_t a);
+
+uint8_t *bus_wram(void);
+uint8_t *bus_sram(void);
+const uint8_t *bus_rom(void);
+
+#endif

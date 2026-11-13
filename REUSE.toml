@@ -1,0 +1,56 @@
+version = 1
+
+# Licensing map for chrono-trigger-recomp.
+#
+# The project as a whole is distributed under GPL-3.0-or-later. It is built on
+# ct-recomp (MIT), which itself vendors MIT and ISC components. Those files keep
+# their original licenses and notices; see THIRD_PARTY.md.
+#
+# Precedence "closest": an SPDX header inside a file wins over this map, so a
+# file we rewrite can carry its own GPL-3.0-or-later header.
+
+# Default: everything we add.
+[[annotations]]
+path = "**"
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 jerbanpls"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# Imported from ThisIsAkill/ct-recomp at a6b49257e527d1f219ce6466075b5e035dd8e5f2.
+[[annotations]]
+path = [
+  ".github/**",
+  "CMakeLists.txt",
+  "ROADMAP.md",
+  "frontend/**",
+  "game/**",
+  "recomp/**",
+  "runtime/**",
+  "test/**",
+  "tools/**",
+  "third_party/src/**",
+]
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 Akhil Moola"
+SPDX-License-Identifier = "MIT"
+
+# Files that mix upstream MIT text with our GPL changes.
+[[annotations]]
+path = ["README.md", "THIRD_PARTY.md", ".gitignore"]
+precedence = "closest"
+SPDX-FileCopyrightText = ["2026 Akhil Moola", "2026 jerbanpls"]
+SPDX-License-Identifier = "MIT AND GPL-3.0-or-later"
+
+# zelda3 SNES core, vendored by ct-recomp (commit fbbb3f9).
+[[annotations]]
+path = "third_party/snes/**"
+precedence = "closest"
+SPDX-FileCopyrightText = ["2022 snesrev", "2021 elzo_d", "2026 Akhil Moola"]
+SPDX-License-Identifier = "MIT"
+
+# ares SPC700 core, vendored unmodified by ct-recomp (commit 4cb8d92).
+[[annotations]]
+path = "third_party/ares/**"
+precedence = "closest"
+SPDX-FileCopyrightText = "2004-2025 ares team, Near et al"
+SPDX-License-Identifier = "ISC"

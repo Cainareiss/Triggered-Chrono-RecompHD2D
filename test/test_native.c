@@ -1,0 +1,572 @@
+/* Native dispatch in the frame scheduler (runtime/sched.c), with its own
+ * function table in place of a game's: a hand-written function shaped like
+ * emitter output (ct_insn per instruction, ops.h helpers) runs natively
+ * when the CPU reaches its entry, charges the same cycles the interpreter
+ * would, takes NMIs mid-function, and is interpreted instead when the CPU
+ * doesn't match its declared DB. Each case is checked against the same
+ * bytes run by the interpreter alone. An interrupt that returns anywhere
+ * but the interrupted instruction and stack level is fatal. */
+#include <setjmp.h>
+
+#include "harness.h"
+#include "ops.h"
+#include "sched.h"
+#include "overlay.h"
+
+static int ran_native;
+static long nmis_in_native;
+
+/* $7E2100 / $7E2200: LDX #$0000 / loop: INX / CPX #$4000 / BNE loop /
+   LDA #$42 / STA $10 / RTS. ~1M master clocks: spans several VBlanks. */
+static void native_loop(CPU *cpu, uint32_t base)
+{
+    long nmi0 = sched_nmi_count();
+    ran_native++;
+    cpu_enter(cpu, base, 1, 0);
+    ct_insn(cpu, base + 0x0, 0xA2, 0x00);
+    ldx16(cpu, 0x0000);
+loop:
+    ct_insn(cpu, base + 0x3, 0xE8, 0xE8);
+    cpu->X = (uint16_t)(cpu->X + 1);
+    set_nz16(cpu, cpu->X);
+    ct_insn(cpu, base + 0x4, 0xE0, 0x40);
+    cmp16(cpu, cpu->X, 0x4000);
+    ct_insn(cpu, base + 0x7, 0xD0, 0xFA);
+    if (!cpu->z) {
+        ct_cyc_taken = 1;
+        goto loop;
+    }
+    ct_insn(cpu, base + 0x9, 0xA9, 0x42);
+    lda8(cpu, 0x42);
+    ct_insn(cpu, base + 0xB, 0x85, 0x10);
+    write8(ea_dp(cpu, 0x10), a8(cpu));
+    ct_insn(cpu, base + 0xD, 0x60, 0x60);
+    nmis_in_native += sched_nmi_count() - nmi0;
+    op_rts(cpu);
+}
+
+/* Calls into code that isn't compiled (#30), shaped like emitter output.
+   $7E2300: JSR $2400 / LDA #$07 / STA $13 / RTS, where $7E2400 is the
+   loop above, not in the table: interpreted, across NMIs.
+   $7E2600: JSR $2500 / LDA #$0007 / STA $13 / SEP #$20 / RTS, where
+   $7E2500 is REP #$20 / RTS: it comes back with m0, which the compiled
+   continuation (for m1: the same code as $7E2300's) doesn't cover, so the
+   rest is interpreted. */
+static int ran_caller;
+
+static void native_caller(CPU *cpu, uint32_t base, uint16_t callee)
+{
+    ran_caller++;
+    cpu_enter(cpu, base, 1, 0);
+    const uint16_t s0 = cpu->S;
+    ct_insn(cpu, base, 0x20, (uint8_t)(callee >> 8));
+    push16(cpu, (uint16_t)(base + 2));
+    if (!ct_call_interp(cpu, 0x7E0000 | callee, base + 3, 2) || cpu->m != 1 || cpu->x != 0) {
+        ct_interp_rest(cpu, s0);
+        return;
+    }
+    ct_insn(cpu, base + 3, 0xA9, 0x07);
+    lda8(cpu, 0x07);
+    ct_insn(cpu, base + 5, 0x85, 0x13);
+    write8(ea_dp(cpu, 0x13), a8(cpu));
+    ct_insn(cpu, base + 7, 0xE2, 0x20);
+    op_sep(cpu, 0x20);
+    ct_insn(cpu, base + 9, 0x60, 0x60);
+    op_rts(cpu);
+}
+
+static void f_2300(CPU *cpu) { native_caller(cpu, 0x7E2300, 0x2400); }
+static void f_2600(CPU *cpu) { native_caller(cpu, 0x7E2600, 0x2500); }
+
+/* $7E2900: loop: INC $16 / BRA loop, natively, never returning (a main
+   loop): the CPU runs as a coroutine, so each sched_run_frame still returns
+   after one frame. */
+static void f_2900(CPU *cpu)
+{
+    cpu_enter(cpu, 0x7E2900, 1, 0);
+loop:
+    ct_insn(cpu, 0x7E2900, 0xE6, 0x16);
+    write8(ea_dp(cpu, 0x16), (uint8_t)(read8(ea_dp(cpu, 0x16)) + 1));
+    ct_insn(cpu, 0x7E2902, 0x80, 0xFC);
+    ct_cyc_taken = 1;
+    goto loop;
+}
+
+/* Tail jumps (#101), shaped like emitter output. At base:
+     INC lo / BNE +2 / INC lo+1 / LDA lo+1 / CMP #$08 / BEQ +3 / JMP base+$10 / RTS
+   and at base+$10: JMP base, so the pair jumps back and forth $800 times
+   and then returns. $7E2D00 jumps natively (ct_tail); $7E2E00 hands the
+   rest over at the other's entry each time (ct_tail_rest), as a table case
+   does in the scheduler. Neither may nest a C frame per jump. */
+static const uint8_t pingpong_bytes[] = {0xE6, 0x00, 0xD0, 0x02, 0xE6, 0x00, 0xA5, 0x00,
+                                         0xC9, 0x08, 0xF0, 0x03, 0x4C, 0x10, 0x00, 0x60};
+
+static void pingpong_install(uint8_t *w, uint16_t base, uint8_t lo)
+{
+    memcpy(w + base, pingpong_bytes, sizeof pingpong_bytes);
+    w[base + 1] = lo;
+    w[base + 5] = w[base + 7] = (uint8_t)(lo + 1);
+    w[base + 0xD] = (uint8_t)(base + 0x10);
+    w[base + 0xE] = (uint8_t)(base >> 8);
+    w[base + 0x10] = 0x4C;   /* JMP base */
+    w[base + 0x11] = (uint8_t)base;
+    w[base + 0x12] = (uint8_t)(base >> 8);
+}
+
+static void inc_dp(CPU *cpu, uint8_t d)
+{
+    uint8_t v = (uint8_t)(read8(ea_dp(cpu, d)) + 1);
+    write8(ea_dp(cpu, d), v);
+    set_nz8(cpu, v);
+}
+
+/* The counting part; 1 if it returned (RTS), 0 at the JMP. */
+static int pingpong_step(CPU *cpu, uint32_t base, uint8_t lo)
+{
+    ct_insn(cpu, base + 0x0, 0xE6, lo);
+    inc_dp(cpu, lo);
+    ct_insn(cpu, base + 0x2, 0xD0, 0x02);
+    if (cpu->z) {
+        ct_insn(cpu, base + 0x4, 0xE6, (uint8_t)(lo + 1));
+        inc_dp(cpu, (uint8_t)(lo + 1));
+    } else {
+        ct_cyc_taken = 1;
+    }
+    ct_insn(cpu, base + 0x6, 0xA5, (uint8_t)(lo + 1));
+    lda8(cpu, read8(ea_dp(cpu, (uint8_t)(lo + 1))));
+    ct_insn(cpu, base + 0x8, 0xC9, 0x08);
+    cmp8(cpu, a8(cpu), 0x08);
+    ct_insn(cpu, base + 0xA, 0xF0, 0x03);
+    if (cpu->z) {
+        ct_cyc_taken = 1;
+        ct_insn(cpu, base + 0xF, 0x60, 0x60);
+        op_rts(cpu);
+        return 1;
+    }
+    ct_insn(cpu, base + 0xC, 0x4C, (uint8_t)((base + 0x10) >> 8));
+    return 0;
+}
+
+static void f_2D10(CPU *cpu);
+static void f_2D00(CPU *cpu)
+{
+    cpu_enter(cpu, 0x7E2D00, 1, 0);
+    if (!pingpong_step(cpu, 0x7E2D00, 0x18))
+        ct_tail(cpu, f_2D10);
+}
+
+static void f_2D10(CPU *cpu)
+{
+    cpu_enter(cpu, 0x7E2D10, 1, 0);
+    ct_insn(cpu, 0x7E2D10, 0x4C, 0x2D);
+    ct_tail(cpu, f_2D00);
+}
+
+static void f_2E00(CPU *cpu)
+{
+    cpu_enter(cpu, 0x7E2E00, 1, 0);
+    const uint16_t s0 = cpu->S;
+    if (!pingpong_step(cpu, 0x7E2E00, 0x1A)) {
+        cpu->PC = 0x2E10;
+        ct_tail_rest(cpu, s0);
+    }
+}
+
+static void f_2E10(CPU *cpu)
+{
+    cpu_enter(cpu, 0x7E2E10, 1, 0);
+    const uint16_t s0 = cpu->S;
+    ct_insn(cpu, 0x7E2E10, 0x4C, 0x2E);
+    cpu->PC = 0x2E00;
+    ct_tail_rest(cpu, s0);
+}
+
+static void f_2100(CPU *cpu) { native_loop(cpu, 0x7E2100); }
+static void f_2200(CPU *cpu) { native_loop(cpu, 0x7E2200); }
+
+/* The tables a game's generated ct_funcs.c would provide. */
+const ct_func ct_funcs[] = {
+    {"TestLoop", 0x7E2100, 1, 0, 14, -1, -1, 0, f_2100},
+    {"TestLoopDB55", 0x7E2200, 1, 0, 14, 0x55, -1, 0, f_2200},   /* assumes DB=$55 */
+    {"TestCaller", 0x7E2300, 1, 0, 10, -1, -1, 0, f_2300},
+    {"TestCallerMX", 0x7E2600, 1, 0, 10, -1, -1, 0, f_2600},
+    {"TestForever", 0x7E2900, 1, 0, 4, -1, -1, 0, f_2900},
+    {"TestTailA", 0x7E2D00, 1, 0, 16, -1, -1, 0, f_2D00},
+    {"TestTailB", 0x7E2D10, 1, 0, 3, -1, -1, 0, f_2D10},
+    {"TestRestA", 0x7E2E00, 1, 0, 16, -1, -1, 0, f_2E00},
+    {"TestRestB", 0x7E2E10, 1, 0, 3, -1, -1, 0, f_2E10},
+};
+const unsigned ct_func_count = 9;
+const ct_extern ct_externs[] = {{0, 0, 0}};
+const unsigned ct_extern_count = 0;
+const ct_jumptable ct_jumptables[] = {{0, 0}};
+const unsigned ct_jumptable_count = 0;
+/* An overlay (#92): code in WRAM at $7E2800, LDA #$42 / STA $15 / RTS, run
+   natively only while those 5 bytes hash to what it was compiled from. */
+static const uint8_t ovl_bytes[] = {0xA9, 0x42, 0x85, 0x15, 0x60};
+static int ran_overlay;
+
+static void f_ovl_2800(CPU *cpu)
+{
+    ran_overlay++;
+    cpu_enter(cpu, 0x7E2800, 1, 0);
+    ct_insn(cpu, 0x7E2800, 0xA9, 0x42);
+    lda8(cpu, 0x42);
+    ct_insn(cpu, 0x7E2802, 0x85, 0x15);
+    write8(ea_dp(cpu, 0x15), a8(cpu));
+    ct_insn(cpu, 0x7E2804, 0x60, 0x60);
+    op_rts(cpu);
+}
+
+/* $7E2A00: LDA #$07 / STA $7E2A06 / LDA #$01 / STA $17 / RTS: it patches the
+   operand of its own next instruction to $07. Compiled as it was loaded
+   (LDA #$01), which is stale once the STA lands. */
+static const uint8_t patch_bytes[] = {0xA9, 0x07, 0x8F, 0x06, 0x2A, 0x7E, 0xA9, 0x01, 0x85, 0x17,
+                                      0x60};
+
+static void f_ovl_2A00(CPU *cpu)
+{
+    ran_overlay++;
+    cpu_enter(cpu, 0x7E2A00, 1, 0);
+    ct_insn(cpu, 0x7E2A00, 0xA9, 0x07);
+    lda8(cpu, 0x07);
+    ct_insn(cpu, 0x7E2A02, 0x8F, 0x7E);
+    write8(0x7E2A06, a8(cpu));
+    ct_insn(cpu, 0x7E2A06, 0xA9, 0x01);
+    lda8(cpu, 0x01);   /* the stale operand */
+    ct_insn(cpu, 0x7E2A08, 0x85, 0x17);
+    write8(ea_dp(cpu, 0x17), a8(cpu));
+    ct_insn(cpu, 0x7E2A0A, 0x60, 0x60);
+    op_rts(cpu);
+}
+
+/* $7E2B00: JML $7E2C00, handing the rest to the interpreter; $7E2C00 then
+   overwrites $7E2B00 (STA $7E2B00 / RTS). Once handed off the overlay runs
+   none of its own code: no strict failure. */
+static const uint8_t handoff_bytes[] = {0x5C, 0x00, 0x2C, 0x7E};
+
+static void f_ovl_2B00(CPU *cpu)
+{
+    ran_overlay++;
+    cpu_enter(cpu, 0x7E2B00, 1, 0);
+    const uint16_t s0 = cpu->S;
+    ct_insn(cpu, 0x7E2B00, 0x5C, 0x7E);
+    cpu->PB = 0x7E;
+    cpu->PC = 0x2C00;
+    ct_overlay_rest(cpu, s0);
+}
+
+const ct_overlay_func ct_overlay_funcs[] = {
+    {"TestOverlay", 0x7E2800, 1, 0, 0x7E2800, 0x7E2804, 0xC029F4EF3B675BA0ull, f_ovl_2800,
+     ovl_bytes, 0x7E2800, sizeof ovl_bytes},
+    {"TestSelfPatch", 0x7E2A00, 1, 0, 0x7E2A00, 0x7E2A0A, 0xEFF53BD7C943CCA2ull, f_ovl_2A00,
+     patch_bytes, 0x7E2A00, sizeof patch_bytes},
+    {"TestHandoff", 0x7E2B00, 1, 0, 0x7E2B00, 0x7E2B03, 0xCB21C33BE735E62Bull, f_ovl_2B00,
+     handoff_bytes, 0x7E2B00, sizeof handoff_bytes},
+};
+const unsigned ct_overlay_func_count = 3;
+
+typedef struct {
+    uint64_t clock, native_insns, interp_insns;
+    char profile[1024];
+    long nmis;
+    uint8_t w10, w11, w12, w13, w14, w15, w17, w19, w1b;
+    size_t stack;
+    int prof_depth;
+    CPU cpu;
+} Outcome;
+
+/* Boot a WRAM program that enables NMI, JSRs to `target`, then idles in
+   WAI; NMI handler (ROM stub -> $000500) counts in $11. */
+static const uint8_t nmi_count[] = {0xE6, 0x11, 0xAD, 0x10, 0x42, 0x40};   /* INC $11 / LDA $4210 / RTI */
+/* LDA $4210 / LDA 2,S / INC A / STA 2,S / RTI: returns one byte past the
+   interrupted instruction. */
+static const uint8_t nmi_skew[] = {0xAD, 0x10, 0x42, 0xA3, 0x02, 0x1A, 0x83, 0x02, 0x40};
+
+static int ovl_patch;
+
+static Outcome run_with(uint16_t target, int native, const uint8_t *nmi, size_t nmi_len)
+{
+    static const uint8_t loop_bytes[] = {0xA2, 0x00, 0x00, 0xE8, 0xE0, 0x00, 0x40, 0xD0, 0xFA,
+                                         0xA9, 0x42, 0x85, 0x10, 0x60};
+    uint8_t prog[] = {
+        0xA9, 0x80, 0x8D, 0x00, 0x42,               /* LDA #$80 / STA $4200 */
+        0x20, (uint8_t)target, (uint8_t)(target >> 8), /* JSR target */
+        0xA9, 0x01, 0x85, 0x12,                     /* LDA #$01 / STA $12 */
+        0xCB, 0x80, 0xFD,                           /* idle: WAI / BRA idle */
+    };
+    bus_reset();
+    uint8_t *w = bus_wram();
+    memcpy(w + 0x2000, prog, sizeof prog);
+    memcpy(w + 0x2100, loop_bytes, sizeof loop_bytes);
+    memcpy(w + 0x2200, loop_bytes, sizeof loop_bytes);
+    memcpy(w + 0x0500, nmi, nmi_len);
+    static const uint8_t caller[] = {0x20, 0x00, 0x00, 0xA9, 0x07, 0x85, 0x13, 0xE2, 0x20, 0x60};
+    memcpy(w + 0x2300, caller, sizeof caller);
+    w[0x2302] = 0x24;   /* JSR $2400 */
+    memcpy(w + 0x2400, loop_bytes, sizeof loop_bytes);
+    /* JSR $2500 / LDA #$0007 / STA $13 / SEP #$20 / RTS, as it runs in m0 */
+    static const uint8_t caller_m0[] = {0x20, 0x00, 0x25, 0xA9, 0x07, 0x00, 0x85, 0x13, 0xE2,
+                                        0x20, 0x60};
+    memcpy(w + 0x2600, caller_m0, sizeof caller_m0);
+    memcpy(w + 0x2800, ovl_bytes, sizeof ovl_bytes);
+    memcpy(w + 0x2A00, patch_bytes, sizeof patch_bytes);
+    memcpy(w + 0x2B00, handoff_bytes, sizeof handoff_bytes);
+    static const uint8_t overwrite[] = {0x8F, 0x00, 0x2B, 0x7E, 0x60};   /* STA $7E2B00 / RTS */
+    memcpy(w + 0x2C00, overwrite, sizeof overwrite);
+    pingpong_install(w, 0x2D00, 0x18);
+    pingpong_install(w, 0x2E00, 0x1A);
+    if (ovl_patch)
+        w[0x2801] = 0x43;   /* LDA #$43: the bytes no longer match the compiled code */
+    static const uint8_t to_m0[] = {0xC2, 0x20, 0x60};   /* REP #$20 / RTS */
+    memcpy(w + 0x2500, to_m0, sizeof to_m0);
+
+    static CPU c;
+    interp_reset(&c);   /* power-on: also clears a pending WAI */
+    c.e = 0;
+    c.PB = 0x7E;
+    c.PC = 0x2000;
+    c.DB = 0x00;
+    c.m = 1;
+    c.x = 0;
+    c.S = 0x01FF;
+    sched_set_native(native);
+    sched_init(&c);
+    while (sched_frame_count() < 6)
+        sched_run_frame();
+    CHECK(sched_frame_count() == 6, "stopped at frame %ld", sched_frame_count());
+    Outcome o = {0};
+    o.clock = sched_clock();
+    o.native_insns = sched_native_insns();
+    o.interp_insns = sched_interp_insns();
+    FILE *f = tmpfile();
+    if (f) {
+        sched_profile_report(f, 3);
+        rewind(f);
+        size_t n = fread(o.profile, 1, sizeof o.profile - 1, f);
+        o.profile[n] = 0;
+        fclose(f);
+    }
+    o.nmis = sched_nmi_count();
+    o.w10 = w[0x10];
+    o.w11 = w[0x11];
+    o.w12 = w[0x12];
+    o.w13 = w[0x13];
+    o.w14 = w[0x14];
+    o.w15 = w[0x15];
+    o.w17 = w[0x17];
+    o.w19 = w[0x19];
+    o.w1b = w[0x1B];
+    o.stack = sched_max_stack();
+    o.prof_depth = sched_profile_depth();
+    o.cpu = c;
+    return o;
+}
+
+static Outcome run(uint16_t target, int native)
+{
+    return run_with(target, native, nmi_count, sizeof nmi_count);
+}
+
+static jmp_buf fatal_jmp;
+static char fatal_msg[256];
+
+static void on_fatal(const char *msg)
+{
+    snprintf(fatal_msg, sizeof fatal_msg, "%s", msg);
+    longjmp(fatal_jmp, 1);
+}
+
+static int same(const Outcome *a, const Outcome *b)
+{
+    return a->clock == b->clock && a->nmis == b->nmis && a->w10 == b->w10 && a->w11 == b->w11 &&
+           a->w12 == b->w12 && a->w13 == b->w13 && a->w14 == b->w14 && a->cpu.A == b->cpu.A && a->cpu.X == b->cpu.X &&
+           a->cpu.S == b->cpu.S && a->cpu.PC == b->cpu.PC && a->cpu.PB == b->cpu.PB;
+}
+
+int main(void)
+{
+    th_bus_init();
+
+    ran_native = 0;
+    Outcome ref = run(0x2100, 0);
+    CHECK(ran_native == 0, "interpreter only: native never ran");
+    CHECK(ref.w10 == 0x42 && ref.w12 == 1 && ref.nmis >= 5, "program ran: $10=%02X $12=%02X nmis %ld",
+          ref.w10, ref.w12, ref.nmis);
+
+    ran_native = 0;
+    nmis_in_native = 0;
+    Outcome nat = run(0x2100, 1);
+    CHECK(ran_native == 1, "TestLoop dispatched natively once: %d", ran_native);
+    CHECK(nmis_in_native >= 2, "NMIs taken mid-function: %ld", nmis_in_native);
+    CHECK(same(&ref, &nat), "native == interpreter: clock %llu vs %llu, nmis %ld vs %ld",
+          (unsigned long long)nat.clock, (unsigned long long)ref.clock, nat.nmis, ref.nmis);
+    CHECK(nat.w11 == ref.w11, "NMI handler count %u vs %u", nat.w11, ref.w11);
+
+    /* Coverage: the loop's 3 x $4000 instructions run natively in one run;
+       in the interpreter-only run they're charged to the function they run
+       in, $7E2100. Both runs execute the same instructions in total. */
+    CHECK(ref.native_insns == 0 && ref.interp_insns > 3 * 0x4000,
+          "interpreter only: %llu native, %llu interpreted", (unsigned long long)ref.native_insns,
+          (unsigned long long)ref.interp_insns);
+    CHECK(nat.native_insns >= 3 * 0x4000 && nat.native_insns + nat.interp_insns ==
+              ref.interp_insns, "native run: %llu native + %llu interpreted vs %llu",
+          (unsigned long long)nat.native_insns, (unsigned long long)nat.interp_insns,
+          (unsigned long long)ref.interp_insns);
+    CHECK(strstr(ref.profile, "$7E2100 m1x0e0") != NULL,
+          "interpreted loop charged to its entry:\n%s", ref.profile);
+
+    /* DB assumption: TestLoopDB55 says DB=$55, the CPU has DB=$00. */
+    ran_native = 0;
+    Outcome ref2 = run(0x2200, 0);
+    Outcome db = run(0x2200, 1);
+    CHECK(ran_native == 0, "DB mismatch: interpreted, not dispatched: %d", ran_native);
+    CHECK(same(&ref2, &db), "DB mismatch run == interpreter");
+
+    /* An NMI handler that moves the return address: fatal, naming both
+       contexts, rather than native code carrying on. */
+    fatal_msg[0] = 0;
+    ct_fatal_hook = on_fatal;
+    if (!setjmp(fatal_jmp))
+        run_with(0x2100, 1, nmi_skew, sizeof nmi_skew);
+    ct_fatal_hook = NULL;
+    CHECK(strstr(fatal_msg, "NMI did not return to the interrupted native code") &&
+              strstr(fatal_msg, "interrupted at $7E21"),
+          "changed return context is fatal: \"%s\"", fatal_msg);
+
+    /* Native code calling into interpreted code (#30). */
+    Outcome ref3 = run(0x2300, 0);
+    ran_caller = ran_native = 0;
+    Outcome call = run(0x2300, 1);
+    CHECK(ran_caller == 1 && ran_native == 0, "caller native, callee interpreted: %d %d",
+          ran_caller, ran_native);
+    CHECK(ref3.w10 == 0x42 && ref3.w13 == 0x07 && ref3.nmis >= 5, "callee and caller ran");
+    CHECK(same(&ref3, &call), "native caller == interpreter: clock %llu vs %llu, nmis %ld vs %ld",
+          (unsigned long long)call.clock, (unsigned long long)ref3.clock, call.nmis, ref3.nmis);
+    CHECK(call.w11 == ref3.w11, "NMIs inside the interpreted callee: %u vs %u", call.w11,
+          ref3.w11);
+    Outcome ref4 = run(0x2600, 0);
+    ran_caller = 0;
+    Outcome mx = run(0x2600, 1);
+    CHECK(ran_caller == 1, "M/X caller dispatched natively");
+    CHECK(ref4.w13 == 0x07 && ref4.w14 == 0x00 && ref4.w12 == 1, "rest ran 16-bit: $13 %02X $14 %02X",
+          ref4.w13, ref4.w14);
+    CHECK(same(&ref4, &mx), "callee changed M: rest interpreted == interpreter: clock %llu vs %llu",
+          (unsigned long long)mx.clock, (unsigned long long)ref4.clock);
+    /* The profile charges the interpreted rest to where native code handed
+       over ($7E2603, inside TestCallerMX, in m0), not to whatever entry is
+       on the profile's call stack. */
+    CHECK(strstr(mx.profile, "$7E2603 m0x0e0 TestCallerMX") &&
+              strstr(mx.profile, "handed over to the interpreter here"),
+          "hand-off charged to its own row:\n%s", mx.profile);
+
+    /* Tail jumps (#101): $800 jumps each way, natively and by hand-off,
+       with the C stack flat (a C frame per jump would be tens of KB). */
+    {
+        Outcome tref = run(0x2D00, 0), tn = run(0x2D00, 1);
+        CHECK(tref.w19 == 0x08 && same(&tref, &tn), "native tails == interpreter: $19 %02X, %d",
+              tn.w19, same(&tref, &tn));
+        CHECK(tn.stack > 0 && tn.stack < 16384, "native tails: C stack %zu bytes", tn.stack);
+        Outcome rref = run(0x2E00, 0), rn = run(0x2E00, 1);
+        CHECK(rref.w1b == 0x08 && same(&rref, &rn), "hand-offs == interpreter: $1B %02X, %d",
+              rn.w1b, same(&rref, &rn));
+        CHECK(rn.stack > 0 && rn.stack < 16384, "hand-offs: C stack %zu bytes", rn.stack);
+        /* the profile's call stack: every entry popped once it returned
+           (by S), the $800 hand-offs in one frame never piling up */
+        CHECK(tn.prof_depth == 0 && rn.prof_depth == 0 && rref.prof_depth == 0,
+              "profile call stack empty at idle: %d %d %d", tn.prof_depth, rn.prof_depth,
+              rref.prof_depth);
+    }
+
+    /* Overlays (#92): code in WRAM runs natively while its bytes match. */
+    ran_overlay = 0;
+    Outcome ov = run(0x2800, 1);
+    CHECK(ran_overlay == 1 && ov.w15 == 0x42, "matching bytes: overlay native (%d), $15=%02X",
+          ran_overlay, ov.w15);
+    ran_overlay = 0;
+    ovl_patch = 1;
+    Outcome pat = run(0x2800, 1);
+    ovl_patch = 0;
+    CHECK(ran_overlay == 0 && pat.w15 == 0x43, "patched byte: interpreted (%d), $15=%02X",
+          ran_overlay, pat.w15);
+    Outcome ovi = run(0x2800, 0);
+    CHECK(same(&ov, &ovi) && ov.w15 == ovi.w15, "overlay native == interpreter");
+
+    /* Overlay code that overwrites itself while running natively: strict
+       mode fails loudly; otherwise the interpreter takes over from the next
+       instruction and runs the patched code, as the interpreter alone does. */
+    Outcome pref = run(0x2A00, 0);
+    CHECK(pref.w17 == 0x07, "interpreter runs the patched LDA: $17=%02X", pref.w17);
+    fatal_msg[0] = 0;
+    ct_fatal_hook = on_fatal;
+    ct_overlay_strict = 1;
+    if (!setjmp(fatal_jmp))
+        run(0x2A00, 1);
+    ct_fatal_hook = NULL;
+    CHECK(strstr(fatal_msg, "code of overlay TestSelfPatch changed while it ran natively") != NULL,
+          "strict: fails loudly: \"%s\"", fatal_msg);
+    ct_overlay_strict = 0;
+    ran_overlay = 0;
+    Outcome pfb = run(0x2A00, 1);
+    ct_overlay_strict = 1;
+    CHECK(ran_overlay == 1 && pfb.w17 == 0x07 && same(&pref, &pfb),
+          "fallback: entered natively (%d), finished interpreted: $17=%02X, same as interpreter %d",
+          ran_overlay, pfb.w17, same(&pref, &pfb));
+
+    /* Handed off, then overwritten: no strict failure. */
+    fatal_msg[0] = 0;
+    ct_fatal_hook = on_fatal;
+    ran_overlay = 0;
+    Outcome hoff = run(0x2B00, 1);
+    ct_fatal_hook = NULL;
+    Outcome hoffi = run(0x2B00, 0);
+    CHECK(!fatal_msg[0] && ran_overlay == 1 && same(&hoff, &hoffi),
+          "handed-off overlay overwritten: no failure (\"%s\"), ran %d, same %d", fatal_msg,
+          ran_overlay, same(&hoff, &hoffi));
+
+    /* Native code that never returns: one frame per sched_run_frame all the
+       same, and it keeps running across them. */
+    {
+        static const uint8_t forever[] = {0xE6, 0x16, 0x80, 0xFC};
+        bus_reset();
+        memcpy(bus_wram() + 0x2900, forever, sizeof forever);
+        static CPU fc;
+        interp_reset(&fc);
+        fc.e = 0;
+        fc.PB = 0x7E;
+        fc.PC = 0x2900;
+        fc.m = 1;
+        fc.x = 0;
+        fc.S = 0x01FF;
+        sched_set_native(1);
+        sched_init(&fc);
+        long r1 = sched_run_frame(), r2 = sched_run_frame();
+        uint8_t c2 = bus_wram()[0x16];
+        long r3 = sched_run_frame();
+        CHECK(r1 == 1 && r2 == 1 && r3 == 1 && sched_frame_count() == 3,
+              "a frame per call: %ld %ld %ld, count %ld", r1, r2, r3, sched_frame_count());
+        CHECK(bus_wram()[0x16] != c2, "still running in frame 3");
+    }
+
+    /* The cached check follows CPU writes: a patch, then the original back. */
+    bus_reset();
+    memcpy(bus_wram() + 0x2800, ovl_bytes, sizeof ovl_bytes);
+    overlay_init();
+    CPU oc;
+    cpu_init(&oc);
+    oc.PB = 0x7E;
+    oc.PC = 0x2800;
+    oc.m = 1;
+    oc.x = 0;
+    int a0 = overlay_lookup(&oc) != NULL;
+    write8(0x7E2801, 0x43);
+    int a1 = overlay_lookup(&oc) != NULL;
+    write8(0x7E2801, 0x42);
+    int a2 = overlay_lookup(&oc) != NULL;
+    oc.m = 0;
+    int a3 = overlay_lookup(&oc) != NULL;
+    CHECK(a0 && !a1 && a2 && !a3, "lookup: match %d, patched %d, restored %d, other M %d", a0, a1,
+          a2, a3);
+
+    return th_report("native");
+}

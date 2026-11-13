@@ -1,8 +1,11 @@
-# game data: never commit
+# Game data: never commit
 rom/*
 !rom/.gitkeep
+roms/
 *.sfc
 *.smc
+*.SFC
+*.SMC
 *.nds
 *.nsp
 *.xci
@@ -10,8 +13,10 @@ rom/*
 prod.keys
 title.keys
 
-# build output
+# Build and generated output
 build/
+build2/
+build-dbg/
 out/
 *.o
 *.obj
@@ -20,3 +25,12 @@ out/
 *.exe
 *.AppImage
 __pycache__/
+*.pyc
+
+# Local session files (from upstream)
+?LAUDE.md
+CT_WORKFLOW.md
+KICKOFF*.md
+.[c]laude/
+notes/
+SESSION*.md
