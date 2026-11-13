@@ -163,8 +163,8 @@ static void pump(events *e)
                 e->quit = 1;
             else
                 e->key = 1;
-        } else if (ev.type == SDL_CONTROLLERBUTTONDOWN) {
-            e->key = 1;
+        } else if (ev.type == SDL_CONTROLLERBUTTONDOWN || ev.type == SDL_FINGERDOWN) {
+            e->key = 1;   /* a tap counts too (phones) */
         } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {
             for (int k = 0; k < 4; k++)
                 if (!pads[k]) {

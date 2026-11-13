@@ -56,7 +56,8 @@ SPDX-License-Identifier = "ISC"
 
 # Upstream files with our (GPL-3.0-or-later) changes: the PPU layer G-buffer,
 # its scheduler plumbing, the HD-2D frontend integration, build wiring, the
-# engine-only first run and the ROM SHA-1 check.
+# engine-only first run, the ROM SHA-1 check, the touch overlay hookup and
+# the Android (CT_ANDROID) build.
 [[annotations]]
 path = [
   "third_party/snes/ppu.c",

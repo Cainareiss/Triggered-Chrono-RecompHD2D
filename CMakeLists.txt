@@ -28,12 +28,20 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT CMAKE_C_FLAGS_DEBUG MATCHES "-O")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Og")
 endif()
 
-find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
-
 # Packaging builds (docs/PACKAGING.md): the engine programs only, with no
 # game directory added even when $CT_ROM is set, so nothing generated from a
 # ROM can reach the build or `cmake --install`.
 option(CT_ENGINE_ONLY "Build only the engine programs, never game code" OFF)
+
+# port: Android (docs/ANDROID-BUILD.md), from android/'s Gradle build: the
+# engine and frontend as libmain.so (SDL's Java side loads it), SDL2 built
+# from source, no Python, tests or install. Implies CT_ENGINE_ONLY.
+option(CT_ANDROID "Build libmain.so for the Android app (android/)" OFF)
+if(CT_ANDROID)
+    set(CT_ENGINE_ONLY ON CACHE BOOL "" FORCE)
+else()
+    find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+endif()
 
 set(CT_WARN -Wall -Wextra -Wpedantic)
 
@@ -81,7 +89,32 @@ target_link_libraries(ct_sched PUBLIC ct_interp)
 target_compile_options(ct_sched PRIVATE ${CT_WARN})
 
 # ---- SDL2 input mapping (optional: skipped when SDL2 isn't installed) ----
-find_package(SDL2 CONFIG QUIET)
+if(CT_ANDROID)
+    # port: SDL2 2.32.10 built here as libSDL2.so. android/app/build.gradle
+    # unpacks the release tarball (SHA-256 checked) for its Java sources and
+    # passes CT_SDL2_SOURCE_DIR; without it CMake fetches the same tarball.
+    set(CT_SDL2_SOURCE_DIR "" CACHE PATH "Unpacked SDL2-2.32.10 source (Android)")
+    if(NOT EXISTS "${CT_SDL2_SOURCE_DIR}/CMakeLists.txt")   # e.g. an IDE sync before fetchSdl
+        include(FetchContent)
+        FetchContent_Declare(sdl2_src
+            URL https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz
+            URL_HASH SHA256=5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+        FetchContent_GetProperties(sdl2_src)
+        if(NOT sdl2_src_POPULATED)
+            FetchContent_Populate(sdl2_src)
+        endif()
+        set(CT_SDL2_SOURCE_DIR ${sdl2_src_SOURCE_DIR})
+    endif()
+    set(SDL_SHARED ON CACHE BOOL "" FORCE)
+    set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+    set(SDL_TEST OFF CACHE BOOL "" FORCE)
+    set(SDL2_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
+    add_subdirectory(${CT_SDL2_SOURCE_DIR} ${CMAKE_BINARY_DIR}/sdl2 EXCLUDE_FROM_ALL)
+    set(SDL2_FOUND TRUE)
+else()
+    find_package(SDL2 CONFIG QUIET)
+endif()
 # Hosts with the SDL2 runtime but no development package (immutable distros
 # such as Bazzite): take the headers from the official release tarball and
 # link the system library. Packaging builds (Flatpak, AppImage) have a full
@@ -108,9 +141,10 @@ if(NOT SDL2_FOUND AND CT_SDL2_SYSTEM_LIB)
     endif()
 endif()
 if(SDL2_FOUND)
-    add_library(ct_input STATIC frontend/input.c)
+    # port: the on-screen touch controller (touch.h) and its GL drawer.
+    add_library(ct_input STATIC frontend/input.c frontend/touch.c frontend/touch_gl.c)
     target_include_directories(ct_input PUBLIC frontend)
-    target_link_libraries(ct_input PUBLIC SDL2::SDL2)
+    target_link_libraries(ct_input PUBLIC SDL2::SDL2 m)
     target_compile_options(ct_input PRIVATE ${CT_WARN})
 
     # chrono-recomp: HD-2D renderer (frontend/hd2d), OpenGL 3.3 / ES 3.0
@@ -119,6 +153,16 @@ if(SDL2_FOUND)
         bright.frag gauss.frag final.frag)
     list(TRANSFORM CT_HD2D_SHADERS PREPEND ${CMAKE_SOURCE_DIR}/frontend/hd2d/shaders/)
     set(CT_HD2D_GEN ${CMAKE_BINARY_DIR}/hd2d_gen/hd2d_shaders.h)
+    if(CT_ANDROID)   # port: no Python: the same header from a CMake script
+        add_custom_command(
+            OUTPUT ${CT_HD2D_GEN}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/hd2d_gen
+            COMMAND ${CMAKE_COMMAND} -DOUT=${CT_HD2D_GEN} -DPREFIX=hd2d_src
+                    "-DFILES=${CT_HD2D_SHADERS}" -P ${CMAKE_SOURCE_DIR}/tools/embed_text.cmake
+            DEPENDS ${CT_HD2D_SHADERS} ${CMAKE_SOURCE_DIR}/tools/embed_text.cmake
+            COMMENT "hd2d shaders"
+            VERBATIM)
+    else()
     add_custom_command(
         OUTPUT ${CT_HD2D_GEN}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/hd2d_gen
@@ -127,6 +171,7 @@ if(SDL2_FOUND)
         DEPENDS ${CT_HD2D_SHADERS} ${CMAKE_SOURCE_DIR}/tools/embed_text.py
         COMMENT "hd2d shaders"
         VERBATIM)
+    endif()
     add_library(ct_hd2d STATIC frontend/hd2d/hd2d.c ${CT_HD2D_GEN})
     target_include_directories(ct_hd2d PUBLIC frontend PRIVATE ${CMAKE_BINARY_DIR}/hd2d_gen)
     target_link_libraries(ct_hd2d PUBLIC SDL2::SDL2 ct_runtime m)
@@ -153,6 +198,20 @@ function(ct_engine_exe name)
     set_target_properties(${name} PROPERTIES ENABLE_EXPORTS ON
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 endfunction()
+if(CT_ANDROID)
+    # port: the engine-only SDL frontend as libmain.so, which SDLActivity
+    # loads (it calls SDL_main: SDL.h renames main). No first run (no
+    # Python or compiler on a phone): the app passes --rom and --module
+    # (android/, ImportActivity). Every engine object is linked in and
+    # exported, as for ct_sdl_engine, for the module to bind to.
+    add_library(main SHARED ${CMAKE_SOURCE_DIR}/frontend/main.c)
+    target_include_directories(main PRIVATE ${CMAKE_SOURCE_DIR}/test)
+    target_link_libraries(main ct_tables_empty
+        "$<LINK_LIBRARY:WHOLE_ARCHIVE,ct_sched,ct_interp,ct_runtime>" ct_input ct_hd2d
+        SDL2::SDL2 android log)
+    target_compile_options(main PRIVATE ${CT_WARN})
+    return()   # no tests, games or install() rules on Android
+endif()
 ct_engine_exe(ct_boot_engine ${CMAKE_SOURCE_DIR}/tools/ct_boot.c)
 if(SDL2_FOUND)
     # port: without --module it runs the first-run flow (frontend/firstrun.h):
@@ -236,6 +295,11 @@ if(SDL2_FOUND)
     target_link_libraries(test_input ct_input)
     target_compile_options(test_input PRIVATE ${CT_WARN})
     add_test(NAME input COMMAND test_input)
+    # port: the touch overlay's input logic (frontend/touch.h)
+    add_executable(test_touch test/test_touch.c)
+    target_link_libraries(test_touch ct_input)
+    target_compile_options(test_touch PRIVATE ${CT_WARN})
+    add_test(NAME touch COMMAND test_touch)
 endif()
 
 # No game-specific names, addresses, or words outside game/.
