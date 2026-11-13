@@ -44,6 +44,11 @@ export CC
 if [ "${1:-}" = --build-module ]; then
     [ $# -eq 2 ] || { echo "usage: ct-recomp --build-module ROM" >&2; exit 2; }
     rom=$(readlink -f "$2")
+    # A first-run engine keeps the module (and its stamp) in its own
+    # per-game folder: let it build there, then stop after one frame.
+    if grep -qa -- '--data-dir' "$engine"; then
+        exec "$engine" --data-dir "$data" --rom "$rom" --frames 1 --fast
+    fi
     mkdir -p "$user"
     # -B: the data dir is read-only, so no bytecode caches there.
     python3 -B "$data/tools/build_module.py" --game "$data/game/$game" --rom "$rom" \
