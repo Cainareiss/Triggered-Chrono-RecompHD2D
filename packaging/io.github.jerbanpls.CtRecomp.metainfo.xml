@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+SPDX-FileCopyrightText: 2026 jerbanpls
+SPDX-License-Identifier: FSFAP
+-->
+<component type="desktop-application">
+  <id>io.github.jerbanpls.CtRecomp</id>
+  <name>CT Recomp</name>
+  <summary>Play a recompiled SNES game built from your own ROM</summary>
+  <metadata_license>FSFAP</metadata_license>
+  <project_license>GPL-3.0-or-later AND MIT AND ISC</project_license>
+  <developer id="io.github.jerbanpls">
+    <name>jerbanpls</name>
+  </developer>
+  <description>
+    <p>
+      A native engine for a statically recompiled SNES game: the game's code, translated
+      to C, runs natively, with an HD-2D style renderer on top.
+    </p>
+    <p>
+      This package contains no game code or data. You need your own copy of the game:
+      on first use the engine checks your ROM and compiles the game module from it on
+      your machine, into your own data folder.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.jerbanpls.CtRecomp.desktop</launchable>
+  <provides>
+    <binary>ct-recomp</binary>
+  </provides>
+  <categories>
+    <category>Game</category>
+  </categories>
+  <recommends>
+    <control>gamepad</control>
+  </recommends>
+  <supports>
+    <control>keyboard</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-13" type="development"/>
+  </releases>
+</component>

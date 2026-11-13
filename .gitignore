@@ -36,3 +36,6 @@ KICKOFF*.md
 .[c]laude/
 notes/
 SESSION*.md
+
+# Flatpak build state
+.flatpak-builder/

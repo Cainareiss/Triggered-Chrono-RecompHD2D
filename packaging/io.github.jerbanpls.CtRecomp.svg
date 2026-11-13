@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+SPDX-FileCopyrightText: 2026 jerbanpls
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+<!-- A plain game pad on a rounded tile, with a code bracket: generic, no game imagery. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect x="4" y="4" width="120" height="120" rx="24" fill="#2b3a67"/>
+  <rect x="4" y="4" width="120" height="60" rx="24" fill="#33467a"/>
+  <rect x="4" y="40" width="120" height="24" fill="#33467a"/>
+  <path d="M38 46 h52 a22 22 0 0 1 22 22 v6 a20 20 0 0 1 -36 12 l-4 -6 h-16 l-4 6 a20 20 0 0 1 -36 -12 v-6 a22 22 0 0 1 22 -22 z"
+        fill="#e8ecf4"/>
+  <rect x="31" y="58" width="8" height="24" rx="2" fill="#2b3a67"/>
+  <rect x="23" y="66" width="24" height="8" rx="2" fill="#2b3a67"/>
+  <circle cx="88" cy="62" r="5" fill="#e0565b"/>
+  <circle cx="98" cy="72" r="5" fill="#f2b33d"/>
+  <circle cx="78" cy="72" r="5" fill="#4cb782"/>
+  <circle cx="88" cy="82" r="5" fill="#4a90d9"/>
+  <path d="M50 22 l-10 8 l10 8 M78 22 l10 8 l-10 8 M68 18 l-8 24" fill="none"
+        stroke="#e8ecf4" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

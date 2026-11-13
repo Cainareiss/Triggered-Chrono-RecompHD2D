@@ -54,6 +54,12 @@ It took about 40 s on a Ryzen Z1 Extreme. `--native` tunes the code for the loca
 - `ct_boot_engine` contains no generated functions (checked with
   `nm build/ct_boot_engine | grep ' f_'`).
 
+## Packages
+
+The Flatpak and the AppImage hold the engine only: `-DCT_ENGINE_ONLY=ON` builds it with
+no game directory and no `$CT_ROM`. They also bundle what `build_module.py` needs, a
+Python and zig as the C compiler. See [PACKAGING.md](PACKAGING.md).
+
 ## Not done yet
 
 - A scan that checks every distributed package for ROM-derived content.
