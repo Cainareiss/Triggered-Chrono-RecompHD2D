@@ -6,8 +6,10 @@
 // grain, with the UI put back sharp and ungraded on top, and the screen's
 // sides (outside the picture's 4:3 rectangle) filled with a soft, dimmed
 // extension of the picture.
-uniform sampler2D uScene;    // picture size: rgb, a = depth
-uniform sampler2D uBack;     // picture size: background plane rgb, a = foreground coverage
+//
+// Compiled after upscale.frag: planes() gives the picture's two planes
+// (composite rgb, a = depth; background plane rgb, a = foreground
+// coverage) at each pixel; uMat (r = UI, b = class / 8) is nearest.
 uniform sampler2D uDof;      // half size: background plane blurred, a = coc
 uniform sampler2D uFgDof;    // half size: foreground plane blurred, premultiplied
 uniform vec4 uFocus;         // as coc.frag: for the foreground's blur amount
@@ -15,7 +17,6 @@ uniform vec3 uDof3;
 uniform sampler2D uBloomA;   // quarter size
 uniform sampler2D uBloomB;   // eighth size
 uniform sampler2D uSoft;     // eighth size, unthresholded: side fill
-uniform sampler2D uMat;      // source size, nearest: r = UI, b = class / 8
 uniform sampler2D uOrig;     // source size, nearest: the console's frame (.bgr)
 uniform vec4 uRect;          // picture rectangle in output pixels: x, y, w, h (top-left origin)
 uniform vec2 uOut;           // output size
@@ -100,13 +101,13 @@ vec3 shade(vec2 fc)
         return c * (0.35 + 0.65 * fade);
     }
 
-    vec4 scene = texture(uScene, uv);
-    vec4 mat = texture(uMat, uv);
+    vec4 scene, back, mat;
+    planes(uv, scene, back, mat);
 
     if (uDebug == 1) { return mix(classColor(mat.b), scene.rgb, 0.35); }
     if (uDebug == 2) { return vec3(scene.a); }
     if (uDebug == 3) { return vec3(texture(uDof, uv).a); }
-    if (uDebug == 5) { return texture(uBack, uv).rgb; }
+    if (uDebug == 5) { return back.rgb; }
     if (uDebug == 4 && uv.x < 0.5) {
         // Split compare: the console's own pixels left of center.
         float line_ = 1.0 - step(1.5 / uRect.z, abs(uv.x - 0.5));
@@ -121,11 +122,12 @@ vec3 shade(vec2 fc)
     // The background plane, blurred by its own amount, then the
     // foreground plane over it: sharp where it is in focus, otherwise its
     // blurred copy, whose soft edge lets the background through.
-    vec4 back = texture(uBack, uv);
     vec4 dof = texture(uDof, uv);
     vec3 bg = mix(back.rgb, dof.rgb, smoothstep(0.0, 0.6, dof.a));
-    vec4 fg = mix(vec4(scene.rgb * back.a, back.a), texture(uFgDof, uv),
-                  smoothstep(0.0, 0.6, fgCoc(uv.y)));
+    vec4 fg = vec4(scene.rgb * back.a, back.a);
+    float fgBlur = smoothstep(0.0, 0.6, fgCoc(uv.y));
+    if (fgBlur > 0.0)   // rows in focus skip the read
+        fg = mix(fg, texture(uFgDof, uv), fgBlur);
     vec3 c = bg * (1.0 - fg.a) + fg.rgb;
     c += uGrade.x * (texture(uBloomA, uv).rgb * 0.6 + texture(uBloomB, uv).rgb * 0.8);
     c = grade(c, uv);

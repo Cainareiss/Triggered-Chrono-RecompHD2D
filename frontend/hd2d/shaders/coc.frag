@@ -12,10 +12,11 @@
 // foreground, so blurring it never smears the foreground into it, and the
 // foreground, kept apart with its coverage, blurs out over what is behind
 // it instead of ending in a hard edge.
-uniform sampler2D uScene;   // picture size: composite rgb (foreground color)
-uniform sampler2D uBack;    // picture size: background plane rgb, a = foreground coverage
-uniform sampler2D uBackSrc; // source size: background plane, a = its depth
-uniform sampler2D uMat;     // source size, nearest: r = UI, g = actor
+//
+// Compiled after upscale.frag: planesLinear() gives the two planes
+// (composite = foreground color; background rgb, a = foreground coverage)
+// as a bilinear read of picture-size copies would; uLitBack.a is the
+// background plane's depth and uMat (r = UI, g = actor) is nearest.
 uniform vec4 uFocus;        // focus y (0 top .. 1), half band, ramp, focal depth
 uniform vec3 uDof;          // tilt amount, depth amount, foreground depth
 in vec2 vUV;
@@ -30,10 +31,10 @@ float cocAt(float y, float depth)
 
 void main()
 {
-    vec4 s = texture(uScene, vUV);
-    vec4 b = texture(uBack, vUV);
+    vec4 s, b;
+    planesLinear(vUV, s, b);
     vec4 m = texture(uMat, vUV);
-    float coc = cocAt(vUV.y, texture(uBackSrc, vUV).a);   // texture order: 0 is the top
+    float coc = cocAt(vUV.y, texture(uLitBack, vUV).a);   // texture order: 0 is the top
     // Actors stay mostly readable wherever they stand.
     coc *= mix(1.0, 0.3, m.g);
     coc *= 1.0 - m.r;

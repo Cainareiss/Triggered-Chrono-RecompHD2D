@@ -19,6 +19,11 @@ layout(location = 0) out vec4 oBg;
 layout(location = 1) out vec4 oFg;
 
 const int N = 7;
+// Taps per side for a blur of radius r texels: up to N, but only enough to
+// keep them TAP_GAP texels apart (closer adds little, as the samples
+// are bilinear), so small blurs cost less.
+const float TAP_GAP = 1.75;
+int tapsFor(float r) { return clamp(int(ceil(r / TAP_GAP)), 2, N); }
 
 float fgCoc(float y)
 {
@@ -35,8 +40,9 @@ void main()
     } else {
         vec3 sum = vec3(0.0);
         float wsum = 0.0;
-        for (int k = -N; k <= N; k++) {
-            float t = float(k) / float(N);
+        int n = tapsFor(r);
+        for (int k = -n; k <= n; k++) {
+            float t = float(k) / float(n);
             vec4 s = texture(uSrc, vUV + uDir * (t * r));
             float g = exp(-2.5 * t * t);
             float w = g * (0.08 + s.a);
@@ -52,8 +58,9 @@ void main()
     } else {
         vec4 sum = vec4(0.0);
         float wsum = 0.0;
-        for (int k = -N; k <= N; k++) {
-            float t = float(k) / float(N);
+        int n = tapsFor(rf);
+        for (int k = -n; k <= n; k++) {
+            float t = float(k) / float(n);
             float g = exp(-2.5 * t * t);
             sum += texture(uFg, vUV + uDir * (t * rf)) * g;
             wsum += g;
