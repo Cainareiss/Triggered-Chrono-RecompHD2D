@@ -1,5 +1,6 @@
 #include "interp.h"
 
+#include "alu.h"   /* port: ADC/SBC, binary and decimal, shared with ops.h */
 #include "bus.h"
 #include "cycles.h"
 #include "func_table.h"
@@ -244,19 +245,6 @@ static void set_a(CPU *c, uint16_t v)
         c->A = v;
 }
 
-static uint16_t add(CPU *c, uint16_t a, uint16_t b, int wide, uint32_t at)
-{
-    if (c->d)
-        ct_fatal("interp $%06X: decimal mode", at);
-    uint32_t mask = wide ? 0xFFFF : 0xFF, sign = wide ? 0x8000 : 0x80;
-    uint32_t r = (uint32_t)a + b + c->c;
-    c->c = r > mask;
-    c->v = ((a ^ r) & (b ^ r) & sign) != 0;
-    r &= mask;
-    nz(c, (uint16_t)r, wide);
-    return (uint16_t)r;
-}
-
 static void compare(CPU *c, uint16_t r, uint16_t v, int wide)
 {
     uint16_t mask = wide ? 0xFFFF : 0xFF;
@@ -377,10 +365,10 @@ static void alu(CPU *c, uint8_t op, enum mode md, uint32_t at)
     case 0: a |= v; nz(c, a, wide); set_a(c, a); break;                     /* ORA */
     case 1: a &= v; nz(c, a, wide); set_a(c, a); break;                     /* AND */
     case 2: a ^= v; nz(c, a, wide); set_a(c, a); break;                     /* EOR */
-    case 3: set_a(c, add(c, a, v, wide, at)); break;                        /* ADC */
+    case 3: set_a(c, wide ? alu_adc16(c, a, v) : alu_adc8(c, (uint8_t)a, (uint8_t)v)); break; /* ADC */
     case 5: nz(c, v, wide); set_a(c, v); break;                             /* LDA */
     case 6: compare(c, a, v, wide); break;                                  /* CMP */
-    case 7: set_a(c, add(c, a, (uint16_t)~v & (wide ? 0xFFFF : 0xFF), wide, at)); break; /* SBC */
+    case 7: set_a(c, wide ? alu_sbc16(c, a, v) : alu_sbc8(c, (uint8_t)a, (uint8_t)v)); break; /* SBC */
     }
 }
 

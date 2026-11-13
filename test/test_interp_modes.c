@@ -133,7 +133,7 @@ static void test_shared_fatals(void)
 {
     /* Fatal in both modes: unimplemented behavior is never guessed. */
     static const uint8_t brk[] = {0x00, 0x00};
-    static const uint8_t adc_d[] = {0xF8, 0x69, 0x01};     /* SED / ADC #$01 */
+    static const uint8_t adc_d[] = {0xF8, 0x69, 0x01, 0x60}; /* SED / ADC #$01 / RTS */
     CPU c;
     load(brk, sizeof brk, 0x2300);
     load(adc_d, sizeof adc_d, 0x2310);
@@ -142,10 +142,14 @@ static void test_shared_fatals(void)
     EXPECT_MSG(strict(&c, 0x2300), "$7E2300: BRK executed");
     cpu_at(&c, 0x2300);
     EXPECT_MSG(system_steps(&c, 1), "$7E2300: BRK executed");
+    /* port: decimal mode is implemented (test/test_decimal.c): SED / ADC
+       runs in both modes, $00 + $01 + C=0 = $01 */
     cpu_at(&c, 0x2310);
-    EXPECT_MSG(strict(&c, 0x2310), "interp $7E2311: decimal mode");
+    EXPECT_MSG(strict(&c, 0x2310), "");
+    CHECK((c.A & 0xFF) == 0x01 && c.d == 1, "strict: SED/ADC A=%04X", c.A);
     cpu_at(&c, 0x2310);
-    EXPECT_MSG(system_steps(&c, 2), "interp $7E2311: decimal mode");
+    EXPECT_MSG(system_steps(&c, 2), "");
+    CHECK((c.A & 0xFF) == 0x01 && c.d == 1 && c.PC == 0x2313, "system: SED/ADC A=%04X", c.A);
     cpu_at(&c, 0x2300);
     c.e = 1;
     EXPECT_MSG(system_steps(&c, 1), "interp $7E2300: opcode $00 in emulation mode not implemented");

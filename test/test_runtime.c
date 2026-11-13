@@ -165,7 +165,6 @@ static int fatal_case(const char *name)
     if (!strcmp(name, "fatal_open_bus")) read8(0x006000);
     if (!strcmp(name, "fatal_rom_write")) write8(0xE50000, 0);
     if (!strcmp(name, "fatal_unhooked")) read8(0x004016);
-    if (!strcmp(name, "fatal_decimal")) { c.d = 1; adc8(&c, 1, 0xE50000); }
     if (!strcmp(name, "fatal_entry")) { c.m = 0; cpu_enter(&c, 0xC08100, 1, 0); }
     fprintf(stderr, "no fatal for %s\n", name);
     return 0;

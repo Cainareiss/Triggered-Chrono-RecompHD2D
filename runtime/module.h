@@ -16,8 +16,10 @@
 #include "func_table.h"
 
 /* Bump when CPU, the table entry layouts, or what generated code expects
-   of the engine change. */
-#define CT_MODULE_ABI 1
+   of the engine change. The ops.h helpers are compiled into the module, so
+   a change to what they do counts too: 2 is decimal-mode ADC/SBC (a module
+   built for 1 stops on the first ADC/SBC run with D=1). */
+#define CT_MODULE_ABI 2
 
 typedef struct {
     uint32_t abi;            /* CT_MODULE_ABI the module was built with */
