@@ -92,6 +92,7 @@ modules:
       # `git archive HEAD`, unpacked by packaging/flatpak/build.sh:
       # committed files only, from the checkout's HEAD. A dir source, as
       # flatpak-builder caches a local archive by its path alone and would
-      # reuse a stale build after a new commit.
+      # reuse a stale build after a new commit; this module is rebuilt on
+      # every run instead (SDL2 and zig stay cached).
       - type: dir
         path: ../../build-flatpak-src/ct-recomp

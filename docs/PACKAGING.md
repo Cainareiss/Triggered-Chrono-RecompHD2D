@@ -74,36 +74,108 @@ To build the module from the command line:
 ct-recomp --build-module /path/to/your/rom.sfc
 ```
 
-This runs `tools/build_module.py --native` from the data dir. The module goes to
-`$XDG_DATA_HOME/ct-recomp/` (in the Flatpak, `~/.var/app/io.github.jerbanpls.CtRecomp/data/ct-recomp/`).
-The launcher also saves the ROM's path there. Nothing is written to the data dir, which
-may be read-only.
+With an engine that has the first-run flow, this runs that flow for the ROM and quits
+after one frame. The module, its stamp and the ROM's path go to the engine's per-game
+folder, `$XDG_DATA_HOME/ct-recomp/<id>/` (in the Flatpak,
+`~/.var/app/io.github.jerbanpls.CtRecomp/data/ct-recomp/ct/`). With an older engine it
+runs `tools/build_module.py --native` from the data dir into `$XDG_DATA_HOME/ct-recomp/`
+and saves the ROM's path there. Nothing is written to the data dir, which may be
+read-only.
 
 ## Flatpak
 
 `packaging/flatpak/io.github.jerbanpls.CtRecomp.yml` uses org.freedesktop.Platform
-25.08. Build it from the repo root:
+25.08. You need, at user or system level, `org.freedesktop.Platform//25.08`,
+`org.freedesktop.Sdk//25.08` and either a `flatpak-builder` on `PATH` or the
+`org.flatpak.Builder` app. No SDK extensions are needed.
+
+Build it with the wrapper, from anywhere in the checkout:
 
 ```
-flatpak-builder --user --install --force-clean build-flatpak \
-    packaging/flatpak/io.github.jerbanpls.CtRecomp.yml
-flatpak run io.github.jerbanpls.CtRecomp --build-module ~/Downloads/rom.sfc
+packaging/flatpak/build.sh
 ```
+
+With no arguments this runs
+`flatpak-builder --user --force-clean --repo=build-flatpak-repo build-flatpak <manifest>`
+(or `flatpak run org.flatpak.Builder ...` if there is no `flatpak-builder`). Arguments
+replace those defaults, for example `packaging/flatpak/build.sh --user --install
+--force-clean build-flatpak`. The build dir, the repo and `.flatpak-builder/` are all
+git-ignored.
+
+Install it from the local repo, then run it:
+
+```
+flatpak --user remote-add --no-gpg-verify ctrecomp-local build-flatpak-repo
+flatpak --user install ctrecomp-local io.github.jerbanpls.CtRecomp
+flatpak run io.github.jerbanpls.CtRecomp --rom ~/Downloads/your_dump.sfc
+```
+
+The first run builds the module inside the sandbox, with the runtime's `python3` and
+the bundled zig, into `~/.var/app/io.github.jerbanpls.CtRecomp/data/ct-recomp/<id>/`.
+Later runs reuse it and remember the ROM, so `--rom` can be left out.
+`ct-recomp --build-module ROM` does the same build, then quits after one frame.
+
+To make a single-file bundle: `flatpak build-bundle build-flatpak-repo
+CtRecomp.flatpak io.github.jerbanpls.CtRecomp`.
 
 The manifest has three modules:
-- SDL2 2.32.10, built from the release tarball (pinned by SHA-256).
-- zig, installed in `/app/lib/zig`.
-- The engine, built with `CT_ENGINE_ONLY=ON` and `CT_SDL2_SYSTEM_LIB=OFF`.
+- SDL2 2.32.10, built from the release tarball (pinned by SHA-256) out of tree, with
+  the Wayland (libdecor), X11, KMSDRM, PipeWire, PulseAudio, ALSA, udev and HIDAPI
+  backends from the SDK. The runtime also ships sdl2-compat, but `/app/lib` comes first.
+- zig, installed in `/app/lib/zig` and trimmed to x86_64 Linux.
+- The engine, built with `CT_ENGINE_ONLY=ON`, `CT_SDL2_SYSTEM_LIB=OFF` and
+  `CT_ENGINE_DATA_DIR=/app/share/ct-recomp`.
 
-The engine comes from a `git` source pointing at the repository, so only **committed**
-files go into the build: never `rom/`, a build tree, or uncommitted changes. Commit
-before you build. Its `post-install` step fails the build if `ct_sdl_engine` has a
-generated `f_XXXXXX` symbol, or if `/app` contains a module, a ROM image or a generated
-table.
+The engine's source is `git archive HEAD`, which `build.sh` unpacks into
+`build-flatpak-src/ct-recomp` for the manifest's `dir` source. So only **committed**
+files go into the build: never `rom/`, a build tree, or uncommitted changes (`build.sh`
+warns if there are any). Commit before you build. A `git` source can't do this. It
+mirrors the whole repository and checks out a named branch (`master` by default), not
+the checkout's HEAD, so it failed in a worktree. A local `archive` source can't either,
+since flatpak-builder caches it by its path and reuses a stale engine after a new
+commit. The `dir` source makes the engine module rebuild on every run. SDL2 and zig
+stay cached.
 
-Permissions: Wayland with X11 as a fallback, PulseAudio, `--device=all` (controllers and
-GPU), and read-only Downloads and Documents for picking the ROM. A ROM stored anywhere
-else needs `flatpak override --filesystem=<dir>:ro`.
+The engine module's `post-install` step fails the build if `nm` finds a generated
+`f_XXXXXX` symbol in `ct_sdl_engine`, or can't read its symbol table. It also fails if
+`/app` contains a module, a ROM image, or a generated table or source. To confirm this
+step can fail, a test build with an extra `touch /app/share/ct_game.so` before the
+checks was run, and it stopped at the engine module.
+
+Permissions: Wayland with X11 as a fallback, IPC, PulseAudio, `--device=all`
+(controllers and GPU), and read-only Downloads and Documents for picking the ROM. A ROM
+stored anywhere else needs `flatpak override --user --filesystem=<dir>:ro
+io.github.jerbanpls.CtRecomp`, or `--filesystem=<dir>:ro` on a single `flatpak run`.
+
+### Test results
+
+Tested on 2026-11-13 on Bazzite (Fedora 45 base, kernel 7.3.3), Ryzen Z1 Extreme, with
+the Platform and Sdk 25.08 and the `org.flatpak.Builder` app. This was a user install
+from the local repo, run headless with `--env=SDL_VIDEODRIVER=offscreen
+--env=SDL_AUDIODRIVER=dummy` and `--filesystem=<rom dir>:ro`:
+
+| Check | Result |
+| --- | --- |
+| Clean build (SDL2, zig, engine) | passes, post-install checks included |
+| First run, `--frames 600 --fast --hd2d --require-render --rom ...` | builds the module in the sandbox (`python3` = /usr/bin/python3 3.13.16, `CC` = /app/libexec/ct-recomp/zig-cc, 16 jobs, 102 to 126 s), loads it (1482 functions), exits 0. 133 s in total. |
+| Second run | `ct_game.so: up to date`, exits 0 in about 6 s |
+| Run without `--rom` | `ROM (remembered)`, exits 0 |
+| `--build-module ROM` from an empty data dir | builds into `.../data/ct-recomp/ct/`, exits 0 |
+| `--shot` | 1920x1080 PNG of the title screen |
+| GL in the sandbox | `hd2d: AMD / AMD Ryzen Z1 Extreme (radeonsi, phoenix, ACO, DRM 3.64, ...) / 4.6 (Core Profile) Mesa 26.2.5`. That is hardware radeonsi through the runtime's Mesa (GL.default 26.2.5), not llvmpipe. |
+| Bundle size | 45,652,624 bytes (44 MiB). The installed app is 245 MiB, of which zig is 242 MiB. |
+| `check_dist.py --rom` on `build-flatpak/files`, the OSTree export and the bundle's imported contents | 1 hit, a false positive in `lib/zig/zig` (see below). Every other file is clean (7,496 files). |
+
+The single `check_dist` hit is the unmodified upstream zig 0.15.2 binary, byte-identical
+to the one in the SHA-256-pinned tarball. At file offset 34131568 it holds the standard
+256-byte bit-reversal table (`00 80 40 c0 20 a0 60 e0 ...`). The ROM has the same table
+at 0xFD00, so the ROM-window check matches it. Nothing from the ROM is in the package,
+but `check_dist` needs to ignore well-known generic tables like this one before it can
+pass on the Flatpak or the AppImage, which bundles the same zig.
+
+Not tested yet: a windowed session on Wayland or X11, audio through PulseAudio or
+PipeWire, controllers in the sandbox, a system-wide install, Flathub's linter, and
+aarch64 (the zig source is x86_64 only).
 
 ## AppImage
 
