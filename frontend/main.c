@@ -330,12 +330,65 @@ static void present_hd2d(void)
 
 static void settings_save(void);
 
+/* port: the window's remembered state (settings.ini: window=WxH,
+   position=X,Y, fullscreen=0|1). The windowed size and place are kept
+   apart from fullscreen, so leaving fullscreen goes back to them. */
+static struct {
+    int w, h, x, y, fs;      /* current */
+    int have_size, have_pos; /* known: loaded, or seen */
+    int w0, h0, x0, y0, fs0; /* as the window was created */
+    int scale_given;         /* --scale beats the saved size */
+} wst;
+
+static int wst_places_work(void)   /* a driver that reports real window places */
+{
+    const char *d = SDL_GetCurrentVideoDriver();
+    return d && strcmp(d, "wayland") && strcmp(d, "offscreen") && strcmp(d, "dummy") &&
+           strcmp(d, "KMSDRM") && strcmp(d, "kmsdrm");
+}
+
+/* Take the window's windowed geometry (not while fullscreen: that is the
+   display's). */
+static void wst_track(void)
+{
+    if (!win || (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN))
+        return;
+    SDL_GetWindowSize(win, &wst.w, &wst.h);
+    wst.have_size = 1;
+    if (wst_places_work()) {
+        SDL_GetWindowPosition(win, &wst.x, &wst.y);
+        wst.have_pos = 1;
+    }
+}
+
+static int wst_dirty(void)
+{
+    int fs = win && (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN) ? 1 : 0;
+    wst.fs = fs;
+    return fs != wst.fs0 || wst.w != wst.w0 || wst.h != wst.h0 || wst.x != wst.x0 ||
+           wst.y != wst.y0;
+}
+
+/* Is a place on a display (so a monitor that is gone doesn't strand the window)? */
+static int wst_on_screen(int x, int y, int w)
+{
+    for (int k = 0, n = SDL_GetNumVideoDisplays(); k < n; k++) {
+        SDL_Rect r;
+        if (!SDL_GetDisplayBounds(k, &r) && x + w / 2 >= r.x && x + w / 2 < r.x + r.w &&
+            y + 16 >= r.y && y + 16 < r.y + r.h)
+            return 1;
+    }
+    return 0;
+}
+
 /* F1-F3, F11: the HD-2D controls. Returns 1 if the key was one of them. */
 static int hd2d_key(SDL_Scancode sc)
 {
     if (sc == SDL_SCANCODE_F11) {
         int fs = SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP;
         SDL_SetWindowFullscreen(win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+        wst.fs = !fs;
+        settings_save();
         return 1;
     }
     if (!hd2d_mode)
@@ -395,6 +448,13 @@ static void settings_load(void)
         }
         else if (sscanf(line, "aspect=%d", &n) == 1)
             hd2d_set_aspect(n);
+        else if (sscanf(line, "window=%dx%d", &wst.w, &wst.h) == 2 && wst.w >= 256 &&
+                 wst.h >= 224 && wst.w <= 16384 && wst.h <= 16384)
+            wst.have_size = 1;
+        else if (sscanf(line, "position=%d,%d", &wst.x, &wst.y) == 2)
+            wst.have_pos = 1;
+        else if (sscanf(line, "fullscreen=%d", &n) == 1)
+            wst.fs = n != 0;
     }
     if (f)
         fclose(f);
@@ -407,6 +467,11 @@ static void settings_save(void)
     FILE *f = path ? fopen(path, "w") : NULL;
     if (f) {
         fprintf(f, "preset=%s\naspect=%d\n", hd2d_preset_name(hd2d_preset()), hd2d_aspect());
+        if (wst.have_size)
+            fprintf(f, "window=%dx%d\n", wst.w, wst.h);
+        if (wst.have_pos)
+            fprintf(f, "position=%d,%d\n", wst.x, wst.y);
+        fprintf(f, "fullscreen=%d\n", wst.fs);
         fclose(f);
     }
     free(path);
@@ -445,6 +510,10 @@ static void poll_input(long f)
             fprintf(stderr, "ct_sdl: frame %ld controller button %s %s\n", f,
                     SDL_GameControllerGetStringForButton(ev.cbutton.button),
                     ev.type == SDL_CONTROLLERBUTTONDOWN ? "down" : "up");
+        if (ev.type == SDL_WINDOWEVENT && (ev.window.event == SDL_WINDOWEVENT_RESIZED ||
+                                           ev.window.event == SDL_WINDOWEVENT_MOVED ||
+                                           ev.window.event == SDL_WINDOWEVENT_RESTORED))
+            wst_track();
         if (ev.type == SDL_QUIT) {
             set_exit_reason("SDL_QUIT event (window closed, or quit requested by the "
                             "desktop or another program)");
@@ -709,6 +778,18 @@ static int open_window(const char *title, int scale, int fullscreen)
        window is the whole screen anyway: start fullscreen. */
     if (game_mode)
         fullscreen = 1;
+    else if (!fullscreen && wst.fs)
+        fullscreen = 1;   /* port: as it was left */
+    int ww = hd2d_mode ? SCHED_WIDTH * scale * 4 / 3 : SCHED_WIDTH * scale, wh = SCHED_HEIGHT * scale;
+    int wx = SDL_WINDOWPOS_CENTERED, wy = SDL_WINDOWPOS_CENTERED;
+    if (!game_mode && !wst.scale_given && wst.have_size) {
+        ww = wst.w;
+        wh = wst.h;
+        if (wst.have_pos && wst_on_screen(wst.x, wst.y, ww)) {
+            wx = wst.x;
+            wy = wst.y;
+        }
+    }
     Uint32 wflags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI |
                     (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
     if (hd2d_mode) {
@@ -722,8 +803,7 @@ static int open_window(const char *title, int scale, int fullscreen)
             SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, want_gl[k].major);
             SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, want_gl[k].minor);
             SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-            win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                   SCHED_WIDTH * scale * 4 / 3, SCHED_HEIGHT * scale,
+            win = SDL_CreateWindow(title, wx, wy, ww, wh,
                                    wflags | SDL_WINDOW_OPENGL);
             glctx = win ? SDL_GL_CreateContext(win) : NULL;
             if (glctx && hd2d_init(want_gl[k].gles)) {
@@ -754,8 +834,7 @@ static int open_window(const char *title, int scale, int fullscreen)
             fprintf(stderr, "ct_sdl: hd2d preset deck (Steam Deck default)\n");
         }
     } else {
-        win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                               SCHED_WIDTH * scale, SCHED_HEIGHT * scale, wflags);
+        win = SDL_CreateWindow(title, wx, wy, ww, wh, wflags);
         ren = win ? SDL_CreateRenderer(win, -1, 0) : NULL;
         if (win && !ren)
             ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
@@ -771,6 +850,11 @@ static int open_window(const char *title, int scale, int fullscreen)
     }
     if (game_mode)   /* port: nothing to point at on a handheld */
         SDL_ShowCursor(SDL_DISABLE);
+    wst_track();
+    wst.w0 = wst.w, wst.h0 = wst.h, wst.x0 = wst.x, wst.y0 = wst.y;
+    wst.fs0 = SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN ? 1 : 0;
+    if (game_mode)
+        wst.fs0 = 1;
     {
         int w = 0, h = 0;
         if (hd2d_mode)
@@ -816,6 +900,38 @@ static void shot_status(const uint8_t *bgrx, const char *path)
 }
 #endif
 
+/* port: the options, and the keys (--help prints both). */
+static void usage(FILE *out)
+{
+    fprintf(out, "usage: ct_sdl [--scale N] [--frames N] [--dump DIR]\n         "
+            "[--needed-hw FILE] [--fast] [--require-render] [--log-input]\n         "
+            "[--interp-only] [--record FILE] [--script FILE] [--log-audio]\n         "
+            "[--require-no-underrun] [--hd2d] [--no-hd2d] [--preset off|subtle|hd2d|deck]\n         "
+            "[--aspect 4:3|pixel|stretch] [--debug-view N] [--fullscreen]\n         "
+            "[--log-gpu] [--shot F:PATH]... [--shot-size WxH] [--module FILE]\n         "
+            "[--rom FILE] [--touch] [--touch-hide SECS] [--touch-test FILE]\n         "
+            "[--save FILE] [--no-save] [--dump-sram FILE]\n         "
+            "[--poke-sram F:ADDR=VAL]... [--pacing auto|timer|vsync] [--log-pacing]"
+#ifdef CT_FIRSTRUN
+            " [--data-dir DIR] [--game ID] [--shot status:PATH] [--build-only]"
+#endif
+            "\n");
+    fputs("\n"
+          "Keyboard (window)\n"
+          "  Arrow keys        d-pad            Enter       Start\n"
+          "  X                 A                Right Shift Select\n"
+          "  Z                 B                Q / W       L / R\n"
+          "  A / S             Y / X\n"
+          "  F11               fullscreen on / off\n"
+          "  F1                HD-2D look: original, subtle, HD-2D, Steam Deck\n"
+          "  F2                HD-2D debug view      F3  aspect: 4:3, pixel 8:7, stretch\n"
+          "  Ctrl+Q            quit\n"
+          "Controllers: south = B, east = A, west = Y, north = X, shoulders = L / R,\n"
+          "  Start, Back = Select, d-pad or left stick. The window's size, place and\n"
+          "  fullscreen state, the look and the aspect are remembered between runs.\n",
+          out);
+}
+
 int main(int argc, char **argv)
 {
     static long frames = -1;           /* static: survive the longjmp */
@@ -833,7 +949,7 @@ int main(int argc, char **argv)
     settings_load();   /* port: saved HD-2D settings; options below override */
     for (int k = 1; k < argc; k++) {
         if (!strcmp(argv[k], "--scale") && k + 1 < argc)
-            scale = atoi(argv[++k]);
+            scale = atoi(argv[++k]), wst.scale_given = 1;
         else if (!strcmp(argv[k], "--frames") && k + 1 < argc)
             frames = atol(argv[++k]);
         else if (!strcmp(argv[k], "--dump") && k + 1 < argc)
@@ -948,20 +1064,11 @@ int main(int argc, char **argv)
                 fprintf(stderr, "ct_sdl: --shot-size WxH\n");
                 return 2;
             }
+        } else if (!strcmp(argv[k], "--help") || !strcmp(argv[k], "-h")) {
+            usage(stdout);
+            return 0;
         } else {
-            fprintf(stderr, "usage: ct_sdl [--scale N] [--frames N] [--dump DIR] "
-                            "[--needed-hw FILE] [--fast] [--require-render] [--log-input] "
-                            "[--interp-only] [--record FILE] [--script FILE] [--log-audio] "
-                            "[--require-no-underrun] [--hd2d] [--no-hd2d] [--preset off|subtle|hd2d|deck] "
-                            "[--aspect 4:3|pixel|stretch] [--debug-view N] [--fullscreen] "
-                            "[--log-gpu] [--shot F:PATH]... [--shot-size WxH] [--module FILE] "
-                            "[--rom FILE] [--touch] [--touch-hide SECS] [--touch-test FILE] "
-                            "[--save FILE] [--no-save] [--dump-sram FILE] "
-                            "[--poke-sram F:ADDR=VAL]... [--pacing auto|timer|vsync] [--log-pacing]"
-#ifdef CT_FIRSTRUN
-                            " [--data-dir DIR] [--game ID] [--shot status:PATH] [--build-only]"
-#endif
-                            "\n");
+            usage(stderr);
             return 2;
         }
     }
@@ -1129,6 +1236,11 @@ int main(int argc, char **argv)
         printf("ct_sdl: stubbed: %s\n", hw_note_text(k));
     if (needed && hw_needed_write(needed, "ct_sdl", NULL))
         fprintf(stderr, "ct_sdl: cannot write %s\n", needed);
+    if (win && !game_mode) {   /* port: remember the window, if it changed */
+        wst_track();
+        if (wst_dirty())
+            settings_save();
+    }
     if (pad)
         SDL_GameControllerClose(pad);
     if (audio)
