@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 jerbanpls
+# SPDX-License-Identifier: GPL-3.0-or-later
+[Desktop Entry]
+Type=Application
+Name=CT Recomp
+Comment=Play a recompiled SNES game built from your own ROM
+Exec=ct-recomp
+Icon=io.github.jerbanpls.CtRecomp
+Terminal=false
+Categories=Game;
+Keywords=snes;recompilation;

@@ -1,0 +1,82 @@
+# SPDX-FileCopyrightText: 2026 jerbanpls
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Engine-only Flatpak (docs/PACKAGING.md). From the repo root:
+#
+#   flatpak-builder --user --install --force-clean build-flatpak \
+#       packaging/flatpak/io.github.jerbanpls.CtRecomp.yml
+#
+# It holds no game code or data: the engine is built with CT_ENGINE_ONLY,
+# from the committed sources only (a git source, so neither rom/ nor any
+# build tree is ever copied in). On first use the user's own ROM is turned
+# into a game module in ~/.var/app/io.github.jerbanpls.CtRecomp/data, with
+# the runtime's python3 and the bundled zig.
+app-id: io.github.jerbanpls.CtRecomp
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: ct-recomp
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --socket=pulseaudio
+  # controllers (evdev, hidraw) and the GPU
+  - --device=all
+  # reading the user's ROM
+  - --filesystem=xdg-download:ro
+  - --filesystem=xdg-documents:ro
+
+modules:
+  - name: SDL2
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DSDL_STATIC=OFF
+      - -DSDL_TEST=OFF
+    cleanup:
+      - /bin
+      - /include
+      - /lib/cmake
+      - /lib/pkgconfig
+      - /share/aclocal
+      - '*.a'
+    sources:
+      - type: archive
+        url: https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz
+        sha256: 5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165
+
+  # zig (MIT), run as `zig cc` by /app/libexec/ct-recomp/zig-cc to compile
+  # the game module on the user's machine.
+  - name: zig
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/lib/zig
+      - cp -a zig/. /app/lib/zig/
+      - sh trim-zig.sh /app/lib/zig
+      - install -Dm644 zig/LICENSE /app/share/licenses/ct-recomp/zig/LICENSE
+    sources:
+      - type: archive
+        url: https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
+        sha256: 02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239
+        dest: zig
+        only-arches:
+          - x86_64
+      - type: file
+        path: ../trim-zig.sh
+
+  - name: ct-recomp
+    buildsystem: cmake-ninja
+    builddir: true
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DCT_ENGINE_ONLY=ON
+      # SDL2 from the module above; never the header download
+      - -DCT_SDL2_SYSTEM_LIB=OFF
+    post-install:
+      # The compliance guarantee, checked on what was installed.
+      - "! nm /app/bin/ct_sdl_engine | grep -qE ' f_[0-9A-Fa-f]{6}'"
+      - test -z "$(find /app \( -name 'ct_game*' -o -iname '*.sfc' -o -iname '*.smc' -o -name 'ct_funcs.*' \) -print)"
+    sources:
+      - type: git
+        path: ../..

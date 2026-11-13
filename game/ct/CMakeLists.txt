@@ -104,23 +104,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 add_dependencies(ct_game_module ct_gen)   # the generated sources
 
-function(ct_engine_exe name)
-    add_executable(${name} ${ARGN})
-    target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR}/test)
-    # Whole archives: the module calls into parts of the engine the
-    # program itself may not, so every engine object must be present and
-    # exported (ENABLE_EXPORTS: -rdynamic).
-    target_link_libraries(${name} ct_tables_empty
-        "$<LINK_LIBRARY:WHOLE_ARCHIVE,ct_sched,ct_interp,ct_runtime>")
-    target_compile_options(${name} PRIVATE ${CT_WARN})
-    set_target_properties(${name} PROPERTIES ENABLE_EXPORTS ON
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
-endfunction()
-ct_engine_exe(ct_boot_engine ${CMAKE_SOURCE_DIR}/tools/ct_boot.c)
-if(SDL2_FOUND)
-    ct_engine_exe(ct_sdl_engine ${CMAKE_SOURCE_DIR}/frontend/main.c)
-    target_link_libraries(ct_sdl_engine ct_input ct_hd2d)
-endif()
+# ct_boot_engine and ct_sdl_engine: defined in the top-level CMakeLists.txt,
+# which builds them without a game (CT_ENGINE_ONLY).
 
 set(ct_game_tests)
 

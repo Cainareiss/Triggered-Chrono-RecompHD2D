@@ -30,6 +30,11 @@ endif()
 
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 
+# Packaging builds (docs/PACKAGING.md): the engine programs only, with no
+# game directory added even when $CT_ROM is set, so nothing generated from a
+# ROM can reach the build or `cmake --install`.
+option(CT_ENGINE_ONLY "Build only the engine programs, never game code" OFF)
+
 set(CT_WARN -Wall -Wextra -Wpedantic)
 
 enable_testing()
@@ -127,7 +132,31 @@ if(SDL2_FOUND)
     target_link_libraries(ct_hd2d PUBLIC SDL2::SDL2 ct_runtime m)
     target_compile_options(ct_hd2d PRIVATE ${CT_WARN} -Wno-overlength-strings)
 else()
+    if(CT_ENGINE_ONLY)
+        message(FATAL_ERROR "CT_ENGINE_ONLY needs SDL2 for ct_sdl_engine")
+    endif()
     message(STATUS "SDL2 not found: frontends not built")
+endif()
+
+# ---- engine-only programs (docs/MODULES.md) ----
+# The runtime and the empty function tables, no generated code; the game
+# code comes from a module loaded with --module.
+function(ct_engine_exe name)
+    add_executable(${name} ${ARGN})
+    target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR}/test)
+    # Whole archives: the module calls into parts of the engine the
+    # program itself may not, so every engine object must be present and
+    # exported (ENABLE_EXPORTS: -rdynamic).
+    target_link_libraries(${name} ct_tables_empty
+        "$<LINK_LIBRARY:WHOLE_ARCHIVE,ct_sched,ct_interp,ct_runtime>")
+    target_compile_options(${name} PRIVATE ${CT_WARN})
+    set_target_properties(${name} PROPERTIES ENABLE_EXPORTS ON
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+endfunction()
+ct_engine_exe(ct_boot_engine ${CMAKE_SOURCE_DIR}/tools/ct_boot.c)
+if(SDL2_FOUND)
+    ct_engine_exe(ct_sdl_engine ${CMAKE_SOURCE_DIR}/frontend/main.c)
+    target_link_libraries(ct_sdl_engine ct_input ct_hd2d)
 endif()
 
 # ---- engine tests: no game, no ROM (synthetic image, test/harness.h) ----
@@ -197,11 +226,55 @@ add_test(NAME check_agnostic
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_agnostic.py ${CMAKE_SOURCE_DIR})
 
 # ---- games (need $CT_ROM; their tests are LABELS rom) ----
-if(DEFINED ENV{CT_ROM})
+if(CT_ENGINE_ONLY)
+    message(STATUS "CT_ENGINE_ONLY: game builds and ROM tests skipped")
+elseif(DEFINED ENV{CT_ROM})
     set(CT_ROM $ENV{CT_ROM})
     add_subdirectory(game/ct)
 else()
     message(STATUS "CT_ROM not set: game builds and ROM tests skipped")
+endif()
+
+# ---- install (docs/PACKAGING.md): the engine and its data, nothing else ----
+# Never ct_game.so, ct_sdl, ct_boot or anything under a build tree: those hold
+# code generated from a ROM. The data dir is what tools/build_module.py
+# needs to build a module on the user's machine.
+if(TARGET ct_sdl_engine)
+    include(GNUInstallDirs)
+    set(CT_DATA_DIR ${CMAKE_INSTALL_DATADIR}/ct-recomp)
+    install(TARGETS ct_sdl_engine RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(PROGRAMS packaging/ct-recomp.sh DESTINATION ${CMAKE_INSTALL_BINDIR}
+        RENAME ct-recomp)
+    install(PROGRAMS packaging/zig-cc.sh DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/ct-recomp
+        RENAME zig-cc)
+    file(GLOB ct_inst_tools ${CMAKE_SOURCE_DIR}/tools/*.py)
+    file(GLOB ct_inst_recomp ${CMAKE_SOURCE_DIR}/recomp/*.py)
+    file(GLOB ct_inst_hdrs ${CMAKE_SOURCE_DIR}/runtime/*.h)
+    install(FILES ${ct_inst_tools} DESTINATION ${CT_DATA_DIR}/tools)
+    install(FILES ${ct_inst_recomp} DESTINATION ${CT_DATA_DIR}/recomp)
+    install(FILES ${ct_inst_hdrs} runtime/module_entry.c DESTINATION ${CT_DATA_DIR}/runtime)
+    # Each game: its symbol and config files, extern hooks, and the build
+    # scripts build_module.py runs (overlay decoding). No tests or replays.
+    file(GLOB ct_games LIST_DIRECTORIES true ${CMAKE_SOURCE_DIR}/game/*)
+    foreach(g ${ct_games})
+        if(EXISTS ${g}/game.toml)
+            get_filename_component(gid ${g} NAME)
+            file(GLOB ct_inst_game ${g}/*.toml)
+            file(GLOB ct_inst_game_tools ${g}/tools/*.py)
+            install(FILES ${ct_inst_game} ${g}/hooks.c DESTINATION ${CT_DATA_DIR}/game/${gid})
+            install(FILES ${ct_inst_game_tools} DESTINATION ${CT_DATA_DIR}/game/${gid}/tools)
+        endif()
+    endforeach()
+    install(FILES LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/ct-recomp)
+    install(DIRECTORY LICENSES/ DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/ct-recomp/LICENSES)
+    install(FILES THIRD_PARTY.md DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/ct-recomp)
+    set(CT_APP_ID io.github.jerbanpls.CtRecomp)
+    install(FILES packaging/${CT_APP_ID}.desktop
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES packaging/${CT_APP_ID}.svg
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+    install(FILES packaging/${CT_APP_ID}.metainfo.xml
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
 endif()
 
 # ---- test environment (keep last) ----
