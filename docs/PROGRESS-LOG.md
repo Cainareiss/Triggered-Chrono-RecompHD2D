@@ -20,6 +20,22 @@ SPDX-License-Identifier: GPL-3.0-or-later
   cycles the look, L3 cycles the aspect.
 - **Saves:** in-game saves now persist, in `~/.local/share/ct-recomp/ct/ct.srm`.
 
+### GitHub repo: created, waiting on one step from you
+- **Created:** https://github.com/jerbanpls/Triggered-Chrono-RecompHD2D, **private**. It's
+  still empty.
+- **Why:** the push of `main` was refused. Your `gh` token has the `repo` scope but not
+  `workflow`, and GitHub won't accept commits containing `.github/workflows/` without it.
+- **To finish:**
+  ```
+  gh auth refresh -h github.com -s workflow     # opens a browser sign-in
+  git push -u origin main
+  ```
+- **Already done:** `main` holds the verified `hd2d` tip, and `origin` points at the new
+  repo. The `krtp` and `upstream` remotes are removed, so only `main` gets pushed.
+- **History scan:** 0 of 215 commits contain ROM, module, build-output or screenshot
+  files, and no ROM byte windows appear in a `git archive` export.
+- **To go public later:** Settings → Danger Zone → Change visibility.
+
 ### What landed today (all on `hd2d`, verified after each merge)
 - **Decimal-mode CPU arithmetic** (65816 BCD ADC/SBC, per bsnes, module ABI 2).
   - Opening the world-map menu no longer stops the game.
