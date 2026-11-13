@@ -114,6 +114,11 @@ SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy build/ct_sdl --hd2d --fast \
    background plane. The enlargement maps the picture into itself, so the edges never
    need filling. The foreground never covers UI or a pixel that was in front of it,
    such as a high-priority sprite. Where nothing is behind it, it stays where it was.
+   The upscale is not a pass of its own. Storing two picture-size half-float planes and
+   reading them back cost more than working them out again from the small console-size
+   targets, so `shaders/upscale.frag` is compiled into the passes that read the picture
+   (blur amount, bloom source, final). They evaluate it where they used to sample the
+   stored planes.
 6. **Tilt-shift depth of field** at half resolution, done separately for the two planes
    and then composited (foreground over background):
    - The background plane holds the hidden pixels under the foreground, so blurring it
@@ -124,24 +129,39 @@ SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy build/ct_sdl --hd2d --fast \
    - Planes away from the focal depth also blur.
    - Each sample is weighted by its own blur amount, so in-focus pixels don't bleed halos.
    - Actors stay mostly sharp wherever they stand.
+   - Small blurs take fewer samples (about 1.75 texels apart, up to 15).
    - The effect scales with how much of the screen is ground or foreground, so title
      cards and black-backed screens keep it off.
-7. **Bloom**, from two Gaussian levels at 1/4 and 1/8 resolution.
+7. **Bloom**, from two Gaussian levels at 1/4 and 1/8 resolution. One pass makes both the
+   bloom source and the plain copy that the side fill starts from.
 8. **Grade:** exposure and a soft highlight shoulder (identity below 0.7, so blacks stay black), saturation, split toning (cool shadows, warm
    highlights), a vignette and light grain.
 9. **Side fill:** outside the 4:3 picture, a blurred, mirrored and dimmed reflection of
-   its edges.
+   its edges. Skipped when the picture covers the whole output.
 
 Menus that cover more than 15–30% of the screen with UI ease the scene effects off.
 
 ## Performance
 
-On a ROG Ally (Ryzen Z1 Extreme, Radeon 780M, Mesa radeonsi), the renderer takes
-about 2.6 ms per frame at 1706×1120 (`--scale 5`, about 1080p's pixel count), median over
-the Leene Square replay at normal speed; 4.3 ms at the 95th percentile. Without the two
-planes and the tilt it was 2.4 ms (3.9 ms). The times include the uploads and the CPU-side
-scene analysis, and vary by a few tenths of a millisecond between runs. Desktop AMD and
-NVIDIA GPUs have a large margin.
+Measured on a ROG Ally (Ryzen Z1 Extreme, Radeon 780M, Mesa radeonsi) at 1706×1120
+(`--scale 5`, about 1080p's pixel count), over the Leene Square replay at normal speed,
+with `--log-gpu`:
+
+| | Median | 95th percentile |
+| --- | --- | --- |
+| Before the upscale was folded into the passes that read it | 2.6–4.4 ms | 4.1–5.3 ms |
+| Now | 1.4–2.3 ms | 1.9–3.2 ms |
+
+These times include the uploads and the CPU-side scene analysis (about 0.03 ms). Each range
+covers 3 to 6 interleaved runs, made while other work loaded the machine (load average
+3–18). The variation between runs is larger than a few tenths of a millisecond: the
+handheld's clocks follow the load, and the 95th percentile follows the GPU clock. The
+quietest runs gave 2.6 / 4.1–4.5 ms before and 1.4 / 1.9–2.6 ms now.
+
+On the GPU, from `CT_HD2D_PROFILE`, the frame went from about 2.2 ms to 0.9–1.4 ms. Most of
+the gain is that the two picture-size half-float planes (about 27 MB written and read back
+per frame) are gone. The depth-of-field blur is now the largest pass (0.3–0.5 ms), then the
+final pass (0.25–0.3 ms). Desktop AMD and NVIDIA GPUs have a large margin.
 
 The behind buffer costs CPU time in the PPU. Headless (`ct_boot`, 9,200 frames of the
 Leene Square replay), the game runs at about 388 frames per second without it and

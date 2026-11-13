@@ -9,11 +9,15 @@
  *   2 upscale   picture size  sharp bilinear, split into a foreground
  *                             and a background plane (the behind
  *                             G-buffer fills in under the foreground),
- *                             diorama tilt                 -> scene, back
+ *                             diorama tilt. Not a pass: upscale.frag is
+ *                             compiled into the passes that read the
+ *                             picture (3a, 4a, 5), which work it out from
+ *                             the source-size targets as they go
  *   3 coc/dof   half size     blur amount, then H and V variable blur,
  *                             both planes at once
  *   4 bloom     1/4 and 1/8   threshold, Gaussian H and V; plus an
- *                             unthresholded 1/8 copy for the side fill
+ *                             unthresholded 1/8 copy for the side fill,
+ *                             made only when the picture leaves sides
  *   5 final     output size   DOF mix, bloom, grade, vignette, grain, UI
  *
  * Every intermediate keeps row 0 at the top of the picture (the order the
@@ -299,7 +303,7 @@ double hd2d_last_ms(void) { return last_ms; }
 
 /* ---- GL objects ---- */
 
-enum { P_EMIT, P_LIGHT, P_UPSCALE, P_COC, P_DOFBLUR, P_BRIGHT, P_GAUSS, P_FINAL, P_COUNT };
+enum { P_EMIT, P_LIGHT, P_COC, P_DOFBLUR, P_BRIGHT, P_GAUSS, P_FINAL, P_COUNT };
 
 typedef struct {
     GLuint tex, fbo;
@@ -314,11 +318,10 @@ static struct {
     GLuint t_color, t_layer;        /* uploads, source size */
     GLuint t_behind, t_blayer;      /* the behind G-buffer, source size */
     GLuint t_lit, t_mat, t_back, fbo_light; /* pass 1 targets, source size */
-    target scene, back;             /* pass 2: composite, background plane */
-    GLuint fbo_compose;             /* both of them */
     target half[2], fgh[2];         /* pass 3: background, foreground plane */
     GLuint fbo_dof[2];              /* half[k] and fgh[k] */
     target quarter[2], eighth[2], soft[2], out;
+    GLuint fbo_quarter;             /* quarter[0] (bloom) and [1] (plain) */
     target emit[2];                 /* point-light map, source / 4 */
     int pic_w, pic_h, out_w, out_h;
     float focus_y;
@@ -327,6 +330,8 @@ static struct {
     char osd_text[48];
     int osd_frames, osd_dirty, osd_w, osd_h;
     GLuint t_osd;
+    /* Uniform locations, looked up once (key: program, name literal). */
+    struct { const char *name; int prog; GLint loc; } uloc[256];
 } g;
 
 static GLuint make_tex(int w, int h, GLint ifmt, GLenum fmt, GLenum type, GLint filter);
@@ -366,14 +371,15 @@ static void osd_upload(void)
     g.osd_dirty = 0;
 }
 
-static GLuint compile(GLenum type, const char *body, const char *name)
+/* lib: an optional source compiled in front of body (upscale.frag). */
+static GLuint compile(GLenum type, const char *lib, const char *body, const char *name)
 {
     const char *prefix = g.gles ? "#version 300 es\nprecision highp float;\nprecision highp int;\n"
                                   "precision highp usampler2D;\n"
                                 : "#version 330 core\n";
-    const char *src[2] = {prefix, body};
+    const char *src[3] = {prefix, lib ? lib : "", body};
     GLuint s = p_glCreateShader(type);
-    p_glShaderSource(s, 2, src, NULL);
+    p_glShaderSource(s, 3, src, NULL);
     p_glCompileShader(s);
     GLint ok = 0;
     p_glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
@@ -387,10 +393,10 @@ static GLuint compile(GLenum type, const char *body, const char *name)
     return s;
 }
 
-static GLuint link(const char *frag, const char *name)
+static GLuint link(const char *lib, const char *frag, const char *name)
 {
-    GLuint vs = compile(GL_VERTEX_SHADER, hd2d_src_fullscreen_vert, "fullscreen.vert");
-    GLuint fs = compile(GL_FRAGMENT_SHADER, frag, name);
+    GLuint vs = compile(GL_VERTEX_SHADER, NULL, hd2d_src_fullscreen_vert, "fullscreen.vert");
+    GLuint fs = compile(GL_FRAGMENT_SHADER, lib, frag, name);
     if (!vs || !fs)
         return 0;
     GLuint p = p_glCreateProgram();
@@ -468,18 +474,18 @@ int hd2d_init(int gles)
             p_glGetString(GL_VERSION));
     prof_init(gles);
 
-    static const struct { const char *src, *name; } fs[P_COUNT] = {
-        [P_EMIT] = {hd2d_src_emit_frag, "emit.frag"},
-        [P_LIGHT] = {hd2d_src_light_frag, "light.frag"},
-        [P_UPSCALE] = {hd2d_src_upscale_frag, "upscale.frag"},
-        [P_COC] = {hd2d_src_coc_frag, "coc.frag"},
-        [P_DOFBLUR] = {hd2d_src_dofblur_frag, "dofblur.frag"},
-        [P_BRIGHT] = {hd2d_src_bright_frag, "bright.frag"},
-        [P_GAUSS] = {hd2d_src_gauss_frag, "gauss.frag"},
-        [P_FINAL] = {hd2d_src_final_frag, "final.frag"},
+    /* up: the pass reads the picture, so upscale.frag goes in front. */
+    static const struct { const char *src, *name; int up; } fs[P_COUNT] = {
+        [P_EMIT] = {hd2d_src_emit_frag, "emit.frag", 0},
+        [P_LIGHT] = {hd2d_src_light_frag, "light.frag", 0},
+        [P_COC] = {hd2d_src_coc_frag, "coc.frag", 1},
+        [P_DOFBLUR] = {hd2d_src_dofblur_frag, "dofblur.frag", 0},
+        [P_BRIGHT] = {hd2d_src_bright_frag, "bright.frag", 1},
+        [P_GAUSS] = {hd2d_src_gauss_frag, "gauss.frag", 0},
+        [P_FINAL] = {hd2d_src_final_frag, "final.frag", 1},
     };
     for (int k = 0; k < P_COUNT; k++)
-        if (!(g.prog[k] = link(fs[k].src, fs[k].name)))
+        if (!(g.prog[k] = link(fs[k].up ? hd2d_src_upscale_frag : NULL, fs[k].src, fs[k].name)))
             return -1;
 
     p_glGenVertexArrays(1, &g.vao);
@@ -544,12 +550,12 @@ void hd2d_shutdown(void)
         fclose(prof.f);
         prof.f = NULL;
     }
-    target *ts[] = {&g.scene, &g.back, &g.half[0], &g.half[1], &g.fgh[0], &g.fgh[1],
+    target *ts[] = {&g.half[0], &g.half[1], &g.fgh[0], &g.fgh[1],
                     &g.quarter[0], &g.quarter[1], &g.eighth[0], &g.eighth[1], &g.soft[0],
                     &g.soft[1], &g.out, &g.emit[0], &g.emit[1]};
     for (size_t k = 0; k < sizeof ts / sizeof *ts; k++)
         target_free(ts[k]);
-    GLuint fbos[3] = {g.fbo_compose, g.fbo_dof[0], g.fbo_dof[1]};
+    GLuint fbos[3] = {g.fbo_quarter, g.fbo_dof[0], g.fbo_dof[1]};
     p_glDeleteFramebuffers(3, fbos);
     GLuint tex[7] = {g.t_color, g.t_layer, g.t_behind, g.t_blayer, g.t_lit, g.t_mat, g.t_back};
     p_glDeleteTextures(7, tex);
@@ -583,8 +589,7 @@ static int resize(int ow, int oh, int pw, int ph)
     if (pw != g.pic_w || ph != g.pic_h) {
         g.pic_w = pw;
         g.pic_h = ph;
-        int ok = !target_make(&g.scene, pw, ph, 1);
-        ok &= !target_make(&g.back, pw, ph, 1);
+        int ok = 1;
         for (int k = 0; k < 2; k++) {
             ok &= !target_make(&g.half[k], pw / 2, ph / 2, 1);
             ok &= !target_make(&g.fgh[k], pw / 2, ph / 2, 1);
@@ -592,12 +597,12 @@ static int resize(int ow, int oh, int pw, int ph)
             ok &= !target_make(&g.eighth[k], pw / 8, ph / 8, 1);
             ok &= !target_make(&g.soft[k], pw / 8, ph / 8, 1);
         }
-        /* Two-plane targets for passes 2 and 3. */
-        GLuint fbos[3] = {g.fbo_compose, g.fbo_dof[0], g.fbo_dof[1]};
-        if (g.fbo_compose)
+        /* Two-target framebuffers for passes 3 and 4a. */
+        GLuint fbos[3] = {g.fbo_quarter, g.fbo_dof[0], g.fbo_dof[1]};
+        if (g.fbo_quarter)
             p_glDeleteFramebuffers(3, fbos);
-        GLuint two[2] = {g.scene.tex, g.back.tex};
-        ok &= !fbo_for(&g.fbo_compose, two, 2);
+        GLuint two[2] = {g.quarter[0].tex, g.quarter[1].tex};
+        ok &= !fbo_for(&g.fbo_quarter, two, 2);
         for (int k = 0; k < 2; k++) {
             two[0] = g.half[k].tex;
             two[1] = g.fgh[k].tex;
@@ -619,7 +624,23 @@ static int resize(int ow, int oh, int pw, int ph)
     return 0;
 }
 
-static GLint U(int prog, const char *name) { return p_glGetUniformLocation(g.prog[prog], name); }
+/* Uniform location, cached: names are string literals, so the pointer is
+   the key. */
+static GLint U(int prog, const char *name)
+{
+    enum { N = sizeof g.uloc / sizeof *g.uloc };
+    unsigned h = (unsigned)(((uintptr_t)name >> 2) * 2654435761u + (unsigned)prog * 40503u) % N;
+    for (int probe = 0; probe < N; probe++, h = (h + 1) % N) {
+        if (g.uloc[h].name == name && g.uloc[h].prog == prog)
+            return g.uloc[h].loc;
+        if (!g.uloc[h].name) {
+            g.uloc[h].name = name;
+            g.uloc[h].prog = prog;
+            return g.uloc[h].loc = p_glGetUniformLocation(g.prog[prog], name);
+        }
+    }
+    return p_glGetUniformLocation(g.prog[prog], name);
+}
 
 static void bind_tex(int unit, GLuint tex)
 {
@@ -647,14 +668,31 @@ static void gauss(const target *src, target *tmp, target *dst)
     draw_to(dst->fbo, dst->w, dst->h);
 }
 
+/* The upscale's inputs (upscale.frag) for a pass that reads the picture:
+   the source-size targets on units 0-2. */
+static void bind_picture(int prog, int pw, int ph, float tilt)
+{
+    p_glUniform1i(U(prog, "uLit"), 0);
+    p_glUniform1i(U(prog, "uLitBack"), 1);
+    p_glUniform1i(U(prog, "uMat"), 2);
+    p_glUniform2f(U(prog, "uScale"), (float)pw / SCHED_WIDTH, (float)ph / SCHED_HEIGHT);
+    p_glUniform2f(U(prog, "uPic"), (float)pw, (float)ph);
+    p_glUniform3f(U(prog, "uTilt"), 0.5f, g.focus_y, tilt);
+    bind_tex(0, g.t_lit);
+    bind_tex(1, g.t_back);
+    bind_tex(2, g.t_mat);
+}
+
+/* Bloom source from a smaller target (threshold < 0: a plain copy). */
 static void bright(const target *src, target *dst, float threshold)
 {
     p_glUseProgram(g.prog[P_BRIGHT]);
-    p_glUniform1i(U(P_BRIGHT, "uSrc"), 0);
-    p_glUniform1i(U(P_BRIGHT, "uMat"), 1);
+    p_glUniform1i(U(P_BRIGHT, "uFromPicture"), 0);
+    p_glUniform1i(U(P_BRIGHT, "uSrc"), 3);
+    p_glUniform1i(U(P_BRIGHT, "uMat"), 2);
     p_glUniform1f(U(P_BRIGHT, "uThreshold"), threshold);
-    bind_tex(0, src->tex);
-    bind_tex(1, g.t_mat);
+    bind_tex(3, src->tex);
+    bind_tex(2, g.t_mat);
     draw_to(dst->fbo, dst->w, dst->h);
 }
 
@@ -664,36 +702,58 @@ static void analyze(const uint8_t *bgrx, const uint8_t *layers, const sched_ppu_
                     int *ui_z, float *ui_frac, float *field_frac, float *focus_target,
                     float *mean_luma)
 {
-    /* Mean brightness of the picture, every 4th pixel. */
-    double lsum = 0;
-    for (int k = 0; k < SCHED_WIDTH * SCHED_HEIGHT; k += 4)
-        lsum += 0.114 * bgrx[k * 4] + 0.587 * bgrx[k * 4 + 1] + 0.299 * bgrx[k * 4 + 2];
+    /* Mean brightness of the picture, every 4th pixel: channel sums in
+       integers, weighted once at the end. */
+    uint32_t sb = 0, sg = 0, sr = 0;
+    for (int k = 0; k < SCHED_WIDTH * SCHED_HEIGHT; k += 4) {
+        sb += bgrx[k * 4];
+        sg += bgrx[k * 4 + 1];
+        sr += bgrx[k * 4 + 2];
+    }
+    double lsum = 0.114 * sb + 0.587 * sg + 0.299 * sr;
     *mean_luma = (float)(lsum / (SCHED_WIDTH * SCHED_HEIGHT / 4) / 255.0);
 
+    /* Weight actors near the middle: the camera follows the lead. */
+    static float colw[SCHED_WIDTH];
+    if (colw[0] == 0.0f)
+        for (int x = 0; x < SCHED_WIDTH; x++) {
+            double dx = (x - SCHED_WIDTH / 2) / (double)(SCHED_WIDTH / 2);
+            colw[x] = (float)(1.0 / (1.0 + 4.0 * dx * dx));
+        }
+    /* What each layer byte counts as, packed so one add per pixel counts
+       all three: UI in bits 0-10, ground and foreground planes in 11-21,
+       actors in 22-31 (a row has at most 256 of each); and the actor mask
+       as a float, for the weighted sum. */
     *ui_z = st && st->mode == 1 && st->bg3_priority ? 15 : -1;
-    long ui = 0, actors = 0, field = 0;
+    uint32_t pack[256];
+    float actor[256];
+    for (int v = 0; v < 256; v++) {
+        int l = v & 7, z = v >> 4;
+        pack[v] = *ui_z >= 0 && z == *ui_z && l < 4 ? 1u : l < 4 && z >= 4 ? 1u << 11
+                  : l == 4 || l == 6 ? 1u << 22 : 0u;
+        actor[v] = pack[v] == 1u << 22 ? 1.0f : 0.0f;
+    }
+    long n[4] = {0};
     double ysum = 0, wsum = 0;
     for (int y = 0; y < SCHED_HEIGHT; y++) {
         const uint8_t *row = layers + y * SCHED_WIDTH;
-        for (int x = 0; x < SCHED_WIDTH; x++) {
-            int l = row[x] & 7, z = row[x] >> 4;
-            if (*ui_z >= 0 && z == *ui_z && l < 4)
-                ui++;
-            else if (l < 4 && z >= 4)
-                field++;   /* ground and foreground planes */
-            else if (l == 4 || l == 6) {
-                /* Weight actors near the middle: the camera follows the lead. */
-                double dx = (x - SCHED_WIDTH / 2) / (double)(SCHED_WIDTH / 2);
-                double w = 1.0 / (1.0 + 4.0 * dx * dx);
-                ysum += w * y;
-                wsum += w;
-                actors++;
-            }
+        uint32_t acc = 0;
+        float r0 = 0, r1 = 0;   /* two sums: half the chain of dependent adds */
+        for (int x = 0; x < SCHED_WIDTH; x += 2) {
+            acc += pack[row[x]] + pack[row[x + 1]];
+            r0 += colw[x] * actor[row[x]];
+            r1 += colw[x + 1] * actor[row[x + 1]];
         }
+        float rw = r0 + r1;
+        n[1] += acc & 0x7ff;
+        n[2] += acc >> 11 & 0x7ff;
+        n[3] += acc >> 22;
+        ysum += (double)rw * y;
+        wsum += rw;
     }
-    *ui_frac = (float)ui / (SCHED_WIDTH * SCHED_HEIGHT);
-    *field_frac = (float)field / (SCHED_WIDTH * SCHED_HEIGHT);
-    *focus_target = actors > 24 ? (float)(ysum / wsum / SCHED_HEIGHT) : 0.55f;
+    *ui_frac = (float)n[1] / (SCHED_WIDTH * SCHED_HEIGHT);
+    *field_frac = (float)n[2] / (SCHED_WIDTH * SCHED_HEIGHT);
+    *focus_target = n[3] > 24 ? (float)(ysum / wsum / SCHED_HEIGHT) : 0.55f;
 }
 
 void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behind,
@@ -801,19 +861,9 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     draw_to(g.fbo_light, SCHED_WIDTH, SCHED_HEIGHT);
     prof_mark("light");
 
-    /* 2: upscale into the two planes, with the tilt. */
+    /* 2: the upscale into two planes, with the tilt: worked out in the
+       passes that read the picture (bind_picture). */
     float tilt = have_behind ? s->tilt * scene_amt * field_amt : 0.0f;
-    p_glUseProgram(g.prog[P_UPSCALE]);
-    p_glUniform1i(U(P_UPSCALE, "uSrc"), 0);
-    p_glUniform1i(U(P_UPSCALE, "uBack"), 1);
-    p_glUniform1i(U(P_UPSCALE, "uMat"), 2);
-    p_glUniform2f(U(P_UPSCALE, "uScale"), (float)pw / SCHED_WIDTH, (float)ph / SCHED_HEIGHT);
-    p_glUniform3f(U(P_UPSCALE, "uTilt"), 0.5f, g.focus_y, tilt);
-    bind_tex(0, g.t_lit);
-    bind_tex(1, g.t_back);
-    bind_tex(2, g.t_mat);
-    draw_to(g.fbo_compose, pw, ph);
-    prof_mark("upscale");
 
     /* Depth of field settings, shared by passes 3 and 5. */
     float dof_tilt = s->dof_tilt * scene_amt * field_amt;
@@ -822,16 +872,9 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     if (s->effects) {
         /* 3: blur amount, then the variable blur, H and V, both planes. */
         p_glUseProgram(g.prog[P_COC]);
-        p_glUniform1i(U(P_COC, "uScene"), 0);
-        p_glUniform1i(U(P_COC, "uMat"), 1);
-        p_glUniform1i(U(P_COC, "uBack"), 2);
-        p_glUniform1i(U(P_COC, "uBackSrc"), 3);
+        bind_picture(P_COC, pw, ph, tilt);
         p_glUniform4f(U(P_COC, "uFocus"), g.focus_y, s->focus_band, s->focus_ramp, 0.5f);
         p_glUniform3f(U(P_COC, "uDof"), dof_tilt, dof_depth, fore_depth);
-        bind_tex(0, g.scene.tex);
-        bind_tex(1, g.t_mat);
-        bind_tex(2, g.back.tex);
-        bind_tex(3, g.t_back);
         draw_to(g.fbo_dof[0], g.half[0].w, g.half[0].h);
         prof_mark("coc");
 
@@ -851,21 +894,39 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
         p_glUniform2f(U(P_DOFBLUR, "uDir"), 0.0f, 1.0f / g.half[1].h);
         draw_to(g.fbo_dof[0], g.half[0].w, g.half[0].h);
         prof_mark("dof");
-
-        /* 4: bloom, two levels. */
-        bright(&g.scene, &g.quarter[0], s->bloom_threshold);
+    }
+    /* 4: bloom, two levels, and the side fill: a soft copy of the
+       picture, only made when the picture leaves part of the output
+       uncovered. One pass reads the picture for both: quarter[0] gets the
+       bloom source, quarter[1] the plain copy. */
+    int sides = px > 0 || py > 0;
+    if (s->effects || sides) {
+        p_glUseProgram(g.prog[P_BRIGHT]);
+        bind_picture(P_BRIGHT, pw, ph, tilt);
+        p_glUniform1i(U(P_BRIGHT, "uFromPicture"), 1);
+        p_glUniform1i(U(P_BRIGHT, "uSrc"), 3);
+        bind_tex(3, g.t_mat);   /* unused here, but a valid texture */
+        p_glUniform1f(U(P_BRIGHT, "uThreshold"), s->effects ? s->bloom_threshold : -1.0f);
+        draw_to(g.fbo_quarter, g.quarter[0].w, g.quarter[0].h);
+    }
+    if (s->effects) {
+        /* quarter[1] is the blur's scratch target, so the soft copy is
+           taken from it first. */
+        if (sides)
+            bright(&g.quarter[1], &g.soft[0], -1.0f);
         gauss(&g.quarter[0], &g.quarter[1], &g.quarter[0]);
         bright(&g.quarter[0], &g.eighth[0], -1.0f);
         gauss(&g.eighth[0], &g.eighth[1], &g.eighth[0]);
         prof_mark("bloom");
+    } else if (sides) {
+        bright(&g.quarter[1], &g.soft[0], -1.0f);
     }
-    /* Side fill: a soft copy of the scene. */
-    bright(&g.scene, &g.quarter[1], -1.0f);
-    bright(&g.quarter[1], &g.soft[0], -1.0f);
-    gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
-    gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
-    gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
-    prof_mark("side");
+    if (sides) {
+        gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
+        gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
+        gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
+        prof_mark("side");
+    }
 
     /* 5: final, with the on-screen message if any. */
     float osd_alpha = 0.0f;
@@ -877,6 +938,7 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
             g.osd_frames--;   /* screenshots don't use up the message's time */
     }
     p_glUseProgram(g.prog[P_FINAL]);
+    bind_picture(P_FINAL, pw, ph, tilt);
     {
         float scale = (float)(ph / 180 > 2 ? ph / 180 : 2);   /* 6x at 1080p */
         p_glUniform1i(U(P_FINAL, "uOsd"), 7);
@@ -885,23 +947,17 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
                       g.osd_h * scale);
         p_glUniform1f(U(P_FINAL, "uOsdAlpha"), g.t_osd ? osd_alpha : 0.0f);
     }
-    p_glUniform1i(U(P_FINAL, "uScene"), 0);
-    p_glUniform1i(U(P_FINAL, "uDof"), 1);
-    p_glUniform1i(U(P_FINAL, "uBloomA"), 2);
-    p_glUniform1i(U(P_FINAL, "uBloomB"), 3);
-    p_glUniform1i(U(P_FINAL, "uSoft"), 4);
-    p_glUniform1i(U(P_FINAL, "uMat"), 5);
-    p_glUniform1i(U(P_FINAL, "uOrig"), 6);
-    bind_tex(0, g.scene.tex);
-    bind_tex(1, g.half[0].tex);
-    bind_tex(2, g.quarter[0].tex);
-    bind_tex(3, g.eighth[0].tex);
-    bind_tex(4, g.soft[0].tex);
-    bind_tex(5, g.t_mat);
-    bind_tex(6, g.t_color);
-    p_glUniform1i(U(P_FINAL, "uBack"), 8);
+    p_glUniform1i(U(P_FINAL, "uDof"), 3);
+    p_glUniform1i(U(P_FINAL, "uBloomA"), 4);
+    p_glUniform1i(U(P_FINAL, "uBloomB"), 5);
+    p_glUniform1i(U(P_FINAL, "uSoft"), 6);
+    p_glUniform1i(U(P_FINAL, "uOrig"), 8);
     p_glUniform1i(U(P_FINAL, "uFgDof"), 9);
-    bind_tex(8, g.back.tex);
+    bind_tex(3, g.half[0].tex);
+    bind_tex(4, g.quarter[0].tex);
+    bind_tex(5, g.eighth[0].tex);
+    bind_tex(6, g.soft[0].tex);
+    bind_tex(8, g.t_color);
     bind_tex(9, g.fgh[0].tex);
     p_glUniform4f(U(P_FINAL, "uFocus"), g.focus_y, s->focus_band, s->focus_ramp, 0.5f);
     p_glUniform3f(U(P_FINAL, "uDof3"), dof_tilt, dof_depth, fore_depth);
