@@ -66,6 +66,30 @@ add_library(ct_runtime STATIC runtime/cpu.c runtime/bus.c
     runtime/func_table.c runtime/module.c)   # port: table indirection, game modules
 target_include_directories(ct_runtime PUBLIC runtime)
 target_link_libraries(ct_runtime PUBLIC ct_snes_vendor m ${CMAKE_DL_LIBS})
+# port: our own context switch (runtime/compat/ucontext.h) where the C
+# library has no makecontext/swapcontext: Android's bionic, musl. Off on
+# glibc, whose build is then exactly as before; ON there tests ours.
+include(CheckCSourceCompiles)
+check_c_source_compiles([=[
+#include <ucontext.h>
+static ucontext_t a, b;
+static void f(void) { swapcontext(&b, &a); }
+int main(void) { static char s[65536]; getcontext(&b); b.uc_stack.ss_sp = s;
+    b.uc_stack.ss_size = sizeof s; b.uc_link = 0; makecontext(&b, f, 0);
+    return swapcontext(&a, &b); }
+]=] CT_HAVE_MAKECONTEXT)
+if(ANDROID OR NOT CT_HAVE_MAKECONTEXT)
+    set(ct_compat_default ON)
+else()
+    set(ct_compat_default OFF)
+endif()
+option(CT_COMPAT_UCONTEXT "Use runtime/compat's context switch, not <ucontext.h>" ${ct_compat_default})
+if(CT_COMPAT_UCONTEXT)
+    target_sources(ct_runtime PRIVATE runtime/compat/ucontext_aarch64.c
+        runtime/compat/ucontext_x86_64.c)
+    target_compile_definitions(ct_runtime PUBLIC CT_COMPAT_UCONTEXT)
+    message(STATUS "CT_COMPAT_UCONTEXT: runtime/compat context switch")
+endif()
 # ares's SPC700 core (ISC), compiled inside runtime/spc700_host.cpp.
 target_include_directories(ct_runtime PRIVATE third_party/ares/spc700)
 target_compile_options(ct_runtime PRIVATE ${CT_WARN})
@@ -269,6 +293,17 @@ foreach(t snes_bus hw_map interp_modes interp_system sched stack_guard replay re
     ct_engine_test(test_${t} test/test_${t}.c)
     add_test(NAME ${t} COMMAND test_${t})
 endforeach()
+
+# port: the coroutine context calls (runtime/compat/ucontext.h), ours or libc's.
+add_executable(test_ucontext test/test_ucontext.c)
+target_link_libraries(test_ucontext ct_runtime)
+target_compile_options(test_ucontext PRIVATE ${CT_WARN})
+add_test(NAME ucontext COMMAND test_ucontext)
+if(CT_COMPAT_UCONTEXT)
+    add_test(NAME ucontext_returns COMMAND test_ucontext returns)
+    set_tests_properties(ucontext_returns PROPERTIES
+        PASS_REGULAR_EXPRESSION "makecontext coroutine returned with no uc_link")
+endif()
 
 # Native dispatch: provides its own function table instead of the empty one.
 add_executable(test_native test/test_native.c runtime/func_table_static.c)

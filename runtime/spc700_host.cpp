@@ -12,7 +12,7 @@
  * each cycle's access (the CPU-port latch in snes_adapter.c). */
 #include <stdint.h>
 #include <stdlib.h>
-#include <ucontext.h>
+#include "compat/ucontext.h"   /* port: <ucontext.h>, or ours (bionic, musl) */
 
 #include "nall_shim.hpp"
 
