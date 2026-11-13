@@ -89,8 +89,9 @@ modules:
       - "! grep -qE ' f_[0-9A-Fa-f]{6}' ../engine.syms"
       - test -z "$(find /app \( -name 'ct_game*' -o -iname '*.sfc' -o -iname '*.smc' -o -name 'ct_funcs.*' -o -name 'ct_overlays.*' -o -name 'bank*.c' \) -print)"
     sources:
-      # `git archive HEAD`, made by packaging/flatpak/build.sh: committed
-      # files only, from the checkout's HEAD.
-      - type: archive
-        path: ../../build-flatpak-src/ct-recomp-src.tar
-        strip-components: 0
+      # `git archive HEAD`, unpacked by packaging/flatpak/build.sh:
+      # committed files only, from the checkout's HEAD. A dir source, as
+      # flatpak-builder caches a local archive by its path alone and would
+      # reuse a stale build after a new commit.
+      - type: dir
+        path: ../../build-flatpak-src/ct-recomp
