@@ -25,6 +25,7 @@
 #include <SDL.h>
 
 #include "hd2d_shaders.h"   /* generated: tools/embed_text.py */
+#include "osd_font.h"
 
 /* ---- the GL subset used here (values from the Khronos registry) ---- */
 typedef unsigned int GLenum, GLuint, GLbitfield;
@@ -59,6 +60,7 @@ typedef char GLchar;
 #define GL_CLAMP_TO_EDGE            0x812F
 #define GL_TEXTURE0                 0x84C0
 #define GL_RGBA8                    0x8058
+#define GL_R8                       0x8229
 #define GL_RGBA16F                  0x881A
 #define GL_R8UI                     0x8232
 #define GL_RED_INTEGER              0x8D94
@@ -206,7 +208,48 @@ static struct {
     int pic_w, pic_h, out_w, out_h;
     float focus_y;
     unsigned frame;
+    /* On-screen message: text, frames left, and its mask texture. */
+    char osd_text[48];
+    int osd_frames, osd_dirty, osd_w, osd_h;
+    GLuint t_osd;
 } g;
+
+static GLuint make_tex(int w, int h, GLint ifmt, GLenum fmt, GLenum type, GLint filter);
+
+#define OSD_FRAMES 130   /* about two seconds, the last 20 fading */
+#define OSD_GLYPH_W 6    /* 5 pixels and a gap */
+#define OSD_H 11         /* 7 rows and 2 above and below */
+
+void hd2d_osd(const char *text)
+{
+    snprintf(g.osd_text, sizeof g.osd_text, "%s", text);
+    g.osd_frames = OSD_FRAMES;
+    g.osd_dirty = 1;
+}
+
+/* Rasterize the message into its mask texture (1 = text). */
+static void osd_upload(void)
+{
+    int len = (int)strlen(g.osd_text);
+    g.osd_w = len * OSD_GLYPH_W + 3;
+    g.osd_h = OSD_H;
+    uint8_t *mask = calloc((size_t)g.osd_w * g.osd_h, 1);
+    if (!mask)
+        return;
+    for (int k = 0; k < len; k++) {
+        const uint8_t *rows = osd_glyph(g.osd_text[k]);
+        for (int y = 0; y < 7; y++)
+            for (int x = 0; x < 5; x++)
+                if (rows[y] & (0x10 >> x))
+                    mask[(y + 2) * g.osd_w + 2 + k * OSD_GLYPH_W + x] = 255;
+    }
+    if (g.t_osd)
+        p_glDeleteTextures(1, &g.t_osd);
+    g.t_osd = make_tex(g.osd_w, g.osd_h, GL_R8, GL_RED, GL_UNSIGNED_BYTE, GL_NEAREST);
+    p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, g.osd_w, g.osd_h, GL_RED, GL_UNSIGNED_BYTE, mask);
+    free(mask);
+    g.osd_dirty = 0;
+}
 
 static GLuint compile(GLenum type, const char *body, const char *name)
 {
@@ -376,6 +419,8 @@ void hd2d_shutdown(void)
         target_free(ts[k]);
     GLuint tex[4] = {g.t_color, g.t_layer, g.t_lit, g.t_mat};
     p_glDeleteTextures(4, tex);
+    if (g.t_osd)
+        p_glDeleteTextures(1, &g.t_osd);
     p_glDeleteFramebuffers(1, &g.fbo_light);
     for (int k = 0; k < P_COUNT; k++)
         p_glDeleteProgram(g.prog[k]);
@@ -628,8 +673,24 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const sched_ppu_sta
     gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
     gauss(&g.soft[0], &g.soft[1], &g.soft[0]);
 
-    /* 5: final. */
+    /* 5: final, with the on-screen message if any. */
+    float osd_alpha = 0.0f;
+    if (g.osd_frames > 0) {
+        if (g.osd_dirty)
+            osd_upload();
+        osd_alpha = g.osd_frames < 20 ? g.osd_frames / 20.0f : 1.0f;
+        if (!offscreen)
+            g.osd_frames--;   /* screenshots don't use up the message's time */
+    }
     p_glUseProgram(g.prog[P_FINAL]);
+    {
+        float scale = (float)(ph / 180 > 2 ? ph / 180 : 2);   /* 6x at 1080p */
+        p_glUniform1i(U(P_FINAL, "uOsd"), 7);
+        bind_tex(7, g.t_osd ? g.t_osd : g.t_mat);
+        p_glUniform4f(U(P_FINAL, "uOsdRect"), px + scale * 4, py + scale * 4, g.osd_w * scale,
+                      g.osd_h * scale);
+        p_glUniform1f(U(P_FINAL, "uOsdAlpha"), g.t_osd ? osd_alpha : 0.0f);
+    }
     p_glUniform1i(U(P_FINAL, "uScene"), 0);
     p_glUniform1i(U(P_FINAL, "uDof"), 1);
     p_glUniform1i(U(P_FINAL, "uBloomA"), 2);

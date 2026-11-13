@@ -21,6 +21,9 @@ uniform vec3 uShadowTint;
 uniform vec3 uHighTint;
 uniform float uSideDim;
 uniform float uTime;
+uniform sampler2D uOsd;      // message mask, nearest
+uniform vec4 uOsdRect;       // its rectangle in output pixels (top-left origin)
+uniform float uOsdAlpha;     // 0: no message
 uniform int uDebug;          // 0 off, 1 classes, 2 depth, 3 blur amount, 4 split compare
 out vec4 oColor;
 
@@ -61,9 +64,8 @@ vec3 grade(vec3 c, vec2 uv)
     return c;
 }
 
-void main()
+vec3 shade(vec2 fc)
 {
-    vec2 fc = vec2(gl_FragCoord.x, uFlip == 1 ? uOut.y - gl_FragCoord.y : gl_FragCoord.y);
     vec2 uv = (fc - uRect.xy) / uRect.zw;   // picture coordinates, 0..1 inside
     bool inside = all(greaterThanEqual(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0)));
 
@@ -83,27 +85,24 @@ void main()
         }
         c *= uSideDim;
         float fade = 1.0 - smoothstep(0.0, 0.35, out_);
-        oColor = vec4(c * (0.35 + 0.65 * fade), 1.0);
-        return;
+        return c * (0.35 + 0.65 * fade);
     }
 
     vec4 scene = texture(uScene, uv);
     vec4 mat = texture(uMat, uv);
 
-    if (uDebug == 1) { oColor = vec4(mix(classColor(mat.b), scene.rgb, 0.35), 1.0); return; }
-    if (uDebug == 2) { oColor = vec4(vec3(scene.a), 1.0); return; }
-    if (uDebug == 3) { oColor = vec4(vec3(texture(uDof, uv).a), 1.0); return; }
+    if (uDebug == 1) { return mix(classColor(mat.b), scene.rgb, 0.35); }
+    if (uDebug == 2) { return vec3(scene.a); }
+    if (uDebug == 3) { return vec3(texture(uDof, uv).a); }
     if (uDebug == 4 && uv.x < 0.5) {
         // Split compare: the console's own pixels left of center.
         float line_ = 1.0 - step(1.5 / uRect.z, abs(uv.x - 0.5));
-        oColor = vec4(mix(texture(uOrig, uv).bgr, vec3(1.0), line_), 1.0);
-        return;
+        return mix(texture(uOrig, uv).bgr, vec3(1.0), line_);
     }
 
     if (uGrade2.w < 0.5 || mat.r > 0.5) {
         // Effects off, or UI: the plain upscaled picture.
-        oColor = vec4(scene.rgb, 1.0);
-        return;
+        return scene.rgb;
     }
 
     vec4 dof = texture(uDof, uv);
@@ -111,5 +110,20 @@ void main()
     c += uGrade.x * (texture(uBloomA, uv).rgb * 0.6 + texture(uBloomB, uv).rgb * 0.8);
     c = grade(c, uv);
     c += (hash(fc + fract(uTime) * 61.0) - 0.5) * uGrade2.x;
-    oColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+    return clamp(c, 0.0, 1.0);
+}
+
+void main()
+{
+    vec2 fc = vec2(gl_FragCoord.x, uFlip == 1 ? uOut.y - gl_FragCoord.y : gl_FragCoord.y);
+    vec3 c = shade(fc);
+    // On-screen message: white text on a dimmed box, fading out.
+    if (uOsdAlpha > 0.0) {
+        vec2 o = (fc - uOsdRect.xy) / uOsdRect.zw;
+        if (all(greaterThanEqual(o, vec2(0.0))) && all(lessThan(o, vec2(1.0)))) {
+            float m = texture(uOsd, o).r;
+            c = mix(c, mix(c * 0.3, vec3(1.0), m), uOsdAlpha);
+        }
+    }
+    oColor = vec4(c, 1.0);
 }

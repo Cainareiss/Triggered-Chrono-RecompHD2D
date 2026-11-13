@@ -26,6 +26,11 @@ build/ct_sdl --hd2d --fullscreen    # or press F11; automatic under gamescope
 | F2 | Cycle the debug view: layer classes, depth, blur amount, split compare (original pixels on the left), off |
 | F3 | Cycle the aspect: 4:3 (default), 8:7 pixel aspect, stretch |
 | F11 | Toggle fullscreen |
+| R3 / L3 (controller) | Same as F1 / F3, for handhelds without function keys |
+
+Each change shows a short on-screen message. Preset and aspect are saved to
+`~/.local/share/ct-recomp/hd2d/settings.ini` (SDL's per-user preferences folder), and
+command-line options override them.
 
 | Option | Effect |
 | --- | --- |
@@ -110,4 +115,3 @@ large margin.
   tilt-shift only.
 - The renderer works under OpenGL ES 3.0 for Android, but that hasn't been tested on a
   device.
-- Settings aren't saved between runs yet.

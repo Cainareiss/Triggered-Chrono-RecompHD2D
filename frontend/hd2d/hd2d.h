@@ -45,6 +45,10 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const sched_ppu_sta
    bytes, rows top first (png_write_bgrx's layout). Returns 0 or -1. */
 int hd2d_read(uint8_t *bgrx, int out_w, int out_h);
 
+/* Show a short message over the picture for about two seconds (A-Z,
+   0-9, ": - / . %"; at most 47 characters). */
+void hd2d_osd(const char *text);
+
 /* GPU time of the last hd2d_render in milliseconds (glFinish-bracketed:
    only measured when timing is on, as it stalls the pipeline). */
 void hd2d_set_timing(int on);

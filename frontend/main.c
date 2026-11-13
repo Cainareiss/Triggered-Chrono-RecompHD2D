@@ -214,13 +214,22 @@ static int hd2d_key(SDL_Scancode sc)
     if (sc == SDL_SCANCODE_F1) {
         hd2d_set_preset((hd2d_preset() + 1) % HD2D_PRESETS);
         fprintf(stderr, "ct_sdl: hd2d preset %s\n", hd2d_preset_name(hd2d_preset()));
+        static const char *const msg[HD2D_PRESETS] = {"Look: original", "Look: HD-2D subtle",
+                                                      "Look: HD-2D"};
+        hd2d_osd(msg[hd2d_preset()]);
         settings_save();
     } else if (sc == SDL_SCANCODE_F2) {
         hd2d_set_debug((hd2d_debug() + 1) % HD2D_DEBUGS);
         fprintf(stderr, "ct_sdl: hd2d debug view %d\n", hd2d_debug());
+        static const char *const msg[HD2D_DEBUGS] = {"Debug: off", "Debug: layers", "Debug: depth",
+                                                     "Debug: blur", "Debug: compare"};
+        hd2d_osd(msg[hd2d_debug()]);
     } else if (sc == SDL_SCANCODE_F3) {
         hd2d_set_aspect((hd2d_aspect() + 1) % HD2D_ASPECTS);
         settings_save();
+        static const char *const msg[HD2D_ASPECTS] = {"Aspect: 4:3", "Aspect: pixel 8:7",
+                                                      "Aspect: stretch"};
+        hd2d_osd(msg[hd2d_aspect()]);
     } else {
         return 0;
     }
@@ -543,6 +552,12 @@ int main(int argc, char **argv)
             return 1;
         }
         SDL_GL_SetSwapInterval(0);   /* paced by the frame timer below */
+        /* port: say which look is on and how to change it. */
+        static char hello[48];
+        snprintf(hello, sizeof hello, "Look: %s - F1/R3 to change",
+                 hd2d_preset() == HD2D_OFF ? "original" : hd2d_preset() == HD2D_SUBTLE ? "subtle"
+                                                                                       : "HD-2D");
+        hd2d_osd(hello);
     } else {
         win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                SCHED_WIDTH * scale, SCHED_HEIGHT * scale, wflags);
