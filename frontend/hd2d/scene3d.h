@@ -126,7 +126,7 @@ typedef struct {
    so that one sprite pixel is a whole number of target pixels, on the
    target's pixel grid. Entries no object owns (captions) lie flat over
    the picture where the console drew them, at that same scale. With
-   marks, a quad on each entrance cell (S3D_N_WATER | S3D_OBJ). Returns
+   marks, a quad in the middle of each entrance (S3D_N_WATER | S3D_OBJ). Returns
    the number of quads. */
 int s3d_build_world_sprites(const ct_scene *s, const s3d_view *v, int marks, s3d_mesh *m);
 

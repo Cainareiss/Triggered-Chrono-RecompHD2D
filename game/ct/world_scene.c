@@ -130,8 +130,8 @@ int ct_world_scene(ct_scene *out)
 
     uint64_t h = fnv(0xCBF29CE484222325ull, w + DEFS_FG, 0x4000);   /* defs and both maps */
     h = fnv(h, w + PROPS, 512);
-    h = fnv(h, w + EXITS, 7 * 128);
     h = fnv(h, w + N_EXITS, 1);
+    h = fnv(h, w + EXITS, 7 * (w[N_EXITS] < 128 ? w[N_EXITS] : 128));
     h = fnv(h, w + LOCATION, 2);
     if (h != last_hash || !generation) {
         last_hash = h;

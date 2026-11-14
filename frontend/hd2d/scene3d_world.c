@@ -44,6 +44,10 @@ static float cellh[WS][WS];
 static float vh[WS + 1][WS + 1];   /* corner (x, y): the top-left of cell (x, y) */
 static uint8_t nrm[WS * WS * 4];
 static float lum_[WS][WS];
+/* Entrance marks: the middle of each group of touching event cells, px. */
+enum { MAX_MARKS = 256 };
+static float marks_xz[MAX_MARKS][2];
+static int n_marks;
 
 int s3d_world_class(int x, int y)
 {
@@ -400,6 +404,46 @@ static int emit_cell(const ct_scene *s, s3d_mesh *m, int x, int y)
     return bad;
 }
 
+/* One mark per group of touching event cells (an entrance several cells
+   wide is one place). */
+static void find_marks(const ct_scene *s)
+{
+    static uint8_t seen[WS][WS];
+    static int16_t q[WS * WS][2];
+    memset(seen, 0, sizeof seen);
+    n_marks = 0;
+    for (int y0 = 0; y0 < gh; y0++)
+        for (int x0 = 0; x0 < gw; x0++) {
+            if (seen[y0][x0] || !(s->cells[y0 * WS + x0].flags & CT_CELL_EVENT))
+                continue;
+            int n = 0, top = 1;
+            long sx = 0, sy = 0;
+            q[0][0] = (int16_t)x0;
+            q[0][1] = (int16_t)y0;
+            seen[y0][x0] = 1;
+            while (n < top) {
+                int x = q[n][0], y = q[n][1];
+                n++;
+                sx += x;
+                sy += y;
+                for (int k = 0; k < 9; k++) {
+                    int nx = x + k % 3 - 1, ny = y + k / 3 - 1;
+                    if (nx < 0 || ny < 0 || nx >= gw || ny >= gh || seen[ny][nx] ||
+                        !(s->cells[ny * WS + nx].flags & CT_CELL_EVENT))
+                        continue;
+                    seen[ny][nx] = 1;
+                    q[top][0] = (int16_t)nx;
+                    q[top++][1] = (int16_t)ny;
+                }
+            }
+            if (n_marks < MAX_MARKS) {
+                marks_xz[n_marks][0] = (float)sx / (float)n * 8.0f + 4.0f;
+                marks_xz[n_marks][1] = (float)sy / (float)n * 8.0f + 4.0f;
+                n_marks++;
+            }
+        }
+}
+
 int s3d_build_world(const ct_scene *s, s3d_mesh *m)
 {
     m->nv = m->ni = m->ni_floor = 0;
@@ -413,6 +457,7 @@ int s3d_build_world(const ct_scene *s, s3d_mesh *m)
     gwrap = s->wrap != 0;
     classify(s);
     heights();
+    find_marks(s);
     int bad = 0;
     for (int pass = 0; pass < 2; pass++) {
         for (int y = 0; y < gh; y++)
@@ -496,23 +541,19 @@ int s3d_build_world_sprites(const ct_scene *s, const s3d_view *v, int marks, s3d
         return 0;
     float mw = (float)s->map_w * s->cell_px, mh = (float)s->map_h * s->cell_px;
 
-    /* Entrance marks: a small diamond at each entrance cell's centre,
+    /* Entrance marks: a small diamond in the middle of each entrance,
        just above the ground (no sprite pixels: the shader draws it). */
-    if (marks && s->cells && gw)
-        for (int y = 0; y < gh; y++)
-            for (int x = 0; x < gw; x++) {
-                if (!(s->cells[y * WS + x].flags & CT_CELL_EVENT))
-                    continue;
-                float cx = (float)x * 8 + 4, cz = (float)y * 8 + 4;
-                if (s->wrap) {   /* the copy nearest the point looked at */
-                    cx += mw * roundf((v->at[0] - cx) / mw);
-                    cz += mh * roundf((v->at[2] - cz) / mh);
-                }
-                float h = s3d_world_height(cx, cz) + 0.6f;
-                float c[4][3] = {{cx - 4, h, cz - 4}, {cx + 4, h, cz - 4},
-                                 {cx - 4, h, cz + 4}, {cx + 4, h, cz + 4}};
-                s3d_emit_corners(m, c, S3D_OBJ | (uint32_t)S3D_N_WATER << S3D_NORMAL_SHIFT, 0, 0);
-            }
+    for (int k = 0; marks && k < n_marks; k++) {
+        float cx = marks_xz[k][0], cz = marks_xz[k][1];
+        if (s->wrap) {   /* the copy nearest the point looked at */
+            cx += mw * roundf((v->at[0] - cx) / mw);
+            cz += mh * roundf((v->at[2] - cz) / mh);
+        }
+        float h = s3d_world_height(cx, cz) + 0.6f;
+        float c[4][3] = {{cx - 4, h, cz - 4}, {cx + 4, h, cz - 4}, {cx - 4, h, cz + 4},
+                         {cx + 4, h, cz + 4}};
+        s3d_emit_corners(m, c, S3D_OBJ | (uint32_t)S3D_N_WATER << S3D_NORMAL_SHIFT, 0, 0);
+    }
 
     uint8_t owned[128] = {0};
     for (int k = 0; k < s->n_objects && k < CT_SCENE_MAX_OBJECTS; k++) {
