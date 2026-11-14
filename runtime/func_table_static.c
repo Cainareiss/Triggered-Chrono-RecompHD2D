@@ -4,7 +4,9 @@
  * Static builds: install the tables linked into this program (a game's
  * generated ct_funcs.c and ct_overlays.c) before main runs, and the game's
  * scene description if it has one (module.h). */
+#ifndef CT_TABLES_DEFINE   /* also set by the build */
 #define CT_TABLES_DEFINE
+#endif
 #include "func_table.h"
 #include "module.h"
 
