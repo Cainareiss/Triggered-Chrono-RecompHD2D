@@ -334,7 +334,7 @@ const ImU32 C_DIM = IM_COL32(150, 158, 174, 255);
 const ImU32 C_FAINT = IM_COL32(96, 104, 120, 255);
 const ImU32 C_ACCENT = IM_COL32(242, 193, 78, 255);
 const ImU32 C_ACCENT_BG = IM_COL32(242, 193, 78, 38);
-const ImU32 C_PANEL = IM_COL32(16, 19, 27, 250);
+const ImU32 C_PANEL = IM_COL32(16, 19, 27, 255);
 const ImU32 C_LINE = IM_COL32(255, 255, 255, 22);
 const ImU32 C_PILL_OFF = IM_COL32(70, 76, 92, 255);
 
@@ -675,6 +675,10 @@ void build_ui(float W, float H)
         float top = tops[sel], bot = tops[sel + 1];
         if (sel > 0 && settings_at(idx[sel - 1])->flags & SETTING_HEADING)
             top = tops[sel - 1];
+        if (sel + 1 < n)   /* and a peek at the next, clear of the fade */
+            bot = fminf(bot + rh * 0.7f, acc);
+        if (top > 0)
+            top = fmaxf(0.0f, top - px * 0.6f);
         if (top < M.scroll)
             M.scroll = top;
         if (bot > M.scroll + view)
@@ -746,21 +750,17 @@ void build_ui(float W, float H)
     dl->AddLine(ImVec2(x0, p1.y - footer_h), ImVec2(x1, p1.y - footer_h), C_LINE, 1.0f);
     bool kb = glyphs_in_use() == GLYPHS_KEYBOARD;
     float fx = x0;
-    const char *what = "Select";
-    if (cur) {
-        if (cur->type == SETTING_BOOL || cur->type == SETTING_ENUM)
-            what = "Change";
-        else if (cur->type == SETTING_INT)
-            what = "Adjust";
-        else if (cur->type == SETTING_KEY)
-            what = "Set key";
-        else if (cur->type == SETTING_ACTION)
-            what = "Run";
-    }
-    fx = prompt(dl, fx, fy, px * 0.85f, kb ? "key:Arrows" : "dpad", NULL, "Move");
-    if (cur && cur->type == SETTING_INT)
-        fx = prompt(dl, fx, fy, px * 0.85f, kb ? "key:Left" : "dpad", NULL, what);
-    else if (cur && cur->type != SETTING_INFO)
+    /* A's word for the row; an int is adjusted with left / right instead */
+    bool usable = cur && settings_is_enabled(cur);
+    const char *what = !usable                                                   ? NULL
+                       : cur->type == SETTING_BOOL || cur->type == SETTING_ENUM ? "Change"
+                       : cur->type == SETTING_KEY                               ? "Set key"
+                       : cur->type == SETTING_ACTION                            ? "Run"
+                                                                                : NULL;
+    bool adjust = usable && cur->type == SETTING_INT;
+    fx = prompt(dl, fx, fy, px * 0.85f, kb ? "key:Arrows" : "dpad", NULL,
+                adjust ? "Move, adjust" : "Move");
+    if (what)
         fx = prompt(dl, fx, fy, px * 0.85f, kb ? "key:Return" : "a", NULL, what);
     fx = prompt(dl, fx, fy, px * 0.85f, kb ? "key:Escape" : "b", NULL,
                 M.capture >= 0 || M.confirm >= 0 ? "Cancel" : "Resume");

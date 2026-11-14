@@ -1974,12 +1974,14 @@ static void write_hash(long f)
      axis NAME V    a stick axis (leftx, lefty) moved to V
      wait N         N ticks with nothing
      shot PATH      the next tick's picture, menu and all, as PNG
+     click X Y      the left mouse button (or a touch) at X, Y in the
+                    window, let go the next tick
      glyphs NAME    show the buttons of a controller family (steamdeck,
                     xbox, playstation, switch, keyboard, ...), as if used
    After "open", one command per tick of the open menu; once the script
    runs out (or reaches the next "open") with the menu still open, it
    closes after 30 ticks. */
-enum { MT_OPEN, MT_BUTTON, MT_KEY, MT_AXIS, MT_WAIT, MT_SHOT, MT_GLYPHS };
+enum { MT_OPEN, MT_BUTTON, MT_KEY, MT_AXIS, MT_WAIT, MT_SHOT, MT_GLYPHS, MT_CLICK };
 
 /* A glyph set by name, spaces and case aside ("steamdeck", "xbox"). */
 static int glyphs_parse(const char *s)
@@ -1995,7 +1997,30 @@ static int glyphs_parse(const char *s)
     return -1;
 }
 static int mt_pos, mt_wait, mt_idle;
-static int mt_up_button = -1;
+static int mt_up_button = -1, mt_up_mouse;
+static int mt_mouse_x, mt_mouse_y;
+
+/* The left mouse button at (x, y) in window pixels (down), or let go where it was. */
+static void push_mouse(int x, int y, int down)
+{
+    SDL_Event e;
+    if (down) {
+        mt_mouse_x = x, mt_mouse_y = y;
+        memset(&e, 0, sizeof e);
+        e.type = SDL_MOUSEMOTION;
+        e.motion.x = x, e.motion.y = y;
+        e.motion.windowID = SDL_GetWindowID(win);
+        SDL_PushEvent(&e);
+    }
+    memset(&e, 0, sizeof e);
+    e.type = down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
+    e.button.button = SDL_BUTTON_LEFT;
+    e.button.state = down ? SDL_PRESSED : SDL_RELEASED;
+    e.button.clicks = 1;
+    e.button.x = mt_mouse_x, e.button.y = mt_mouse_y;
+    e.button.windowID = SDL_GetWindowID(win);
+    SDL_PushEvent(&e);
+}
 static SDL_Scancode mt_up_key;
 
 static int menu_test_load(const char *path)
@@ -2033,6 +2058,8 @@ static int menu_test_load(const char *path)
             e->kind = MT_AXIS, snprintf(e->path, sizeof e->path, "%d", v);
         else if (!strcmp(cmd, "wait") && got >= 2)
             e->kind = MT_WAIT, e->a = atoi(arg);
+        else if (!strcmp(cmd, "click") && got == 3)
+            e->kind = MT_CLICK, e->a = atoi(arg), snprintf(e->path, sizeof e->path, "%d", v);
         else if (!strcmp(cmd, "glyphs") && got >= 2 && (e->a = glyphs_parse(arg)) >= 0)
             e->kind = MT_GLYPHS;
         else if (!strcmp(cmd, "shot") && got >= 2)
@@ -2087,6 +2114,8 @@ static void menu_test_tick(void)
 {
     if (mt_up_button >= 0)
         push_button(mt_up_button, 0), mt_up_button = -1;
+    if (mt_up_mouse)
+        push_mouse(0, 0, 0), mt_up_mouse = 0;
     if (mt_up_key)
         push_key(mt_up_key, 0), mt_up_key = 0;
     if (!mtest.n)
@@ -2119,6 +2148,7 @@ static void menu_test_tick(void)
     case MT_WAIT: mt_wait = e->a > 0 ? e->a - 1 : 0; break;
     case MT_SHOT: menu_shot_path = e->path; break;
     case MT_GLYPHS: glyphs_use(e->a); break;
+    case MT_CLICK: push_mouse(e->a, atoi(e->path), 1), mt_up_mouse = 1; break;
     default: break;
     }
 }
