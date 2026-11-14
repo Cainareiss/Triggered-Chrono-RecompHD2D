@@ -6,15 +6,19 @@
  * (sched_players). With one player every patch returns at once, without
  * touching memory: the game runs as translated.
  *
- * Battle: party members 2 and 3 take their commands from pad 2. The game
+ * Battle: party members 2 and 3 take their commands from pad 2 (or each
+ * from the pad of the player the frontend gives that party slot,
+ * sched_slot_player: settings.ini coop_chars, up to three players). The game
  * reads pad 1 once a frame into $00F2/$00F3 and remaps it with the
  * player's button config into $00F8/$00F9 (Pad_ApplyButtonRemap); the
  * battle turns $00F8 into new presses with auto-repeat
  * (BattleSys_UpdatePadRepeat, $CD0340). While the open command menu
- * ($7E95D5) is member 2's or 3's, the patch at that routine's entry puts
- * pad 2, remapped the same way, in $00F8 instead: the menus, the target
+ * ($7E95D5) is a member another player has, the patch at that routine's
+ * entry puts that player's pad, remapped the same way, in $00F8 instead: the menus, the target
  * cursor and anything else battle code reads from it that frame follow
- * player 2, and player 1's buttons do nothing.
+ * that player, and player 1's buttons do nothing. A player who leaves
+ * (a controller unplugged: the frontend lowers sched_players) hands their
+ * members back to player 1 at once.
  *
  * At a hand-off (the menu changing owner) the buttons the new owner is
  * already holding are kept from the game until released: otherwise the
@@ -70,7 +74,7 @@ static uint16_t remap_pad(const uint8_t *w, uint16_t pad)
     return (uint16_t)(out | (pad >> 8 & 0x0F) << 8);
 }
 
-static int battle_owner;      /* player (0, 1) $F8 came from last time */
+static int battle_owner;      /* player (0-3) $F8 came from last time */
 static uint16_t battle_mask;  /* held at the hand-off, kept until released */
 
 /* $CD0340 BattleSys_UpdatePadRepeat (m1x0, D=0, DB=$7E). */
@@ -82,8 +86,8 @@ int ct_patch_coop_battle_pad(CPU *cpu)
         return 0;
     uint8_t *w = bus_wram();
     uint8_t slot = w[BTL_MENU_SLOT];
-    int owner = slot == 1 || slot == 2;
-    uint16_t held = owner ? remap_pad(w, sched_joypad_read(1))
+    int owner = slot < 3 ? sched_slot_player(slot) : 0;   /* the frontend's choice */
+    uint16_t held = owner ? remap_pad(w, sched_joypad_read(owner))
                           : (uint16_t)(w[PAD_HELD] | w[PAD_HELD + 1] << 8);
     if (owner != battle_owner) {
         battle_owner = owner;
@@ -99,6 +103,7 @@ int ct_patch_coop_battle_pad(CPU *cpu)
 /* ---- field: follower 1 ---- */
 
 /* WRAM (bank $7E offsets; field code runs with D = $0100) */
+#define F_LOCATION    0x0100   /* location id, 9 bits */
 #define F_EVENT       0x0138   /* nonzero: an event holds the party (ActAsPartyMember returns) */
 #define F_IDLE_TIMER  0x0158   /* 16-bit, cleared by every step (Player_SelectMoveAnim) */
 #define F_CUR_OBJ     0x016D   /* object the field engine is running */
@@ -136,6 +141,7 @@ static struct {
     int state;
     long frame;            /* frame it last ran in (the field's loop isn't
                               tied to frame edges: 0-2 runs a frame) */
+    int map;               /* the location then */
     int x, y;              /* follower 1 after this frame's step, 1/16 px */
     int sx, sy;            /* its slot: where the ring would have it */
     int idle, stuck, best; /* frames pad 2 rested, without progress; best distance */
@@ -164,11 +170,12 @@ static int cell_solid(const uint8_t *w, int x16, int y16)
     return (cls >= 1 && cls < 0x16) || (w[MAP_PROP_B + off] & 0x80);
 }
 
-/* A 10 x 6 px box at the feet (the foot point at its bottom middle). */
+/* A 7 x 4 px box at the feet (the foot point at its bottom middle):
+   narrow enough for the 2-cell stairways the leader takes. */
 static int box_solid(const uint8_t *w, int x16, int y16)
 {
-    return cell_solid(w, x16 - 5 * 16, y16) || cell_solid(w, x16 + 5 * 16, y16) ||
-           cell_solid(w, x16 - 5 * 16, y16 - 5 * 16) || cell_solid(w, x16 + 5 * 16, y16 - 5 * 16);
+    return cell_solid(w, x16 - 3 * 16, y16) || cell_solid(w, x16 + 3 * 16, y16) ||
+           cell_solid(w, x16 - 3 * 16, y16 - 3 * 16) || cell_solid(w, x16 + 3 * 16, y16 - 3 * 16);
 }
 
 /* A step, each axis on its own so it slides along walls: what's left of
@@ -223,6 +230,13 @@ static void advance_ring(uint8_t *w)
 }
 
 /* Back into the follow ring: onto its slot, the routine in charge again. */
+/* The second camera (split screen, below): off whenever follower 1
+   follows. */
+static struct {
+    int on;
+    int cx, cy;   /* map px */
+} cam2;
+
 static void snap(uint8_t *w, unsigned obj)
 {
     if (f1.state != F_FOLLOW) {
@@ -230,6 +244,213 @@ static void snap(uint8_t *w, unsigned obj)
         wr16(w, OBJ_Y + obj, f1.sy);
     }
     f1.state = F_FOLLOW;
+    cam2.on = 0;
+}
+
+/* The game placed the party itself (a map loaded, a cutscene moved it):
+   follower 1 is the routine's again where it stands. */
+static void let_go(void)
+{
+    f1.state = F_FOLLOW;
+    cam2.on = 0;
+}
+
+/* ---- split screen (B3, experimental: sched_views() == 2) ----
+ *
+ * When follower 1 is about 3/4 of a screen from the leader, the module
+ * asks for a second view centred on it (sched_view2). Its BG tilemaps are
+ * built from the whole map in WRAM (the L1/L2/L3 grids and the metatile
+ * tables, docs/SCENE.md A0.2), since VRAM's tilemaps only hold the area
+ * around the game's camera; tiles and palettes are VRAM's and CGRAM's.
+ * Sprites: objects near the second camera are made active as if near the
+ * first (Obj_UpdateVisibility, $C0A88D), so the game animates them and
+ * uploads their frames and palettes; at the OAM upload ($C0ECA3) their
+ * entries go to the second view's OAM and leave the first view's (they
+ * would show there wrapped around). That changes the game's own state
+ * (activation runs scripts, and takes VRAM sprite slots and palettes the
+ * game shares among about 16 objects), so it only happens with split
+ * screen on. All BGs scroll with the second camera (no parallax). */
+
+#define CAM_X8      0x1D0A   /* camera left / right / top / bottom, 8 px units */
+#define CAM_X8_END  0x1D0C
+#define CAM_Y8      0x1D0E
+#define CAM_Y8_END  0x1D10
+#define CAM_HOFS    0x1D87   /* BG1 scroll written to the PPU: its fine bits */
+#define CAM_VOFS    0x1D89
+#define CAM_BOUND_L 0x1D1A   /* camera bounds, 16 px cells (left, right, top, bottom) */
+#define CAM_BOUND_R 0x1D1B
+#define CAM_BOUND_T 0x1D1C
+#define CAM_BOUND_B 0x1D1D
+#define MAP_L3_ON   0x0BCA
+#define MAP_GRID_L1 0x3000   /* + y*256 + x: metatile index, low 8 bits */
+#define MAP_GRID_L2 0x3040
+#define MAP_GRID_L3 0x3080
+#define META_L12    0xB000   /* 512 x 4 tilemap words (TL TR BL BR) */
+#define META_L3     0xC000
+#define OAM_SHADOW  0x0700   /* 544 bytes, DMA'd to OAM by Vblank_UploadOam */
+#define OBJ_TYPE    0x1100
+#define OBJ_DRAWN   0x1A81
+#define OBJ_ACTIVE  0x0F00   /* bit 7 */
+#define OBJ_OAMTILE 0x0D00
+#define OBJ_SX      0x0A00   /* screen position from the camera, 9 bits */
+#define OBJ_SY      0x0A80
+
+static int cam1_x(const uint8_t *w) { return w[CAM_X8] * 8 + (w[CAM_HOFS] & 7); }
+static int cam1_y(const uint8_t *w) { return w[CAM_Y8] * 8 + (w[CAM_VOFS] & 7); }
+
+/* The 64x32 tilemap of one layer for a view whose top-left is (cx, cy). */
+static void build_map(const uint8_t *w, uint16_t *map, unsigned grid, unsigned meta,
+                      int hi_bit, int cx, int cy)
+{
+    for (int my = cy >> 3; my < (cy >> 3) + 30; my++)
+        for (int mx = cx >> 3; mx < (cx >> 3) + 33; mx++) {
+            unsigned off = (unsigned)((my >> 1) & 0x3F) * 256 + (unsigned)((mx >> 1) & 0x3F);
+            unsigned idx = w[grid + off];
+            if (hi_bit >= 0)
+                idx |= (unsigned)(w[MAP_PROP0 + off] >> hi_bit & 1) << 8;
+            unsigned q = (unsigned)((my & 1) * 2 + (mx & 1));
+            map[(mx & 31) + (my & 31) * 32 + (mx & 32 ? 1024 : 0)] =
+                (uint16_t)rd16(w, meta + idx * 8 + q * 2);
+        }
+}
+
+/* Each frame the follower routine runs: is the second view wanted, where
+   is its camera, and its BG layers. (x, y): follower 1, 1/16 px. */
+static void view2_update(const uint8_t *w, int x, int y, unsigned lead)
+{
+    sched_view *v = sched_view2();
+    int fx = x >> 4, fy = y >> 4;
+    int dx = fx - (rd16(w, OBJ_X + lead) >> 4), dy = fy - (rd16(w, OBJ_Y + lead) >> 4);
+    int ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy;
+    if (f1.state == F_FOLLOW)
+        cam2.on = 0;
+    else if (ax > SCREEN_W * 3 / 4 || ay > SCREEN_H * 3 / 4)
+        cam2.on = 1;
+    else if (ax < SCREEN_W * 5 / 8 && ay < SCREEN_H * 5 / 8)
+        cam2.on = 0;   /* close again: one view */
+    /* clamped to the camera's bounds (Camera_ClampScrollX/Y: first and
+       last 16 px cell it may show) */
+    int x0 = w[CAM_BOUND_L] * 16, x1 = (w[CAM_BOUND_R] + 1) * 16 - SCREEN_W;
+    int y0 = w[CAM_BOUND_T] * 16, y1 = (w[CAM_BOUND_B] + 1) * 16 - SCREEN_H;
+    cam2.cx = fx - SCREEN_W / 2;
+    cam2.cy = fy - SCREEN_H / 2 - 8;
+    cam2.cx = cam2.cx > x1 ? x1 : cam2.cx;
+    cam2.cy = cam2.cy > y1 ? y1 : cam2.cy;
+    cam2.cx = cam2.cx < x0 ? x0 : cam2.cx;
+    cam2.cy = cam2.cy < y0 ? y0 : cam2.cy;
+    v->frame = sched_frame_count();
+    v->on = cam2.on;
+    if (!cam2.on)
+        return;
+    v->dx = cam2.cx - cam1_x(w);
+    v->dy = cam2.cy - cam1_y(w);
+    for (int k = 0; k < 3; k++) {
+        v->hofs[k] = (uint16_t)cam2.cx;
+        v->vofs[k] = (uint16_t)cam2.cy;
+        v->map_on[k] = 1;
+    }
+    v->map_on[3] = 0;
+    build_map(w, v->map[0], MAP_GRID_L1, META_L12, 0, cam2.cx, cam2.cy);
+    build_map(w, v->map[1], MAP_GRID_L2, META_L12, 1, cam2.cx, cam2.cy);
+    if (w[MAP_L3_ON] & 1)
+        build_map(w, v->map[2], MAP_GRID_L3, META_L3, -1, cam2.cx, cam2.cy);
+    else
+        v->map_on[2] = 0;
+}
+
+/* The second view is up this frame. */
+static int split_live(void)
+{
+    return cam2.on && sched_views() > 1 && sched_players() > 1 &&
+           sched_view2()->frame >= sched_frame_count() - 2;
+}
+
+/* $C0A88D Obj_UpdateVisibility (m1x1, D=$0100, $016D the object): an
+   object inside the second camera's window (the game's margins: 4 cells
+   left and right, 2 above, 5 below) but outside the first's takes the
+   routine's "visible" path ($C0A8E5: activate, palette, VRAM slot). */
+int ct_patch_coop_visibility(CPU *cpu);
+int ct_patch_coop_visibility(CPU *cpu)
+{
+    if (!split_live())
+        return 0;
+    uint8_t *w = bus_wram();
+    unsigned o = w[F_CUR_OBJ];
+    if (o >= 0x80 || (w[OBJ_TYPE + o] & 0x80) || !w[OBJ_DRAWN + o] || (w[OBJ_DRAWN + o] & 0x80))
+        return 0;
+    int tx = w[OBJ_X + o + 1] * 2, ty = w[OBJ_Y + o + 1] * 2;
+    int l1 = w[CAM_X8] - 4, r1 = w[CAM_X8_END] + 4, t1 = w[CAM_Y8] - 2, b1 = w[CAM_Y8_END] + 5;
+    if (tx >= (l1 < 0 ? 0 : l1) && tx < (r1 > 255 ? 255 : r1) && ty >= (t1 < 0 ? 0 : t1) &&
+        ty < (b1 > 255 ? 255 : b1))
+        return 0;   /* near the first camera: the routine as is */
+    int l2 = cam2.cx / 8 - 4, r2 = cam2.cx / 8 + SCREEN_W / 8 + 4;
+    int t2 = cam2.cy / 8 - 2, b2 = cam2.cy / 8 + SCREEN_H / 8 + 5;
+    if (tx < l2 || tx >= r2 || ty < t2 || ty >= b2)
+        return 0;
+    cpu->X = (uint16_t)o;
+    cpu->PB = 0xC0;
+    cpu->PC = 0xA8E5;
+    ct_interp_rest(cpu, cpu->S);   /* on to the routine's own RTS */
+    return 1;
+}
+
+static int wrap(int v, int bits)
+{
+    int m = 1 << bits;
+    v &= m - 1;
+    return v >= m / 2 ? v - m : v;
+}
+
+/* $C0ECA3 Vblank_UploadOam (m1x0, in the NMI): the second view's OAM from
+   the shadow OAM, and objects far from the first camera out of the
+   first's. */
+int ct_patch_coop_oam(CPU *cpu);
+int ct_patch_coop_oam(CPU *cpu)
+{
+    (void)cpu;
+    if (!split_live())
+        return 0;
+    uint8_t *w = bus_wram();
+    uint8_t *sh = w + OAM_SHADOW, *out = sched_view2()->oam;
+    int c1x = cam1_x(w), c1y = cam1_y(w);
+    for (int i = 0; i < 128; i++) {   /* all off screen */
+        out[4 * i] = 0;
+        out[4 * i + 1] = 0xE0;
+        out[4 * i + 2] = out[4 * i + 3] = 0;
+    }
+    for (int i = 0; i < 32; i++)
+        out[512 + i] = 0x55;   /* X bit 8 set: X 256 */
+    for (int i = 0; i < 128; i++) {
+        uint8_t *e = sh + 4 * i;
+        int hi = sh[512 + i / 4] >> (2 * (i % 4)) & 3;
+        if (e[1] >= 0xE0)
+            continue;
+        unsigned tile9 = (unsigned)(e[2] | (e[3] & 1) << 8), o = 0x80;
+        for (unsigned k = 0; k < 0x80; k += 2)
+            if ((w[OBJ_ACTIVE + k] & 0x80) && !(w[OBJ_TYPE + k] & 0x80) &&
+                (unsigned)(rd16(w, OBJ_OAMTILE + k) & 0x1F8) == (tile9 & 0x1F8)) {
+                o = k;
+                break;
+            }
+        if (o >= 0x80)
+            continue;   /* not an object's (effects): the first view only */
+        int ex = e[0] | (hi & 1) << 8;
+        int offx = wrap(ex - rd16(w, OBJ_SX + o), 9), offy = wrap(e[1] - rd16(w, OBJ_SY + o), 8);
+        int x1 = (rd16(w, OBJ_X + o) >> 4) - c1x + offx, y1 = (rd16(w, OBJ_Y + o) >> 4) - c1y + offy;
+        int x2 = x1 + c1x - cam2.cx, y2 = y1 + c1y - cam2.cy;
+        if (x2 > -64 && x2 < SCREEN_W && y2 > -64 && y2 < SCREEN_H) {
+            int b = 2 * (i % 4);
+            out[4 * i] = (uint8_t)x2;
+            out[4 * i + 1] = (uint8_t)y2;
+            out[4 * i + 2] = e[2];
+            out[4 * i + 3] = e[3];
+            out[512 + i / 4] = (uint8_t)((out[512 + i / 4] & ~(3 << b)) |
+                                         ((x2 >> 8 & 1) | (hi & 2)) << b);
+        }
+        if (x1 <= -64 || x1 >= SCREEN_W + 16 || y1 <= -64 || y1 >= SCREEN_H + 16)
+            e[1] = 0xE0;   /* it would wrap into the first view */
+    }
+    return 0;
 }
 
 /* $C03002 EventCmd_ActAsPartyMember (m1x0): runs for each party member
@@ -264,14 +485,20 @@ int ct_patch_coop_follower(CPU *cpu)
         f1.state = F_FOLLOW;
         return 0;
     }
-    int x = rd16(w, OBJ_X + obj), y = rd16(w, OBJ_Y + obj);
-    if (f1.state != F_FOLLOW && (now - f1.frame > 3 || x != f1.x || y != f1.y)) {
-        snap(w, obj);   /* it stopped running for a while, or something else moved it */
+    int x = rd16(w, OBJ_X + obj), y = rd16(w, OBJ_Y + obj), map = rd16(w, F_LOCATION) & 0x1FF;
+    if (f1.state != F_FOLLOW && (x != f1.x || y != f1.y || map != f1.map)) {
+        let_go();   /* a map change or a cutscene placed it */
+    } else if (f1.state != F_FOLLOW && now - f1.frame > 3) {
+        snap(w, obj);   /* it stood still a while (a battle on this map): back in line */
         x = f1.sx;
         y = f1.sy;
     }
     f1.frame = now;
-    uint16_t p2 = sched_joypad_read(1);
+    f1.map = map;
+    if (sched_views() > 1)
+        view2_update(w, x, y, lead);   /* split screen (above) */
+    int steer = sched_slot_player(1);   /* the player who has party slot 2 */
+    uint16_t p2 = steer ? sched_joypad_read(steer) : 0;
     int px = (p2 & 0x0100 ? 1 : 0) - (p2 & 0x0200 ? 1 : 0);   /* right, left */
     int py = (p2 & 0x0400 ? 1 : 0) - (p2 & 0x0800 ? 1 : 0);   /* down, up */
     int speed = p2 & 0x8000 ? 32 : 16;                         /* B runs */
@@ -311,9 +538,10 @@ int ct_patch_coop_follower(CPU *cpu)
         dy = ey > s ? s : ey < -s ? -s : ey;
         try_step(w, x, y, &dx, &dy);
     }
-    /* the leash: more than a screen from the leader */
+    /* the leash: more than a screen from the leader (two with split screen) */
     int ox = (x + dx - rd16(w, OBJ_X + lead)) / 16, oy = (y + dy - rd16(w, OBJ_Y + lead)) / 16;
-    if (ox > SCREEN_W || ox < -SCREEN_W || oy > SCREEN_H || oy < -SCREEN_H) {
+    int lw = SCREEN_W * sched_views(), lh = SCREEN_H * sched_views();
+    if (ox > lw || ox < -lw || oy > lh || oy < -lh) {
         snap(w, obj);
         return 0;
     }

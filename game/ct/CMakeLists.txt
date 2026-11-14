@@ -296,6 +296,18 @@ set(ct_coop_field --frames 12820 --script ${GAME_DIR}/test/replay/coop_field.txt
 add_test(NAME coop_field COMMAND ct_boot ${ct_coop_field} --coop --expect-wram 12540:1807=1D)
 add_test(NAME coop_field_off COMMAND ct_boot ${ct_coop_field} --expect-wram 12540:1807=19)
 list(APPEND ct_game_tests coop_field coop_field_off)
+# port: the party slots a player has (--coop-chars, settings.ini
+# coop_chars): with player 2 given only slot 3, the girl (slot 2) stays
+# player 1's, who closes her menu as in a one-player run.
+add_test(NAME coop_battle_chars COMMAND ct_boot ${ct_coop_battle} --coop --coop-chars 3
+    --expect-wram 14600:95D5=FF)
+# port: the experimental split screen (replay/coop_split.txt): a second
+# view while she is far from the leader, one view once she is back, none
+# without --coop-split.
+add_test(NAME coop_split COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_coop_split.py
+    $<TARGET_FILE:ct_boot_engine> ${GAME_DIR}/test/replay/coop_split.txt
+    --module $<TARGET_FILE:ct_game_module>)
+list(APPEND ct_game_tests coop_battle_chars coop_split)
 
 if(SDL2_FOUND)
     # The frontend itself, headless (SDL dummy drivers), unpaced. port: every

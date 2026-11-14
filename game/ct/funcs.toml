@@ -6738,6 +6738,7 @@ states = ["m1x0"]
 e = 0
 module = "bankc0"
 source = "profile"
+patch = "coop_oam"   # port: co-op split screen (game/ct/coop.c)
 
 [[func]]
 name = "Vblank_UpdateAnimTileWords"
@@ -7357,6 +7358,7 @@ states = ["m1x1"]
 e = 0
 module = "bankc0"
 source = "profile"
+patch = "coop_visibility"   # port: co-op split screen (game/ct/coop.c)
 
 [[func]]
 name = "Obj_ActivateIfOnScreen"

@@ -118,9 +118,38 @@ void sched_set_joypad(int port, uint16_t buttons);
    engine changes with it. */
 void sched_set_players(int n);
 int sched_players(void);
+/* Which player (0-3) a game gives its party slot 0-7 to, when that many
+   players are on (a game reads it; out of range: player 0). Default:
+   slot 0 player 0, every other slot player 1. */
+void sched_set_slot_player(int slot, int player);
+int sched_slot_player(int slot);
 /* The buttons port 0-3 returned at the last auto-joypad read ($4218-$421F
    as a word, sched_set_joypad's layout), without a bus access. */
 uint16_t sched_joypad_read(int port);
+
+/* port: a second view (split screen, experimental). The frontend allows
+   it (sched_set_views(2)); a game module that can describe the picture
+   around a second camera fills sched_view2() during the frame, refreshing
+   `frame` each time, and sched_render_view2 draws it: the PPU as it is at
+   the frame edge, run again for one picture, with these BG scrolls, the
+   given 64x32 tilemaps written over each BG's own (VRAM's tilemaps only
+   hold the area around the game's one camera) and this OAM. Everything
+   else (tiles, palettes, modes, windows, color math) is the PPU's own. */
+typedef struct {
+    long frame;                 /* sched_frame_count() when last filled */
+    int on;                     /* the module wants the second view now */
+    int dx, dy;                 /* where it is from the first view, px (layout hint) */
+    uint16_t hofs[4], vofs[4];  /* BG1-4 scroll */
+    uint8_t map_on[4];          /* replace BGn's tilemap with map[n] */
+    uint16_t map[4][2048];      /* 64x32 tilemap words, the SNES layout */
+    uint8_t oam[544];           /* 512 + 32 bytes, as the PPU's OAM */
+} sched_view;
+void sched_set_views(int n);
+int sched_views(void);
+sched_view *sched_view2(void);
+/* Nonzero if a second view is wanted at this frame edge: its picture is
+   then in bgrx (SCHED_WIDTH x SCHED_HEIGHT, B G R x). */
+int sched_render_view2(uint8_t *bgrx);
 
 long sched_frame_count(void);
 /* Called at each frame edge (line 261 ends), inside the frame run, with
