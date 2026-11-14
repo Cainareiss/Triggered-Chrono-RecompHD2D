@@ -5,7 +5,10 @@
  * of every control in the corner of the screen: each one is ticked off
  * the first time it is used, the next one is highlighted, and the game
  * keeps running underneath. When everything is ticked it says so and the
- * game quits a few seconds later. Each step is also logged to stderr. */
+ * game quits a few seconds later. Each step is also logged to stderr.
+ * The last step is the rumble: once every control is ticked, the pads
+ * pulse every 2 s (rumble_out_test) until A (felt it) or B (didn't)
+ * answers, and the answer is logged. */
 #ifndef CT_PADTEST_H
 #define CT_PADTEST_H
 
