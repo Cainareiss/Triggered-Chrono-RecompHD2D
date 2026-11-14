@@ -103,7 +103,7 @@ are mapped by position, as on the SNES pad:
 | Combo | What it does |
 | --- | --- |
 | R5 (back button), or L3 + R3 (click both sticks together) | Opens the settings menu (below) |
-| R3 (click and let go of the right stick) | Cycle the look: original, subtle, HD-2D, HD-2D Steam Deck, 3D diorama |
+| R3 (click and let go of the right stick) | Cycle the look: original, subtle, HD-2D, HD-2D Steam Deck, 3D diorama, 3D diorama for the Steam Deck |
 | L3 (click and let go of the left stick) | Cycle the picture shape: 4:3, pixel 8:7, stretch |
 | Hold View + Menu for 2 s | Asks "Quit?": **A** quits, **B** goes back to the game |
 | Steam button > Exit Game | Quits too |
@@ -275,6 +275,11 @@ the HD-2D look on. Add `--no-hd2d` to the launch options for the original look.
   recognized by its GPU (`VANGOGH` or `Custom GPU 0405` in the OpenGL renderer name) or
   its firmware product name (Jupiter or Galileo).
 - **ROG Ally:** the full HD-2D look. The renderer takes about 2 ms per frame there.
+- **3D diorama on a handheld:** the `deck3d` look is the deck look with the 3D diorama,
+  its scene drawn at 67% and upscaled with AMD FSR 1, its ambient occlusion at a quarter
+  size. On the Ally it costs about what the full 3D look (`hd2d3d`) cost before those
+  options. The menu's **Look** tab sets the 3D render scale, sharpening and ambient
+  occlusion for either 3D look ([HD2D.md](HD2D.md#render-scale-sharpening-and-ambient-occlusion)).
 
 Once you change the look with R3 or in the menu, your choice is saved and used from then
 on, on any device. The menu's **Display** tab also switches the frame pacing between the

@@ -233,7 +233,7 @@ Closing the menu with a button doesn't press it in the game.
 
 | Tab | What is in it |
 | --- | --- |
-| Look | The renderer (original or HD-2D, from the next start), the HD-2D look, the picture shape, the 3D diorama's camera tilt and zoom, gyro aiming and its strength, the debug view |
+| Look | The renderer (original or HD-2D, from the next start), the HD-2D look, the picture shape, the 3D diorama's camera tilt and zoom, its render scale (AMD FSR 1), sharpening and ambient occlusion, gyro aiming and its strength, the debug view |
 | Display | Fullscreen, frame pacing (timer or vsync), the menu's text size, integer scale and the CRT look (original picture), the battery mode |
 | Controls | What each back button does, the quick keys (pick a row, then press the key), the Steam Controller driver, fast-forward (on until turned off) and its speed, always run, turbo per button, pausing in the background or when a controller goes |
 | Co-op | Co-op auto / on / off, which player plays which party member, the experimental split screen |
@@ -244,8 +244,9 @@ Closing the menu with a button doesn't press it in the game.
 
 Rows that don't apply right now are grey (the HD-2D settings in the original picture,
 fullscreen in Game Mode). Its settings are in `settings.ini` too, as `renderer=hd2d` or
-`plain`, `cam_tilt=40`, `cam_zoom=100`, `pacing=auto`, `menu_scale=normal`, `volume=100`
-and `mute_unfocused=off`; a `--hd2d`, `--no-hd2d` or `--pacing` at launch still wins.
+`plain`, `cam_tilt=40`, `cam_zoom=100`, `render_scale=auto`, `sharpen=auto`, `ao=auto`,
+`ao_size=auto` ([HD2D.md](HD2D.md#render-scale-sharpening-and-ambient-occlusion)),
+`pacing=auto`, `menu_scale=normal`, `volume=100` and `mute_unfocused=off`; a `--hd2d`, `--no-hd2d` or `--pacing` at launch still wins.
 The mouse cursor hides after 2 seconds without moving.
 
 ### The HD-2D look
