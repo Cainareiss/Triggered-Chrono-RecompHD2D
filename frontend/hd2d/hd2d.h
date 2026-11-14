@@ -100,6 +100,14 @@ void hd2d_pack_tiles(hd2d_tile_lookup fn, void *user);
 #define HD2D_CAMERA_MAX 10.0f
 void hd2d_set_camera_offset(float dtilt, float dyaw);
 
+/* port: the 3D diorama's camera (the menu, settings.ini cam_tilt /
+   cam_zoom): tilt in degrees from looking straight down (0-80, default
+   40), zoom (0.25-4, default 0.75; 1: the console's 256 pixels across at
+   the point it looks at). The offset above (gyro) adds to the tilt.
+   CT_HD2D_3D=tilt=..,zoom=.. in the environment still wins at start-up. */
+void hd2d_set_camera(float tilt, float zoom);
+void hd2d_camera(float *tilt, float *zoom);
+
 /* GPU time of the last hd2d_render in milliseconds (glFinish-bracketed:
    only measured when timing is on, as it stalls the pipeline). */
 void hd2d_set_timing(int on);

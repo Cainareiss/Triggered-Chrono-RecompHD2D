@@ -117,3 +117,19 @@ path = ["third_party/glyphs/*.png", "third_party/glyphs/License.txt"]
 precedence = "override"
 SPDX-FileCopyrightText = "2025 Kenney (www.kenney.nl)"
 SPDX-License-Identifier = "CC0-1.0"
+
+# Dear ImGui v1.92.9b (MIT), vendored unmodified for the settings menu
+# (third_party/imgui/README.md); its stb headers keep their own notices.
+[[annotations]]
+path = ["third_party/imgui/*.cpp", "third_party/imgui/*.h", "third_party/imgui/LICENSE.txt",
+        "third_party/imgui/backends/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2014-2026 Omar Cornut"
+SPDX-License-Identifier = "MIT"
+
+# Roboto Medium, from Dear ImGui's misc/fonts (Apache-2.0).
+[[annotations]]
+path = "third_party/imgui/fonts/Roboto-Medium.ttf"
+precedence = "override"
+SPDX-FileCopyrightText = "2011 Google Inc. (Roboto, Christian Robertson)"
+SPDX-License-Identifier = "Apache-2.0"

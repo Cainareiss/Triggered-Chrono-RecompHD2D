@@ -556,6 +556,24 @@ static void s3d_shutdown(void);
 
 void hd2d_set_scene(const ct_scene *scene) { g.s3.scene = scene; }
 
+/* port: the user's 3D camera (hd2d_set_camera), kept apart from g, which
+   hd2d_init clears; s3d_params_init starts from it. */
+static float user_tilt = 40.0f, user_zoom = 0.75f;
+
+void hd2d_set_camera(float tilt, float zoom)
+{
+    user_tilt = tilt < 0 ? 0 : tilt > 80 ? 80 : tilt;
+    user_zoom = zoom < 0.25f ? 0.25f : zoom > 4 ? 4 : zoom;
+    g.s3.tilt = user_tilt;
+    g.s3.zoom = user_zoom;
+}
+
+void hd2d_camera(float *tilt, float *zoom)
+{
+    *tilt = user_tilt;
+    *zoom = user_zoom;
+}
+
 void hd2d_set_camera_offset(float dtilt, float dyaw)
 {
     float m = HD2D_CAMERA_MAX;
@@ -1200,9 +1218,9 @@ static void post(const settings *s, int px, int py, int pw, int ph, int ow, int 
 
 static void s3d_params_init(void)
 {
-    g.s3.tilt = 40.0f;   /* degrees from looking straight down */
+    g.s3.tilt = user_tilt;   /* degrees from looking straight down (40; port: hd2d_set_camera) */
     g.s3.fov = 30.0f;    /* vertical field of view */
-    g.s3.zoom = 0.75f;   /* 1: the console's 256 px across at the focus */
+    g.s3.zoom = user_zoom;   /* 1: the console's 256 px across at the focus (0.75) */
     g.s3.hmax = 3;       /* wall height cap, cells */
     g.s3.stretch = -1.0f;   /* sprites: < 0 picks the scale that keeps their proportions */
     /* CT_HD2D_3D=tilt=40,fov=30,zoom=0.75,hmax=3,stretch=1.2 overrides them. */

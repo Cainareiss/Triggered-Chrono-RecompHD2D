@@ -179,7 +179,8 @@ if(SDL2_FOUND)
     add_library(ct_input STATIC frontend/input.c frontend/touch.c frontend/touch_gl.c
         frontend/device.c   # port: device.c: Steam Game Mode, Steam Deck (HANDHELD.md)
         # port: frontend actions, their bindings, button glyphs in messages
-        frontend/actions.c frontend/bindings.c frontend/glyphs.c frontend/osd_text.c)
+        frontend/actions.c frontend/bindings.c frontend/glyphs.c frontend/osd_text.c
+        frontend/settings.c)   # port: the settings registry (settings.h)
     target_include_directories(ct_input PUBLIC frontend)
     target_link_libraries(ct_input PUBLIC SDL2::SDL2 m)
     target_compile_options(ct_input PRIVATE ${CT_WARN})
@@ -232,6 +233,51 @@ if(SDL2_FOUND)
     target_include_directories(ct_hd2d PUBLIC frontend PRIVATE ${CMAKE_BINARY_DIR}/hd2d_gen)
     target_link_libraries(ct_hd2d PUBLIC SDL2::SDL2 ct_runtime ct_input m)   # port: ct_input: osd_text.h
     target_compile_options(ct_hd2d PRIVATE ${CT_WARN} -Wno-overlength-strings)
+
+    # port: the in-game settings menu (frontend/menu.h) and Dear ImGui
+    # (third_party/imgui, MIT, vendored unmodified), with its SDL2,
+    # OpenGL 3 / ES 3 and SDL_Renderer backends.
+    set(CT_IMGUI ${CMAKE_SOURCE_DIR}/third_party/imgui)
+    add_library(ct_imgui STATIC ${CT_IMGUI}/imgui.cpp ${CT_IMGUI}/imgui_draw.cpp
+        ${CT_IMGUI}/imgui_tables.cpp ${CT_IMGUI}/imgui_widgets.cpp
+        ${CT_IMGUI}/backends/imgui_impl_sdl2.cpp ${CT_IMGUI}/backends/imgui_impl_opengl3.cpp
+        ${CT_IMGUI}/backends/imgui_impl_sdlrenderer2.cpp)
+    target_include_directories(ct_imgui PUBLIC ${CT_IMGUI} ${CT_IMGUI}/backends)
+    target_compile_definitions(ct_imgui PUBLIC IMGUI_DISABLE_DEMO_WINDOWS
+        IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
+    target_link_libraries(ct_imgui PUBLIC SDL2::SDL2 ${CMAKE_DL_LIBS})
+    if(CT_ANDROID)
+        target_compile_definitions(ct_imgui PUBLIC IMGUI_IMPL_OPENGL_ES3)
+        target_link_libraries(ct_imgui PUBLIC GLESv3)
+    endif()
+    # The menu's font (Roboto Medium, Apache-2.0) as a byte array.
+    set(CT_MENU_FONT_GEN ${CMAKE_BINARY_DIR}/menu_gen/menu_font.h)
+    add_custom_command(
+        OUTPUT ${CT_MENU_FONT_GEN}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/menu_gen
+        COMMAND ${CMAKE_COMMAND} -DIN=${CT_IMGUI}/fonts/Roboto-Medium.ttf -DOUT=${CT_MENU_FONT_GEN}
+                -DNAME=menu_font -P ${CMAKE_SOURCE_DIR}/tools/embed_binary.cmake
+        DEPENDS ${CT_IMGUI}/fonts/Roboto-Medium.ttf ${CMAKE_SOURCE_DIR}/tools/embed_binary.cmake
+        COMMENT "menu font"
+        VERBATIM)
+    add_library(ct_menu STATIC frontend/menu.cpp ${CT_MENU_FONT_GEN})
+    target_include_directories(ct_menu PUBLIC frontend PRIVATE ${CMAKE_BINARY_DIR}/menu_gen)
+    target_compile_definitions(ct_menu PRIVATE CT_MENU_FONT)
+    # The version the menu's About tab shows (the release in
+    # packaging/*.metainfo.xml), with the commit the build was configured at.
+    set(CT_VERSION_STRING "0.1.0")
+    find_package(Git QUIET)
+    if(GIT_FOUND)
+        execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} OUTPUT_VARIABLE ct_git_rev
+            OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(ct_git_rev)
+            string(APPEND CT_VERSION_STRING " (${ct_git_rev})")
+        endif()
+    endif()
+    target_compile_definitions(ct_menu PUBLIC CT_VERSION="${CT_VERSION_STRING}")
+    target_link_libraries(ct_menu PUBLIC ct_imgui ct_input ct_runtime)
+    target_compile_options(ct_menu PRIVATE ${CT_WARN})
 else()
     if(CT_ENGINE_ONLY)
         message(FATAL_ERROR "CT_ENGINE_ONLY needs SDL2 for ct_sdl_engine")
@@ -265,7 +311,7 @@ if(CT_ANDROID)
     target_include_directories(main PRIVATE ${CMAKE_SOURCE_DIR}/test)
     target_link_libraries(main ct_tables_empty
         "$<LINK_LIBRARY:WHOLE_ARCHIVE,ct_sched,ct_interp,ct_runtime>" ct_input ct_hd2d
-        ct_packs SDL2::SDL2 android log)
+        ct_packs ct_menu SDL2::SDL2 android log)
     target_compile_options(main PRIVATE ${CT_WARN})
     return()   # no tests, games or install() rules on Android
 endif()
@@ -288,7 +334,7 @@ if(SDL2_FOUND)
     ct_engine_exe(ct_sdl_engine ${CMAKE_SOURCE_DIR}/frontend/main.c
         ${CMAKE_SOURCE_DIR}/frontend/firstrun.c ${CMAKE_SOURCE_DIR}/frontend/saves.c
         ${CMAKE_SOURCE_DIR}/frontend/qol.c)   # port: quality of life (qol.h)
-    target_link_libraries(ct_sdl_engine ct_input ct_hd2d ct_packs)
+    target_link_libraries(ct_sdl_engine ct_input ct_hd2d ct_packs ct_menu)
     target_compile_definitions(ct_sdl_engine PRIVATE CT_FIRSTRUN
         CT_FIRSTRUN_GAME="${CT_GAME_ID}" CT_FIRSTRUN_DATA_DIR="${CT_ENGINE_DATA_DIR}")
 endif()
@@ -390,9 +436,14 @@ if(SDL2_FOUND)
     # folder, settings, turbo, the plain picture's rectangle
     add_executable(test_qol test/test_qol.c frontend/qol.c frontend/saves.c)
     target_include_directories(test_qol PRIVATE test)
-    target_link_libraries(test_qol ct_input ct_hd2d ct_sched ct_tables_empty)
+    target_link_libraries(test_qol ct_input ct_hd2d ct_sched ct_tables_empty ct_packs)   # port: ct_packs: the menu's thumbnails
     target_compile_options(test_qol PRIVATE ${CT_WARN})
     add_test(NAME qol COMMAND test_qol)
+    # port: the settings registry the menu shows (frontend/settings.h)
+    add_executable(test_settings test/test_settings.c)
+    target_link_libraries(test_settings ct_input)
+    target_compile_options(test_settings PRIVATE ${CT_WARN})
+    add_test(NAME settings COMMAND test_settings)
     # The 3D diorama's geometry from a scene (frontend/hd2d/scene3d.h)
     add_executable(test_scene3d test/test_scene3d.c)
     target_link_libraries(test_scene3d ct_hd2d)

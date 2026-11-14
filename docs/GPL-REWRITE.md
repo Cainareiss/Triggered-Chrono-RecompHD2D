@@ -35,6 +35,7 @@ This page is the inventory and the order of work.
 | --- | --- | --- | --- | --- |
 | SPC700 and S-DSP core | `third_party/ares/` | ISC | 1,600 | Small and well specified. Gates audio-accuracy tests. |
 | glTF parser (cgltf) | `third_party/cgltf/` | MIT | 7,000 | Vendored unmodified for asset packs' `[[model]]` entries. Only load-and-check uses it so far; replace with our own reader of the glTF subset we draw, or keep as an optional dependency. |
+| Dear ImGui (settings menu) | `third_party/imgui/` | MIT (font: Apache-2.0) | 43,800 | Vendored unmodified for `frontend/menu.cpp`. Not part of the rewrite: kept as a dependency (MIT and Apache-2.0 are GPL-compatible), like a system library. Its notices stay. |
 | SNES PPU | `third_party/snes/` | MIT | 5,400 | Already heavily modified for the HD-2D G-buffer. The biggest single piece. |
 | Runtime: CPU, interpreter, ops | `runtime/cpu.*`, `interp.*`, `ops.h`, `cycles.*` | MIT | 1,950 | `runtime/alu.h` (decimal mode) is already ours. |
 | Runtime: bus, scheduler, adapter | `runtime/bus.*`, `sched.*`, `snes_adapter.*`, `overlay.*`, `spc700_host.*` | MIT | 3,300 | `sched.c` is 1,600 lines alone. |
@@ -46,7 +47,7 @@ This page is the inventory and the order of work.
 | Tests | `test/` (upstream files) | MIT | 4,500 | After the code they cover. |
 | Build and docs | `CMakeLists.txt`, `README.md`, `ROADMAP.md`, `THIRD_PARTY.md`, CI workflow | MIT and GPL | 840 | Rewritten as the code they describe goes. |
 
-Total: about 44,000 lines, of which about 20,000 are `game/ct` metadata.
+Total: about 44,000 lines to rewrite, of which about 20,000 are `game/ct` metadata (Dear ImGui, kept as a dependency, not counted).
 
 ## Order
 

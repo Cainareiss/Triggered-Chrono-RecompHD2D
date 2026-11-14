@@ -124,14 +124,28 @@
  *       rate control absorbs the 0.16% difference, and while the sound
  *       queue runs low vsync is off until it refills). A vsync that
  *       doesn't give ~60 Hz falls back to the timer. --log-pacing prints frame-time statistics every 60 frames;
- *       every exit prints them for the whole run. */
+ *       every exit prints them for the whole run.
+ *   the menu (menu.h, settings.h; docs/USER-GUIDE.md, "The menu"): F10,
+ *       R5 or L3 + R3 open it; the game waits (no frame runs, no sound)
+ *       until it closes. Its rows come from the settings registry, which
+ *       also reads and writes most of settings.ini; every change is saved at
+ *       once. settings.ini volume=0-100, mute_unfocused=on, renderer=
+ *       plain|hd2d (the menu's choice when neither --hd2d nor --no-hd2d is
+ *       given), cam_tilt, cam_zoom, pacing, menu_scale. The mouse cursor
+ *       hides after 2 s without moving.
+ *   --menu-test FILE, --hash-log FILE
+ *       for tests: scripted menu use (menu_test_load), and per frame a hash
+ *       of WRAM and the picture. */
 #include <setjmp.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #if defined(__unix__) || defined(__APPLE__)
 #include <time.h>
+#include <dirent.h>     /* port: the menu lists the asset packs */
+#include <sys/stat.h>
 #endif
 
 #include <SDL.h>
@@ -160,6 +174,13 @@
 #include "hd2d/osd_font.h" /* port: the co-op turn tag */
 #include "touch_gl.h"
 #include "qol.h"        /* port: quality of life (save states, fast-forward, ...) */
+#include "menu.h"       /* port: the in-game settings menu */
+#include "settings.h"   /* port: the settings registry the menu shows */
+
+#ifndef CT_VERSION
+#define CT_VERSION "dev"
+#endif
+#define APP_NAME "CT Recomp"
 
 #define RATE 48000
 /* Device buffer: 960 samples, exactly 20 ms at 48 kHz. Queue target: two
@@ -408,7 +429,7 @@ static const char *dump;
 /* port: HD-2D presentation and screenshots. */
 static SDL_Window *win;
 static SDL_GLContext glctx;
-static int hd2d_mode, log_gpu;
+static int hd2d_mode, log_gpu, gl_es;   /* gl_es: the context is OpenGL ES (port: menu) */
 static int game_mode, preset_saved, preset_given;   /* port: device.h defaults */
 static quit_combo quitc;                            /* port: View+Menu quits */
 /* port: co-op (--coop): COOP_AUTO is on while two controllers are open. */
@@ -435,6 +456,28 @@ static int n_shots, shot_w = 1920, shot_h = 1080;
 /* port: the touch overlay (touch.h); its GL drawer for the HD-2D path. */
 static int touch_gl_ok;
 static touch_opts touch_o = {0, 15};
+
+/* port: the menu (menu.h) and the small settings beside it: the volume
+   (0-100, applied to the samples queued), muting while the window isn't
+   focused, the mouse cursor hidden after 2 s without moving. */
+static int volume = 100, mute_unfocused, focused = 1;
+static int renderer_saved = -1;   /* settings.ini renderer=plain|hd2d: the menu's choice, -1 none */
+static int menu_ready;        /* menu_init done: ACTION_MENU opens it */
+static int menu_hold_mask;    /* after closing: pad 1 kept from the game until let go */
+static int frontend_ready;    /* window, audio and scheduler up: settings apply live */
+static int cursor_shown = 1;
+static uint32_t mouse_moved_at;
+#define CURSOR_IDLE_MS 2000
+static int stick_chord, stick_chorded;   /* L3 + R3: the menu */
+/* port: --hash-log FILE: per frame, a hash of WRAM and the picture (as
+   ct_boot's, smaller), so tests can tell the game didn't change. */
+static FILE *hash_log;
+/* port: --menu-test FILE: scripted menu use (see menu_test_load). */
+#define MAX_MENU_TEST 256
+struct mt_ev { int kind, a; char path[200]; };
+static struct { long open_frame; int n; struct mt_ev ev[MAX_MENU_TEST]; }
+    mtest = {-1, 0, {{0, 0, {0}}}};
+static long menu_ticks_total, menu_frames_advanced;
 
 /* port: where the picture is: HD-2D's aspect, or the plain integer scale. */
 static touch_rect picture_rect(int w, int h)
@@ -488,6 +531,19 @@ static int split_on;
 static uint8_t view2_px[SCHED_WIDTH * SCHED_HEIGHT * 4];
 static SDL_Texture *tex2;
 
+/* port: --menu-test's "shot": the window as presented next, menu and all. */
+static const char *menu_shot_path;
+
+static void take_menu_shot(int w, int h)
+{
+    if (!menu_shot_path)
+        return;
+    int ok = !menu_shot(menu_shot_path, w, h);
+    fprintf(stderr, "ct_sdl: menu: %s %s (%dx%d)\n", ok ? "wrote" : "cannot write", menu_shot_path,
+            w, h);
+    menu_shot_path = NULL;
+}
+
 static void present_plain(const uint8_t *bgrx)
 {
     int w, h;
@@ -508,12 +564,20 @@ static void present_plain(const uint8_t *bgrx)
             SDL_Rect dst = {p.x + (side ? slot * hw : 0), p.y + (side ? 0 : slot * hh), p.w, p.h};
             SDL_RenderCopy(ren, k ? tex2 : tex, NULL, &dst);
         }
+        if (menu_is_open()) {
+            menu_draw(w, h);
+            take_menu_shot(w, h);
+        }
         SDL_RenderPresent(ren);
         return;
     }
     qol_plain_draw(ren, tex, w, h);   /* port: QOL integer scale or fit, CRT look */
-    touch_draw_sdl(ren);
-    {   /* port: the message, placed and sized as HD-2D's */
+    if (menu_is_open()) {   /* port: the menu over the picture, no overlay or message */
+        menu_draw(w, h);
+        take_menu_shot(w, h);
+    } else {
+        touch_draw_sdl(ren);
+        /* port: the message, placed and sized as HD-2D's */
         int px, py, pw, ph;
         qol_picture_rect(w, h, &px, &py, &pw, &ph);
         int s = ph / 180 > 2 ? ph / 180 : 2;
@@ -588,8 +652,12 @@ static void present_hd2d(void)
     hd2d_set_scene(scene_now());
     hd2d_render(sched_frame(), sched_layers(), sched_behind(), sched_behind_layers(),
                 sched_ppu_state_get(), w, h, 0);
-    if (touch_gl_ok)
+    if (menu_is_open()) {   /* port: the menu, after the picture, before the swap */
+        menu_draw(w, h);
+        take_menu_shot(w, h);
+    } else if (touch_gl_ok) {
         touch_gl_draw(w, h);   /* port: touch overlay */
+    }
     SDL_GL_SwapWindow(win);
     if (log_gpu && sched_frame_count() % 60 == 0)
         fprintf(stderr, "ct_sdl: frame %ld hd2d %dx%d %.2f ms\n", sched_frame_count(), w, h,
@@ -821,14 +889,9 @@ static void settings_load(void)
     char *path = settings_path(), line[128], val[64];
     FILE *f = path ? fopen(path, "r") : NULL;
     while (f && fgets(line, sizeof line, f)) {
-        int n;
-        if (sscanf(line, "preset=%63s", val) == 1 && parse_preset(val) >= 0) {
-            hd2d_set_preset(parse_preset(val));
-            preset_saved = 1;   /* port: the user's choice beats the device default */
-        }
-        else if (sscanf(line, "aspect=%d", &n) == 1)
-            hd2d_set_aspect(n);
-        else if (!strncmp(line, "packs=", 6) && !packs_given) {   /* port: asset packs */
+        if (settings_parse_line(line))   /* port: the registry's keys (settings.h) */
+            continue;
+        if (!strncmp(line, "packs=", 6) && !packs_given) {   /* port: asset packs */
             line[strcspn(line, "\r\n")] = 0;
             pack_names_parse(line + 6);
         }
@@ -837,22 +900,14 @@ static void settings_load(void)
             wst.have_size = 1;
         else if (sscanf(line, "position=%d,%d", &wst.x, &wst.y) == 2)
             wst.have_pos = 1;
-        else if (sscanf(line, "fullscreen=%d", &n) == 1)
-            wst.fs = n != 0;
         else if (sscanf(line, "coop_chars=%63s", val) == 1)   /* port: co-op */
             parse_chars(val, 2);
+        else if (sscanf(line, "renderer=%63s", val) == 1)   /* port: the menu's Renderer */
+            renderer_saved = !strcmp(val, "hd2d") ? 1 : !strcmp(val, "plain") ? 0 : -1;
         else if (sscanf(line, "coop_chars3=%63s", val) == 1)
             parse_chars(val, 3);
-        else if (sscanf(line, "coop=%63s", val) == 1)
-            coop_pref = !strcmp(val, "on") ? COOP_ON : !strcmp(val, "off") ? COOP_OFF : COOP_AUTO;
         else if (bindings_parse_line(bindings_current(), line))   /* port: bind_*, key_* */
             ;
-        else if (sscanf(line, "gyro=%63s", val) == 1)   /* port: gyro aiming */
-            gyro_on = !strcmp(val, "on") || !strcmp(val, "1");
-        else if (sscanf(line, "gyro_strength=%63s", val) == 1)
-            gyro_strength = (float)atof(val);
-        else if (sscanf(line, "steam_hidapi=%63s", val) == 1)   /* port: input_sdl_hints */
-            steam_hidapi = !(!strcmp(val, "off") || !strcmp(val, "0"));
         else {   /* port: QOL settings (qol.h) */
             char key[32];
             if (sscanf(line, "%31[^=]=%63s", key, val) == 2)
@@ -869,9 +924,9 @@ static void settings_save(void)
     char *path = settings_path();
     FILE *f = path ? fopen(path, "w") : NULL;
     if (f) {
-        fprintf(f, "preset=%s\naspect=%d\n",
-                hd2d_preset_name(preset_forced >= 0 ? preset_forced
-                                                    : qol_user_preset(hd2d_preset())), hd2d_aspect());
+        /* port: the registry's keys (settings.h): preset, aspect,
+           fullscreen, coop, gyro, gyro_strength, steam_hidapi, volume, ... */
+        settings_write_lines(f);
         if (n_pack_names) {   /* port: asset packs, in priority order */
             fputs("packs=", f);
             for (int k = 0; k < n_pack_names; k++)
@@ -882,14 +937,11 @@ static void settings_save(void)
             fprintf(f, "window=%dx%d\n", wst.w, wst.h);
         if (wst.have_pos)
             fprintf(f, "position=%d,%d\n", wst.x, wst.y);
-        fprintf(f, "fullscreen=%d\n", wst.fs);
-        static const char *const coop_name[] = {"auto", "on", "off"};
-        fprintf(f, "coop=%s\n", coop_name[coop_pref]);
         print_chars(f, "coop_chars", 2);
         print_chars(f, "coop_chars3", 3);
+        if (renderer_saved >= 0)   /* port: only once chosen in the menu */
+            fprintf(f, "renderer=%s\n", renderer_saved ? "hd2d" : "plain");
         bindings_write(bindings_current(), f);   /* port: back buttons, keys */
-        fprintf(f, "gyro=%s\ngyro_strength=%.2f\nsteam_hidapi=%s\n", gyro_on ? "on" : "off",
-                gyro_strength, steam_hidapi ? "on" : "off");
         qol_settings_write(f);   /* port: QOL */
         fclose(f);
     }
@@ -913,13 +965,586 @@ static void use_glyphs_of(SDL_GameController *c)
     glyphs_use(set);
 }
 
-/* port: the menu action until there is a menu: what the buttons do. */
-static void menu_osd(ct_action a, int down, void *user)
+/* port: the menu action (F10, R5, L3 + R3): the menu opens or closes.
+   Before the window is up (the first-run screens) it says what the
+   buttons do instead. */
+static void menu_action(ct_action a, int down, void *user)
 {
     (void)a;
     (void)user;
-    if (down)
+    if (!down)
+        return;
+    if (!menu_ready)
         osd("Menu: [@quicksave] save  [@quickload] load  [@ffwd] fast-forward");
+    else if (menu_is_open())
+        menu_close();
+    else
+        menu_open();
+}
+
+/* ---- port: the settings the menu shows (settings.h) ---- */
+
+static void choose_pacing(void);
+static int packs_setup(const char *game_id);
+static void packs_upload(void);
+static const char *menu_game_id;   /* the saves folder's game id, for the packs' folder */
+
+static int on_hd2d(void *u) { (void)u; return hd2d_mode; }
+static const char *const renderer_labels[2] = {"Original", "HD-2D"};
+static int get_renderer(void *u) { (void)u; return renderer_saved >= 0 ? renderer_saved : hd2d_mode > 0; }
+static void set_renderer(void *u, int v) { (void)u; renderer_saved = v; }
+static int on_plain(void *u) { (void)u; return !hd2d_mode; }
+
+/* Look */
+static const char *const preset_labels[HD2D_PRESETS] = {"Original", "HD-2D subtle", "HD-2D",
+                                                        "HD-2D Steam Deck", "HD-2D 3D diorama"};
+static const char *preset_values[HD2D_PRESETS];
+static int get_preset(void *u)   /* the user's look, not the battery mode's (QOL) */
+{
+    (void)u;
+    return preset_forced >= 0 ? preset_forced : qol_user_preset(hd2d_preset());
+}
+static void set_preset(void *u, int v)
+{
+    (void)u;
+    preset_forced = -1;   /* the user's choice now */
+    hd2d_set_preset(v);
+    preset_saved = 1;     /* beats the device default */
+    qol_preset_chosen();  /* and the battery mode's */
+    if (frontend_ready && hd2d_mode)
+        sched_set_behind(hd2d_wants_behind());
+}
+static const char *const aspect_labels[HD2D_ASPECTS] = {"4:3", "Pixel 8:7", "Stretch"};
+static int get_aspect(void *u) { (void)u; return hd2d_aspect(); }
+static void set_aspect(void *u, int v) { (void)u; hd2d_set_aspect(v); }
+static int get_cam_tilt(void *u)
+{
+    (void)u;
+    float t, z;
+    hd2d_camera(&t, &z);
+    return (int)(t + 0.5f);
+}
+static void set_cam_tilt(void *u, int v)
+{
+    (void)u;
+    float t, z;
+    hd2d_camera(&t, &z);
+    hd2d_set_camera((float)v, z);
+}
+static int get_cam_zoom(void *u)   /* percent of the default zoom (0.75) */
+{
+    (void)u;
+    float t, z;
+    hd2d_camera(&t, &z);
+    return (int)(z / 0.75f * 100.0f + 0.5f);
+}
+static void set_cam_zoom(void *u, int v)
+{
+    (void)u;
+    float t, z;
+    hd2d_camera(&t, &z);
+    hd2d_set_camera(t, 0.75f * (float)v / 100.0f);
+}
+static int on_3d(void *u) { (void)u; return hd2d_mode && hd2d_preset() == HD2D_3D; }
+static int get_gyro(void *u) { (void)u; return gyro_on; }
+static void set_gyro(void *u, int v)
+{
+    (void)u;
+    gyro_on = v;
+    if (!v && frontend_ready && hd2d_mode) {
+        gyro.tilt = gyro.yaw = 0.0f;
+        hd2d_set_camera_offset(0.0f, 0.0f);
+    }
+}
+static int get_gyro_strength(void *u) { (void)u; return (int)(gyro_strength * 100.0f + 0.5f); }
+static void set_gyro_strength(void *u, int v) { (void)u; gyro_strength = (float)v / 100.0f; }
+static int on_gyro(void *u) { (void)u; return hd2d_mode && gyro_on; }
+static const char *const debug_labels[HD2D_DEBUGS] = {"Off", "Layers", "Depth", "Blur", "Compare",
+                                                      "Behind"};
+static int get_debug(void *u) { (void)u; return hd2d_debug(); }
+static void set_debug(void *u, int v) { (void)u; hd2d_set_debug(v); }
+
+/* Display */
+static int get_fullscreen(void *u) { (void)u; return wst.fs; }
+static void set_fullscreen(void *u, int v)
+{
+    (void)u;
+    if (win && !game_mode) {
+        SDL_SetWindowFullscreen(win, v ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+        wst_track();
+    }
+    wst.fs = v;
+}
+static int not_game_mode(void *u) { (void)u; return !game_mode; }
+static const char *const fs_values[2] = {"0", "1"};
+static const char *const pacing_labels[3] = {"Auto", "Timer", "Vsync"},
+                         *const pacing_values[3] = {"auto", "timer", "vsync"};
+static int get_pacing(void *u) { (void)u; return pace_opt; }
+static void set_pacing(void *u, int v)
+{
+    (void)u;
+    pace_opt = v;
+    if (frontend_ready)
+        choose_pacing();
+}
+static const char *const scale_labels[3] = {"Small", "Normal", "Large"},
+                         *const scale_values[3] = {"small", "normal", "large"};
+static int menu_scale = 1;
+static int get_menu_scale(void *u) { (void)u; return menu_scale; }
+static void set_menu_scale(void *u, int v) { (void)u; menu_scale = v; }
+
+/* Controls: the bindable buttons (bindings.h) and the actions' keys */
+static const struct { SDL_GameControllerButton b; const char *label; } bind_rows[] = {
+    {SDL_CONTROLLER_BUTTON_PADDLE2, "L4 (back button)"}, {SDL_CONTROLLER_BUTTON_PADDLE1, "R4 (back button)"},
+    {SDL_CONTROLLER_BUTTON_PADDLE4, "L5 (back button)"}, {SDL_CONTROLLER_BUTTON_PADDLE3, "R5 (back button)"},
+    {SDL_CONTROLLER_BUTTON_MISC1, "Extra button"},      {SDL_CONTROLLER_BUTTON_TOUCHPAD, "Touchpad click"},
+};
+#define N_BIND_ROWS (int)(sizeof bind_rows / sizeof *bind_rows)
+static const char *action_labels[ACTION_COUNT];
+static char key_labels[ACTION_COUNT][40];
+static int get_bind(void *u) { return bindings_current()->button[bind_rows[(intptr_t)u].b]; }
+static void set_bind(void *u, int v)
+{
+    binder_release(&pad_binder[0], bindings_current());   /* nothing held across the change */
+    bindings_current()->button[bind_rows[(intptr_t)u].b] = (unsigned char)v;
+}
+static int get_key(void *u) { return bindings_current()->key[(intptr_t)u]; }
+static void set_key(void *u, int v)
+{
+    bindings_keys_release();
+    bindings *b = bindings_current();
+    for (int a = 0; a < ACTION_COUNT && v; a++)   /* one action per key */
+        if (b->key[a] == (SDL_Scancode)v)
+            b->key[a] = SDL_SCANCODE_UNKNOWN;
+    b->key[(intptr_t)u] = (SDL_Scancode)v;
+}
+static const char *key_namer(int sc) { return SDL_GetScancodeName((SDL_Scancode)sc); }
+static int get_hidapi(void *u) { (void)u; return steam_hidapi; }
+static void set_hidapi(void *u, int v) { (void)u; steam_hidapi = v; }
+static const char *menu_combo_text(void *u, char *buf, size_t n)
+{
+    (void)u;
+    snprintf(buf, n, "F10, R5, or L3 + R3");
+    return buf;
+}
+
+/* Co-op */
+static const char *const coop_labels[3] = {"Auto", "On", "Off"},
+                         *const coop_values[3] = {"auto", "on", "off"};
+static int get_coop(void *u) { (void)u; return coop_pref; }
+static void set_coop(void *u, int v)
+{
+    (void)u;
+    coop_pref = v;
+    if (frontend_ready)
+        coop_update();
+}
+static const char *const player_labels[3] = {"Player 1", "Player 2", "Player 3"};
+static int get_slot(void *u) { return slot_player[(intptr_t)u] - 1; }
+static void set_slot(void *u, int v)
+{
+    slot_player[(intptr_t)u] = (uint8_t)(v + 1);
+    if (frontend_ready)
+        coop_update();
+}
+static int get_split(void *u) { (void)u; return sched_views() > 1; }
+static void set_split(void *u, int v) { (void)u; sched_set_views(v ? 2 : 1); }
+
+/* Asset packs: the folders in <pref path>/packs and the ones loaded. */
+#define MAX_PACKS_LISTED 32
+static char packs_listed[MAX_PACKS_LISTED][256];
+static int n_packs_listed, pack_dump_live;
+static char packs_folder[512];
+
+static void pack_list_add(const char *name)
+{
+    for (int k = 0; k < n_packs_listed; k++)
+        if (!strcmp(packs_listed[k], name))
+            return;
+    if (n_packs_listed < MAX_PACKS_LISTED && strlen(name) < sizeof packs_listed[0])
+        snprintf(packs_listed[n_packs_listed++], sizeof packs_listed[0], "%s", name);
+}
+
+static int pack_position(const char *name)   /* 1.. in the loaded list, 0: off */
+{
+    for (int k = 0; k < n_pack_names; k++)
+        if (!strcmp(pack_names[k], name))
+            return k + 1;
+    return 0;
+}
+
+static int get_pack(void *u) { return pack_position(packs_listed[(intptr_t)u]); }
+
+/* The loaded packs again, from pack_names, live in the GL renderer. */
+static void packs_apply(void)
+{
+    if (!hd2d_mode) {
+        osd("Packs: used from the next start in HD-2D");
+        return;
+    }
+    packs_unload();
+    int r = n_pack_names ? packs_setup(menu_game_id) : 0;
+    packs_upload();
+    sched_set_prov(packs_active() || pack_dump);
+    char msg[64];
+    int n;
+    packs_entries(&n);
+    snprintf(msg, sizeof msg, r < 0 ? "Packs: none readable" : "Packs: %d replacements", n);
+    osd(msg);
+}
+
+static void set_pack(void *u, int v)
+{
+    const char *name = packs_listed[(intptr_t)u];
+    char keep[256];
+    snprintf(keep, sizeof keep, "%s", name);
+    int at = pack_position(keep);
+    if (at) {   /* out of the list */
+        for (int k = at - 1; k + 1 < n_pack_names; k++)
+            memcpy(pack_names[k], pack_names[k + 1], sizeof pack_names[0]);
+        n_pack_names--;
+    }
+    if (v > 0 && n_pack_names < MAX_PACK_NAMES) {   /* in again, at position v */
+        int pos = v - 1 > n_pack_names ? n_pack_names : v - 1;
+        for (int k = n_pack_names; k > pos; k--)
+            memcpy(pack_names[k], pack_names[k - 1], sizeof pack_names[0]);
+        snprintf(pack_names[pos], sizeof pack_names[0], "%s", keep);
+        n_pack_names++;
+    }
+    packs_given = 0;   /* the menu's list is the one to keep */
+    packs_apply();
+}
+
+static const char *pack_option(void *u, int v, char *buf, size_t n)
+{
+    (void)u;
+    static const char *const nth[] = {"1st", "2nd", "3rd"};
+    if (!v)
+        snprintf(buf, n, "Off");
+    else if (v <= 3)
+        snprintf(buf, n, "On, %s", nth[v - 1]);
+    else
+        snprintf(buf, n, "On, %dth", v);
+    return buf;
+}
+
+static void run_pack_reload(void *u)
+{
+    (void)u;
+    int n = packs_reload();
+    packs_upload();
+    sched_set_prov(packs_active() || pack_dump);
+    char msg[48];
+    snprintf(msg, sizeof msg, n < 0 ? "Packs: none readable" : "Packs reloaded: %d", n);
+    osd(msg);
+}
+static int can_reload(void *u) { (void)u; return hd2d_mode && n_pack_names > 0; }
+
+static void pack_dump_live_close(void)
+{
+    if (pack_dump_live) {
+        pack_dump_report();
+        pack_dump_live = 0;
+    }
+}
+static int get_dump(void *u) { (void)u; return pack_dump != NULL; }
+static void set_dump(void *u, int v)
+{
+    (void)u;
+    if (v && !pack_dump) {
+        char *dir = pack_dir(menu_game_id, "dump");
+        if (dir && !packs_dump_open(dir, "dump")) {
+            static int at_exit;
+            if (!at_exit++)
+                atexit(pack_dump_live_close);
+            pack_dump = "dump";
+            pack_dump_live = 1;
+            sched_set_prov(1);
+            osd("Dumping new art to the \"dump\" pack");
+        }
+        free(dir);
+    } else if (!v && pack_dump_live) {
+        pack_dump_live_close();
+        pack_dump = NULL;
+        sched_set_prov(packs_active());
+    }
+}
+static int can_dump(void *u) { (void)u; return hd2d_mode && (!pack_dump || pack_dump_live); }
+static const char *folder_text(void *u, char *buf, size_t n)
+{
+    (void)u;
+    snprintf(buf, n, "%s", packs_folder);
+    return buf;
+}
+static const char *packs_count_text(void *u, char *buf, size_t n)
+{
+    (void)u;
+    int e = 0;
+    packs_entries(&e);
+    snprintf(buf, n, "%d loaded, %d replacements", n_pack_names, packs_active() ? e : 0);
+    return buf;
+}
+
+/* The pack rows, rebuilt each time the menu opens (the folder may change). */
+static void packs_refresh(void)
+{
+    settings_unregister_category("Packs");
+    n_packs_listed = 0;
+    for (int k = 0; k < n_pack_names; k++)
+        pack_list_add(pack_names[k]);
+    char *dir = SDL_GetPrefPath("ct-recomp", menu_game_id ? menu_game_id : "game");
+    snprintf(packs_folder, sizeof packs_folder, "%spacks", dir ? dir : "./");
+    SDL_free(dir);
+#if defined(__unix__) || defined(__APPLE__)
+    DIR *d = opendir(packs_folder);
+    struct dirent *e;
+    while (d && (e = readdir(d)))
+        if (e->d_name[0] != '.' && strcmp(e->d_name, "dump")) {
+            char p[1024];
+            struct stat st;
+            snprintf(p, sizeof p, "%s/%s", packs_folder, e->d_name);
+            if (!stat(p, &st) && S_ISDIR(st.st_mode))
+                pack_list_add(e->d_name);
+        }
+    if (d)
+        closedir(d);
+#endif
+    settings_register(&(setting){.label = "Asset packs", .category = "Packs", .type = SETTING_INFO,
+                                 .flags = SETTING_HEADING});
+    settings_register(&(setting){
+        .label = "Loaded", .category = "Packs", .type = SETTING_INFO, .text = packs_count_text,
+        .help = "Packs replace the game's art with new pictures. The first one listed wins."});
+    for (int k = 0; k < n_packs_listed; k++)
+        settings_register(&(setting){
+            .label = packs_listed[k], .category = "Packs", .type = SETTING_ENUM,
+            .count = n_packs_listed + 1, .get = get_pack, .set = set_pack, .option = pack_option,
+            .user = (void *)(intptr_t)k,
+            .help = "Off, or on at this place in the order (1st wins over the others)."});
+    if (!n_packs_listed)
+        settings_register(&(setting){.label = "No packs installed", .category = "Packs",
+                                     .type = SETTING_INFO,
+                                     .help = "Put each pack in its own folder in the packs folder "
+                                             "below (docs/ASSET-PACKS.md)."});
+    settings_register(&(setting){.label = "Reload packs", .category = "Packs", .type = SETTING_ACTION,
+                                 .run = run_pack_reload, .enabled = can_reload,
+                                 .help = "Read the loaded packs from disk again (F5)."});
+    settings_register(&(setting){
+        .label = "Dump new art", .category = "Packs", .type = SETTING_BOOL, .get = get_dump,
+        .set = set_dump, .enabled = can_dump, .flags = SETTING_NO_SAVE,
+        .help = "Save each new tile and sprite drawn into the \"dump\" pack, to draw over."});
+    settings_register(&(setting){.label = "Folder", .category = "Packs", .type = SETTING_INFO,
+                                 .text = folder_text, .help = packs_folder});
+}
+
+/* Audio */
+static int get_volume(void *u) { (void)u; return volume; }
+static void set_volume(void *u, int v) { (void)u; volume = v; }
+static int get_mute_unfocused(void *u) { (void)u; return mute_unfocused; }
+static void set_mute_unfocused(void *u, int v) { (void)u; mute_unfocused = v; }
+
+/* About */
+static const char *version_text(void *u, char *buf, size_t n)
+{
+    (void)u;
+    snprintf(buf, n, "%s", CT_VERSION);
+    return buf;
+}
+static const char *license_text(void *u, char *buf, size_t n)
+{
+    (void)buf;
+    (void)n;
+    return (const char *)u;
+}
+static void run_quit(void *u)
+{
+    (void)u;
+    set_exit_reason("Quit in the menu");
+    running = 0;
+    menu_close();
+}
+
+static void register_settings(void)
+{
+    static const char *const cats[] = {"Look", "Display", "Controls", "Co-op", "Packs",
+                                       "Save states", "Audio", "About"};
+    for (size_t k = 0; k < sizeof cats / sizeof *cats; k++)
+        settings_category_add(cats[k]);
+    settings_key_namer(key_namer);
+    for (int k = 0; k < HD2D_PRESETS; k++)
+        preset_values[k] = hd2d_preset_name(k);
+    for (int a = 0; a < ACTION_COUNT; a++)
+        action_labels[a] = action_title((ct_action)a);
+
+    /* Look */
+    settings_register(&(setting){
+        .label = "Renderer", .category = "Look", .type = SETTING_ENUM, .options = renderer_labels,
+        .count = 2, .get = get_renderer, .set = set_renderer, .flags = SETTING_RESTART,
+        .help = "Original: the console's picture, scaled. HD-2D: the OpenGL renderer and its "
+                "looks below. --hd2d and --no-hd2d still win."});
+    settings_register(&(setting){
+        .key = "preset", .label = "Look", .category = "Look", .type = SETTING_ENUM,
+        .options = preset_labels, .values = preset_values, .count = HD2D_PRESETS, .get = get_preset,
+        .set = set_preset,
+        .help = "Original pixels, or the HD-2D renderer: light, depth of field, bloom; the 3D "
+                "diorama rebuilds maps in 3D. Used by the HD-2D renderer. (F1, R3)"});
+    settings_register(&(setting){.key = "aspect", .label = "Aspect", .category = "Look",
+                                 .type = SETTING_ENUM, .options = aspect_labels,
+                                 .count = HD2D_ASPECTS, .get = get_aspect, .set = set_aspect,
+                                 .enabled = on_hd2d,
+                                 .help = "The picture's shape: a 4:3 TV, the console's own pixels (8:7), "
+                                         "or the whole window. (F3, L3)"});
+    settings_register(&(setting){.label = "3D camera", .category = "Look", .type = SETTING_INFO,
+                                 .flags = SETTING_HEADING});
+    settings_register(&(setting){.key = "cam_tilt", .label = "Camera tilt", .category = "Look",
+                                 .type = SETTING_INT, .min = 20, .max = 70, .step = 5,
+                                 .format = "%d\xc2\xb0", .get = get_cam_tilt, .set = set_cam_tilt,
+                                 .enabled = on_3d,
+                                 .help = "How far the 3D diorama's camera leans back from "
+                                         "looking straight down (40\xc2\xb0)."});
+    settings_register(&(setting){.key = "cam_zoom", .label = "Camera zoom", .category = "Look",
+                                 .type = SETTING_INT, .min = 60, .max = 160, .step = 10,
+                                 .format = "%d%%", .get = get_cam_zoom, .set = set_cam_zoom,
+                                 .enabled = on_3d,
+                                 .help = "How close the 3D diorama's camera is (100%: about the "
+                                         "console's view)."});
+    settings_register(&(setting){.key = "gyro", .label = "Gyro aiming", .category = "Look",
+                                 .type = SETTING_BOOL, .get = get_gyro, .set = set_gyro,
+                                 .enabled = on_hd2d,
+                                 .help = "Turn the controller to turn the 3D camera a little "
+                                         "(Steam Deck, Switch and PlayStation pads)."});
+    settings_register(&(setting){.key = "gyro_strength", .label = "Gyro strength",
+                                 .category = "Look", .type = SETTING_INT, .min = 25, .max = 300,
+                                 .step = 25, .format = "%d%%", .ini_div = 100,
+                                 .get = get_gyro_strength, .set = set_gyro_strength,
+                                 .enabled = on_gyro, .help = "Camera degrees per degree turned."});
+    settings_register(&(setting){.label = "Debug view", .category = "Look", .type = SETTING_ENUM,
+                                 .options = debug_labels, .count = HD2D_DEBUGS, .get = get_debug,
+                                 .set = set_debug, .enabled = on_hd2d, .flags = SETTING_NO_SAVE,
+                                 .help = "The renderer's inputs, for checking its work. Not "
+                                         "saved. (F2)"});
+
+    /* Display */
+    settings_register(&(setting){.key = "fullscreen", .label = "Fullscreen", .category = "Display",
+                                 .type = SETTING_BOOL, .values = fs_values, .get = get_fullscreen,
+                                 .set = set_fullscreen, .enabled = not_game_mode,
+                                 .help = "Always on in Steam's Game Mode. (F11)"});
+    settings_register(&(setting){
+        .key = "pacing", .label = "Frame pacing", .category = "Display", .type = SETTING_ENUM,
+        .options = pacing_labels, .values = pacing_values, .count = 3, .get = get_pacing,
+        .set = set_pacing,
+        .help = "Timer: 60.1 frames a second by the clock (Auto, for now). Vsync: by the display "
+                "(60 Hz displays)."});
+    settings_register(&(setting){.key = "menu_scale", .label = "Menu text size",
+                                 .category = "Display", .type = SETTING_ENUM,
+                                 .options = scale_labels, .values = scale_values, .count = 3,
+                                 .get = get_menu_scale, .set = set_menu_scale,
+                                 .help = "The size of this menu's text."});
+
+    /* Controls */
+    settings_register(&(setting){.label = "Open this menu", .category = "Controls",
+                                 .type = SETTING_INFO, .text = menu_combo_text,
+                                 .help = "On a controller without back buttons, click both "
+                                         "sticks together."});
+    settings_register(&(setting){.label = "Back buttons", .category = "Controls",
+                                 .type = SETTING_INFO, .flags = SETTING_HEADING});
+    for (int k = 0; k < N_BIND_ROWS; k++)
+        settings_register(&(setting){
+            .label = bind_rows[k].label, .category = "Controls", .type = SETTING_ENUM,
+            .options = action_labels, .count = ACTION_COUNT, .get = get_bind, .set = set_bind,
+            .user = (void *)(intptr_t)k,
+            .help = "Steam Deck back buttons, Steam Controller grips, Elite paddles. Under Steam "
+                    "Input, Steam's layout decides what they send."});
+    settings_register(&(setting){.label = "Keyboard", .category = "Controls", .type = SETTING_INFO,
+                                 .flags = SETTING_HEADING});
+    for (int a = ACTION_NONE + 1; a < ACTION_COUNT; a++) {
+        snprintf(key_labels[a], sizeof key_labels[a], "%s key", action_title((ct_action)a));
+        settings_register(&(setting){.label = key_labels[a], .category = "Controls",
+                                     .type = SETTING_KEY, .get = get_key, .set = set_key,
+                                     .user = (void *)(intptr_t)a,
+                                     .help = "Pick, then press the key. Backspace: no key."});
+    }
+    settings_register(&(setting){.label = "Controller", .category = "Controls",
+                                 .type = SETTING_INFO, .flags = SETTING_HEADING});
+    settings_register(&(setting){
+        .key = "steam_hidapi", .label = "Steam Controller driver", .category = "Controls",
+        .type = SETTING_BOOL, .get = get_hidapi, .set = set_hidapi, .flags = SETTING_RESTART,
+        .help = "SDL's own driver for the Steam Controller, back buttons included, when Steam "
+                "Input isn't running."});
+
+    /* Co-op */
+    settings_register(&(setting){
+        .key = "coop", .label = "Co-op", .category = "Co-op", .type = SETTING_ENUM,
+        .options = coop_labels, .values = coop_values, .count = 3, .get = get_coop,
+        .set = set_coop,
+        .help = "Auto: on while two controllers are connected. A second controller plays pad 2. "
+                "(F4)"});
+    settings_register(&(setting){.label = "Who plays which party member", .category = "Co-op",
+                                 .type = SETTING_INFO, .flags = SETTING_HEADING});
+    static const char *const slot_labels[3] = {"Party member 1", "Party member 2",
+                                               "Party member 3"};
+    for (int k = 0; k < 3; k++)
+        settings_register(&(setting){
+            .label = slot_labels[k], .category = "Co-op", .type = SETTING_ENUM,
+            .options = player_labels, .count = 3, .get = get_slot, .set = set_slot,
+            .user = (void *)(intptr_t)k,
+            .help = "Player 3 plays only with a third controller; until then player 1 has "
+                    "theirs."});
+    settings_register(&(setting){.label = "Split screen (experimental)", .category = "Co-op",
+                                 .type = SETTING_BOOL, .get = get_split, .set = set_split,
+                                 .enabled = on_plain, .flags = SETTING_NO_SAVE,
+                                 .help = "A second view when player 2 walks away. Original "
+                                         "picture only (--no-hd2d); not saved."});
+
+    /* Packs: packs_refresh, each time the menu opens */
+    settings_on_refresh(packs_refresh);
+
+    /* Save states, screenshots, fast-forward, turbo, always run, pausing,
+       integer scale, CRT, battery: QOL's own rows (qol.h). */
+    qol_register_settings();
+
+    /* Audio */
+    settings_register(&(setting){.key = "volume", .label = "Volume", .category = "Audio",
+                                 .type = SETTING_INT, .min = 0, .max = 100, .step = 5,
+                                 .format = "%d%%", .get = get_volume, .set = set_volume,
+                                 .help = "The game's sound."});
+    settings_register(&(setting){.key = "mute_unfocused", .label = "Mute in the background",
+                                 .category = "Audio", .type = SETTING_BOOL,
+                                 .get = get_mute_unfocused, .set = set_mute_unfocused,
+                                 .help = "Silent while another window has the focus."});
+
+    /* About */
+    settings_register(&(setting){.label = APP_NAME, .category = "About", .type = SETTING_INFO,
+                                 .text = version_text,
+                                 .help = "A static recompilation of a SNES game for PCs and "
+                                         "handhelds. Free software: GPL-3.0-or-later."});
+    settings_register(&(setting){
+        .label = "Bring your own ROM", .category = "About", .type = SETTING_INFO,
+        .help = "No game data comes with " APP_NAME ". It runs only from a ROM you dumped from "
+                "a cartridge you own, and never downloads or shares one."});
+    settings_register(&(setting){.label = "Licenses", .category = "About", .type = SETTING_INFO,
+                                 .flags = SETTING_HEADING});
+    static const struct { const char *name, *license, *help; } lic[] = {
+        {APP_NAME, "GPL-3.0-or-later",
+         "This program. Parts from ct-recomp (Akhil Moola) stay MIT; REUSE.toml maps every file."},
+        {"ct-recomp", "MIT", "The recompiler and runtime this is built on (Akhil Moola)."},
+        {"zelda3 SNES core", "MIT", "PPU, DMA, APU and DSP emulation (snesrev, elzo_d)."},
+        {"ares SPC700", "ISC", "The sound CPU core (ares team, Near et al)."},
+        {"Dear ImGui", "MIT", "This menu's GUI library (Omar Cornut), v1.92.9b."},
+        {"Roboto", "Apache-2.0", "This menu's font (Christian Robertson, Google)."},
+        {"cgltf", "MIT", "glTF reader for asset packs' models (Johannes Kuhlmann)."},
+        {"Kenney Input Prompts", "CC0-1.0", "The button pictures (Kenney)."},
+        {"SDL2", "Zlib", "Windows, input and sound (the SDL developers)."},
+    };
+    for (size_t k = 0; k < sizeof lic / sizeof *lic; k++)
+        settings_register(&(setting){.label = lic[k].name, .category = "About",
+                                     .type = SETTING_INFO, .text = license_text,
+                                     .user = (void *)lic[k].license, .help = lic[k].help});
+    settings_register(&(setting){.label = "", .category = "About", .type = SETTING_INFO,
+                                 .flags = SETTING_HEADING});
+    settings_register(&(setting){.label = "Quit " APP_NAME, .category = "About",
+                                 .type = SETTING_ACTION, .run = run_quit, .flags = SETTING_CONFIRM,
+                                 .help = "The game's own saves are kept. Press twice."});
+    settings_on_change(settings_save);
 }
 
 static void log_action(ct_action a, int down)
@@ -976,10 +1601,13 @@ static void poll_input(long f)
     }
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
-        if (touch_event(&ev, f))
+        if (!menu_is_open() && touch_event(&ev, f))
             continue;   /* port: a touch, used by the overlay */
-        if (qol_event(&ev, f))
-            continue;   /* port: QOL keys, the pause and the resume prompt */
+        /* port: QOL keys, the pause and the resume prompt; while the menu
+           is open, only what it watches of the window and the pads */
+        if ((!menu_is_open() || ev.type == SDL_WINDOWEVENT ||
+             ev.type == SDL_CONTROLLERDEVICEREMOVED) && qol_event(&ev, f))
+            continue;
         if (log_input && (ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) && !ev.key.repeat)
             fprintf(stderr, "ct_sdl: frame %ld key %s %s (scancode %d)\n", f,
                     SDL_GetScancodeName(ev.key.keysym.scancode),
@@ -992,8 +1620,19 @@ static void poll_input(long f)
                                            ev.window.event == SDL_WINDOWEVENT_MOVED ||
                                            ev.window.event == SDL_WINDOWEVENT_RESTORED))
             wst_track();
-        if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
+        if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
             bindings_keys_release();   /* port: no fast-forward stuck on */
+            focused = 0;               /* port: mute_unfocused */
+        }
+        if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)
+            focused = 1;
+        if (ev.type == SDL_MOUSEMOTION && ev.motion.which != SDL_TOUCH_MOUSEID) {
+            mouse_moved_at = SDL_GetTicks();   /* port: the cursor shows while it moves */
+            if (!cursor_shown && !game_mode) {
+                SDL_ShowCursor(SDL_ENABLE);
+                cursor_shown = 1;
+            }
+        }
         if (ev.type == SDL_CONTROLLERBUTTONDOWN) {   /* port: glyphs of the pad used */
             SDL_GameController *c = SDL_GameControllerFromInstanceID(ev.cbutton.which);
             last_pad_press = f;
@@ -1006,11 +1645,32 @@ static void poll_input(long f)
             set_exit_reason("SDL_QUIT event (window closed, or quit requested by the "
                             "desktop or another program)");
             running = 0;
-        } else if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_Q &&
-                   (ev.key.keysym.mod & KMOD_CTRL)) {
+            continue;
+        }
+        if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_Q &&
+            (ev.key.keysym.mod & KMOD_CTRL)) {
             set_exit_reason("Ctrl+Q");
             running = 0;
-        } else if (ev.type == SDL_KEYDOWN && !ev.key.repeat && hd2d_key(ev.key.keysym.scancode)) {
+            continue;
+        }
+        if (menu_is_open()) {
+            /* port: the menu has the keys, buttons, stick and mouse. A key
+               or button let go still reaches the rest below (so nothing
+               held when it opened stays held); device and window events
+               too. Its own key (F10) closes it. */
+            int up = ev.type == SDL_KEYUP || ev.type == SDL_CONTROLLERBUTTONUP;
+            if (menu_event(&ev) && !up)
+                continue;
+            if (ev.type == SDL_KEYDOWN) {
+                if (!ev.key.repeat && !menu_capturing_key() &&
+                    bindings_for_key(bindings_current(), ev.key.keysym.scancode) == ACTION_MENU)
+                    menu_close();
+                continue;
+            }
+            if (ev.type == SDL_CONTROLLERBUTTONDOWN || ev.type == SDL_CONTROLLERAXISMOTION)
+                continue;
+        }
+        if (ev.type == SDL_KEYDOWN && !ev.key.repeat && hd2d_key(ev.key.keysym.scancode)) {
             /* port: renderer controls, not game input */
         } else if ((ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) &&
                    bindings_key_event(bindings_current(), ev.key.keysym.scancode,
@@ -1018,13 +1678,29 @@ static void poll_input(long f)
             /* port: a frontend action's key (bindings.h), not game input */
         } else if ((ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) && !ev.key.repeat) {
             key_filter_key(&keys, ev.key.keysym.scancode, ev.type == SDL_KEYDOWN, f);
-        } else if (ev.type == SDL_CONTROLLERBUTTONDOWN && hd2d_mode &&
+        } else if ((ev.type == SDL_CONTROLLERBUTTONDOWN || ev.type == SDL_CONTROLLERBUTTONUP) &&
                    (ev.cbutton.button == SDL_CONTROLLER_BUTTON_RIGHTSTICK ||
                     ev.cbutton.button == SDL_CONTROLLER_BUTTON_LEFTSTICK)) {
             /* port: stick clicks (no SNES button) drive the renderer on
-               handhelds without function keys: R3 preset, L3 aspect. */
-            hd2d_key(ev.cbutton.button == SDL_CONTROLLER_BUTTON_RIGHTSTICK ? SDL_SCANCODE_F1
-                                                                            : SDL_SCANCODE_F3);
+               handhelds without function keys: R3 preset, L3 aspect, on
+               release; both together open the menu (any pad without back
+               buttons has them) and then neither does its own. */
+            int bit = ev.cbutton.button == SDL_CONTROLLER_BUTTON_RIGHTSTICK ? 1 : 2;
+            if (ev.type == SDL_CONTROLLERBUTTONDOWN) {
+                key_filter_button(&keys, f);
+                stick_chord |= bit;
+                if (stick_chord == 3 && !stick_chorded) {
+                    stick_chorded = 1;
+                    actions_emit(ACTION_MENU, 1);
+                    actions_emit(ACTION_MENU, 0);
+                }
+            } else if (stick_chord & bit) {
+                stick_chord &= ~bit;
+                if (!stick_chorded && hd2d_mode)
+                    hd2d_key(bit == 1 ? SDL_SCANCODE_F1 : SDL_SCANCODE_F3);
+                if (!stick_chord)
+                    stick_chorded = 0;
+            }
         } else if (ev.type == SDL_CONTROLLERBUTTONDOWN) {
             key_filter_button(&keys, f);
         } else if (ev.type == SDL_CONTROLLERDEVICEADDED && !pad) {
@@ -1063,6 +1739,12 @@ static void poll_input(long f)
             if (all[k])
                 binder_update(&pad_binder[k], bindings_current(), pad_button, all[k]);
     }
+    if (cursor_shown && SDL_GetTicks() - mouse_moved_at > CURSOR_IDLE_MS) {
+        SDL_ShowCursor(SDL_DISABLE);   /* port: hidden while the mouse is still */
+        cursor_shown = 0;
+    }
+    if (menu_is_open())
+        return;   /* port: the game waits (menu_run); nothing else to read */
     if (gyro_on && hd2d_mode)   /* port: off by default */
         gyro_frame();
     coop_update();   /* port */
@@ -1090,6 +1772,12 @@ static void poll_input(long f)
             osd_show("Quit? [a] quit  [b] back to the game");
         if (!quit_combo_masks(&quitc))
             buttons |= input_controller(pad_button, pad_axis, p1);
+    }
+    if (menu_hold_mask) {   /* port: what closed the menu doesn't press anything in the game */
+        if (buttons)
+            buttons = 0;
+        else
+            menu_hold_mask = 0;
     }
     buttons |= touch_buttons(f);   /* port */
     live_buttons = buttons;
@@ -1129,6 +1817,13 @@ static void queue_audio(long f)
     if (log_audio)
         fprintf(stderr, "ct_sdl: frame %ld audio queued %u avg %.0f rate x%.4f in %d out %d%s\n",
                 f, level, level_avg, adjust, n_in, n_out, playing && !level ? " UNDERRUN" : "");
+    /* port: the volume, and silence in the background (mute_unfocused):
+       the samples are scaled, not dropped, so the queue and its rate
+       control carry on as before. */
+    int vol = mute_unfocused && !focused ? 0 : volume;
+    if (vol < 100)
+        for (int k = 0; k < n_out * 2; k++)
+            out[k] = (int16_t)(out[k] * vol / 100);
     if (level > 4 * AUDIO_TARGET)
         audio_dropped++;   /* far ahead (--fast, or the device stalled) */
     else if (n_out > 0)
@@ -1242,9 +1937,275 @@ static void present_now(void)
         present_plain(turn_tag(sched_frame()));   /* port: with the touch overlay, the co-op tag */
 }
 
+/* port: --hash-log: frame f's WRAM and picture, FNV-1a 64. */
+static uint64_t fnv64(uint64_t h, const uint8_t *p, size_t n)
+{
+    for (size_t k = 0; k < n; k++)
+        h = (h ^ p[k]) * 0x100000001B3ull;
+    return h;
+}
+
+static void write_hash(long f)
+{
+    uint64_t h = fnv64(0xCBF29CE484222325ull, bus_wram(), 0x20000);
+    h = fnv64(h, sched_frame(), (size_t)SCHED_WIDTH * SCHED_HEIGHT * 4);
+    fprintf(hash_log, "%ld %016llx\n", f, (unsigned long long)h);
+}
+
+/* port: --menu-test FILE, a script of menu use for tests. One command a
+   line ('#' starts a comment):
+     open F         the menu action (as F10 or R5) at the end of frame F
+     button NAME    a controller button (SDL's name: a, b, dpdown,
+                    leftshoulder, start, ...) pressed this tick, let go
+                    the next
+     key NAME       a key likewise (SDL's name: Return, Escape, Down, F10)
+     axis NAME V    a stick axis (leftx, lefty) moved to V
+     wait N         N ticks with nothing
+     shot PATH      the next tick's picture, menu and all, as PNG
+     click X Y      the left mouse button (or a touch) at X, Y in the
+                    window, let go the next tick
+     glyphs NAME    show the buttons of a controller family (steamdeck,
+                    xbox, playstation, switch, keyboard, ...), as if used
+   After "open", one command per tick of the open menu; once the script
+   runs out (or reaches the next "open") with the menu still open, it
+   closes after 30 ticks. */
+enum { MT_OPEN, MT_BUTTON, MT_KEY, MT_AXIS, MT_WAIT, MT_SHOT, MT_GLYPHS, MT_CLICK };
+
+/* A glyph set by name, spaces and case aside ("steamdeck", "xbox"). */
+static int glyphs_parse(const char *s)
+{
+    for (int k = 0; k < GLYPHS_SETS; k++) {
+        const char *n = glyphs_family_name(k), *p = s;
+        for (; *n; n++)
+            if (*n != ' ' && (*n | 32) != (*p++ | 32))
+                break;
+        if (!*n && !*p)
+            return k;
+    }
+    return -1;
+}
+static int mt_pos, mt_wait, mt_idle;
+static int mt_up_button = -1, mt_up_mouse;
+static int mt_mouse_x, mt_mouse_y;
+
+/* The left mouse button at (x, y) in window pixels (down), or let go where it was. */
+static void push_mouse(int x, int y, int down)
+{
+    SDL_Event e;
+    if (down) {
+        mt_mouse_x = x, mt_mouse_y = y;
+        memset(&e, 0, sizeof e);
+        e.type = SDL_MOUSEMOTION;
+        e.motion.x = x, e.motion.y = y;
+        e.motion.windowID = SDL_GetWindowID(win);
+        SDL_PushEvent(&e);
+    }
+    memset(&e, 0, sizeof e);
+    e.type = down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
+    e.button.button = SDL_BUTTON_LEFT;
+    e.button.state = down ? SDL_PRESSED : SDL_RELEASED;
+    e.button.clicks = 1;
+    e.button.x = mt_mouse_x, e.button.y = mt_mouse_y;
+    e.button.windowID = SDL_GetWindowID(win);
+    SDL_PushEvent(&e);
+}
+static SDL_Scancode mt_up_key;
+
+static int menu_test_load(const char *path)
+{
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        fprintf(stderr, "ct_sdl: cannot read --menu-test %s\n", path);
+        return -1;
+    }
+    char line[300], cmd[16], arg[200];
+    int n = 0, bad = 0;
+    while (fgets(line, sizeof line, fp) && !bad) {
+        n++;
+        line[strcspn(line, "#\r\n")] = 0;
+        int v = 0;
+        int got = sscanf(line, "%15s %199s %d", cmd, arg, &v);
+        if (got < 1)
+            continue;
+        if (mtest.n == MAX_MENU_TEST) {
+            bad = 1;
+            break;
+        }
+        struct mt_ev *e = &mtest.ev[mtest.n];
+        memset(e, 0, sizeof *e);
+        if (!strcmp(cmd, "open") && got >= 2)
+            e->kind = MT_OPEN, e->a = atoi(arg);
+        else if (!strcmp(cmd, "button") && got >= 2 &&
+                 (e->a = SDL_GameControllerGetButtonFromString(arg)) != SDL_CONTROLLER_BUTTON_INVALID)
+            e->kind = MT_BUTTON;
+        else if (!strcmp(cmd, "key") && got >= 2 &&
+                 (e->a = SDL_GetScancodeFromName(arg)) != SDL_SCANCODE_UNKNOWN)
+            e->kind = MT_KEY;
+        else if (!strcmp(cmd, "axis") && got == 3 &&
+                 (e->a = SDL_GameControllerGetAxisFromString(arg)) != SDL_CONTROLLER_AXIS_INVALID)
+            e->kind = MT_AXIS, snprintf(e->path, sizeof e->path, "%d", v);
+        else if (!strcmp(cmd, "wait") && got >= 2)
+            e->kind = MT_WAIT, e->a = atoi(arg);
+        else if (!strcmp(cmd, "click") && got == 3)
+            e->kind = MT_CLICK, e->a = atoi(arg), snprintf(e->path, sizeof e->path, "%d", v);
+        else if (!strcmp(cmd, "glyphs") && got >= 2 && (e->a = glyphs_parse(arg)) >= 0)
+            e->kind = MT_GLYPHS;
+        else if (!strcmp(cmd, "shot") && got >= 2)
+            e->kind = MT_SHOT, snprintf(e->path, sizeof e->path, "%s", arg);
+        else
+            bad = 1;
+        if (!bad)
+            mtest.n++;
+    }
+    fclose(fp);
+    if (bad)
+        fprintf(stderr, "ct_sdl: --menu-test %s: bad line %d\n", path, n);
+    return bad ? -1 : 0;
+}
+
+static void push_button(int button, int down)
+{
+    SDL_Event e;
+    memset(&e, 0, sizeof e);
+    e.type = down ? SDL_CONTROLLERBUTTONDOWN : SDL_CONTROLLERBUTTONUP;
+    e.cbutton.which = -2;   /* no real pad */
+    e.cbutton.button = (uint8_t)button;
+    e.cbutton.state = down ? SDL_PRESSED : SDL_RELEASED;
+    SDL_PushEvent(&e);
+}
+
+static void push_key(SDL_Scancode sc, int down)
+{
+    SDL_Event e;
+    memset(&e, 0, sizeof e);
+    e.type = down ? SDL_KEYDOWN : SDL_KEYUP;
+    e.key.state = down ? SDL_PRESSED : SDL_RELEASED;
+    e.key.keysym.scancode = sc;
+    e.key.keysym.sym = SDL_GetKeyFromScancode(sc);
+    SDL_PushEvent(&e);
+}
+
+/* At frame f's edge: the script's "open". */
+static void menu_test_frame(long f)
+{
+    if (mt_pos < mtest.n && mtest.ev[mt_pos].kind == MT_OPEN && f >= mtest.ev[mt_pos].a) {
+        fprintf(stderr, "ct_sdl: menu-test: frame %ld: menu action\n", f);
+        mt_pos++;
+        mt_idle = 0;
+        actions_emit(ACTION_MENU, 1);
+        actions_emit(ACTION_MENU, 0);
+    }
+}
+
+/* Each tick of the open menu: the next command. */
+static void menu_test_tick(void)
+{
+    if (mt_up_button >= 0)
+        push_button(mt_up_button, 0), mt_up_button = -1;
+    if (mt_up_mouse)
+        push_mouse(0, 0, 0), mt_up_mouse = 0;
+    if (mt_up_key)
+        push_key(mt_up_key, 0), mt_up_key = 0;
+    if (!mtest.n)
+        return;
+    if (mt_wait > 0) {
+        mt_wait--;
+        return;
+    }
+    if (mt_pos >= mtest.n || mtest.ev[mt_pos].kind == MT_OPEN) {
+        if (++mt_idle > 30) {
+            fprintf(stderr, "ct_sdl: menu-test: the script left the menu open: closing it\n");
+            menu_close();
+        }
+        return;
+    }
+    struct mt_ev *e = &mtest.ev[mt_pos++];
+    switch (e->kind) {
+    case MT_BUTTON: push_button(e->a, 1), mt_up_button = e->a; break;
+    case MT_KEY: push_key((SDL_Scancode)e->a, 1), mt_up_key = (SDL_Scancode)e->a; break;
+    case MT_AXIS: {
+        SDL_Event ev;
+        memset(&ev, 0, sizeof ev);
+        ev.type = SDL_CONTROLLERAXISMOTION;
+        ev.caxis.which = -2;
+        ev.caxis.axis = (uint8_t)e->a;
+        ev.caxis.value = (int16_t)atoi(e->path);
+        SDL_PushEvent(&ev);
+        break;
+    }
+    case MT_WAIT: mt_wait = e->a > 0 ? e->a - 1 : 0; break;
+    case MT_SHOT: menu_shot_path = e->path; break;
+    case MT_GLYPHS: glyphs_use(e->a); break;
+    case MT_CLICK: push_mouse(e->a, atoi(e->path), 1), mt_up_mouse = 1; break;
+    default: break;
+    }
+}
+
+/* port: the menu is open (menu.h): the game waits between two frames
+   (main's loop; the frame the menu action came in has had its input set),
+   the sound is paused, and the picture is drawn again each tick with the
+   menu over it until it closes. No frame runs, so the game's state, its
+   frame count and the hashes are as they were, unless a save state is
+   loaded from it. Between frames is where QOL takes and loads states:
+   qol_after_frame each tick carries out what the menu asked for. */
+static void menu_run(long f)
+{
+    long frames_at = sched_frame_count();
+    long ticks = 0;
+    int loaded = 0;
+    fprintf(stderr, "ct_sdl: frame %ld: menu open\n", f);
+    if (audio)
+        SDL_PauseAudioDevice(audio, 1);
+    bindings_keys_release();   /* fast-forward and the like: not held through it */
+    qol_ffwd_set(0);
+    uint64_t last = SDL_GetPerformanceCounter();
+    while (running && menu_is_open()) {
+        menu_test_tick();
+        poll_input(sched_frame_count());
+        uint64_t now = SDL_GetPerformanceCounter();
+        unsigned ms = fast ? 16u : (unsigned)((now - last) * 1000 / perf_freq);
+        last = now;
+        menu_tick(ms);
+        long before = sched_frame_count();
+        qol_after_frame();   /* QOL: a save, load or screenshot asked for in the menu */
+        loaded |= sched_frame_count() != before;
+        if (!running || !menu_is_open())
+            break;
+        present_now();
+        ticks++;
+        if (!fast) {   /* about 60 ticks a second */
+            uint64_t end = last + perf_freq / 60;
+            if (SDL_GetPerformanceCounter() < end)
+                sleep_until(end);
+        }
+    }
+    menu_close();
+    menu_ticks_total += ticks;
+    if (!loaded)
+        menu_frames_advanced += sched_frame_count() - frames_at;
+    fprintf(stderr, "ct_sdl: frame %ld: menu closed after %ld ticks; frame count %ld (was %ld)%s\n",
+            f, ticks, sched_frame_count(), frames_at, loaded ? ", a state loaded" : "");
+    if (audio && playing)
+        SDL_PauseAudioDevice(audio, 0);
+    menu_hold_mask = 1;
+    next_frame = SDL_GetPerformanceCounter();   /* the frame timer starts over */
+    pace.last = 0;
+    if (hd2d_mode)   /* a look changed in the menu: the PPU's behind buffer to match */
+        sched_set_behind(hd2d_wants_behind());
+}
+
+static void menu_report(void)
+{
+    if (menu_opened_count())
+        fprintf(stderr, "ct_sdl: menu: opened %ld times, %ld ticks, %ld frames ran while open\n",
+                menu_opened_count(), menu_ticks_total, menu_frames_advanced);
+}
+
 static void on_frame(long f)
 {
     exit_frame = f;
+    if (hash_log)   /* port */
+        write_hash(f);
     int show = qol_frame(f);   /* port: QOL: fast-forward and the battery's 30 Hz skip some */
     queue_audio(f);
     if (pace_vsync && playing && audio && !fast) {
@@ -1324,6 +2285,7 @@ static void on_frame(long f)
     }
     saves_frame(f);   /* port */
     poll_input(f);
+    menu_test_frame(f);   /* port: --menu-test (the menu opens after this frame: main) */
     set_input(f + 1);
 }
 
@@ -1379,6 +2341,8 @@ static int open_window(const char *title, int scale, int fullscreen)
                 SDL_GL_DeleteContext(glctx);
                 glctx = NULL;
             }
+            if (glctx)
+                gl_es = want_gl[k].gles;
             if (glctx)   /* port: the touch overlay's GL drawer */
                 touch_gl_ok = !touch_gl_init(want_gl[k].gles);
             if (!glctx && win) {
@@ -1437,6 +2401,13 @@ static int open_window(const char *title, int scale, int fullscreen)
                 SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN ? ", fullscreen" : "");
     }
     choose_pacing();
+    {   /* port: the menu draws over this window (set up when first opened) */
+        menu_host mh = {win, hd2d_mode ? NULL : ren, gl_es, APP_NAME, CT_VERSION};
+        menu_init(&mh);
+        menu_ready = 1;
+        cursor_shown = !game_mode;
+        mouse_moved_at = SDL_GetTicks();
+    }
     return 0;
 }
 
@@ -1487,7 +2458,8 @@ static void usage(FILE *out)
             "[--poke-sram F:ADDR=VAL]... [--pacing auto|timer|vsync] [--log-pacing]\n         "
             "[--coop] [--no-coop] [--coop-split]"
             " "
-            "[--pack-dump NAME] [--pack NAME|none]..."
+            "[--pack-dump NAME] [--pack NAME|none]...\n         "
+            "[--menu-test FILE] [--hash-log FILE]"
 #ifdef CT_FIRSTRUN
             " [--data-dir DIR] [--game ID] [--shot status:PATH] [--build-only]"
 #endif
@@ -1508,6 +2480,7 @@ static void usage(FILE *out)
           "  Ctrl+Q            quit\n"
           "Back buttons and grips (Steam Deck L4 R4 L5 R5, Steam Controller grips, Elite\n"
           "  paddles): L4 quick save, R4 quick load, L5 fast-forward (hold), R5 menu.\n"
+          "  On any controller, L3 + R3 (both sticks clicked) opens the menu too.\n"
           "  settings.ini: bind_paddle1..4=ACTION, key_ACTION=KEY (docs/HANDHELD.md).\n"
           "Controllers: south = B, east = A, west = Y, north = X, shoulders = L / R,\n"
           "  Start, Back = Select, d-pad or left stick. The window's size, place and\n"
@@ -1578,6 +2551,7 @@ int main(int argc, char **argv)
     static int no_save;
     static const char *import_srm, *export_srm;   /* port: QOL */
     static int recording, scripted;
+    register_settings();   /* port: the settings registry (settings.h), before reading them */
     settings_load();   /* port: saved HD-2D settings; options below override */
     for (int k = 1; k < argc; k++) {
         if (!strcmp(argv[k], "--scale") && k + 1 < argc)
@@ -1711,6 +2685,14 @@ int main(int argc, char **argv)
         } else if (!strcmp(argv[k], "--touch-test") && k + 1 < argc) {
             if (touch_test_load(argv[++k]))
                 return 2;
+        } else if (!strcmp(argv[k], "--menu-test") && k + 1 < argc) {   /* port: menu.h */
+            if (menu_test_load(argv[++k]))
+                return 2;
+        } else if (!strcmp(argv[k], "--hash-log") && k + 1 < argc) {   /* port */
+            if (!(hash_log = fopen(argv[++k], "w"))) {
+                fprintf(stderr, "ct_sdl: cannot write %s\n", argv[k]);
+                return 2;
+            }
         } else if (!strcmp(argv[k], "--shot-size") && k + 1 < argc) {
             if (sscanf(argv[++k], "%dx%d", &shot_w, &shot_h) != 2 || shot_w < 16 || shot_h < 16) {
                 fprintf(stderr, "ct_sdl: --shot-size WxH\n");
@@ -1746,6 +2728,8 @@ int main(int argc, char **argv)
         if (game_mode)
             fprintf(stderr, "ct_sdl: Steam Game Mode (%s): fullscreen, no cursor%s\n", why,
                     hd2d_mode >= 0 ? ", HD-2D" : "");
+        if (!hd2d_mode && renderer_saved >= 0)   /* port: the menu's choice (settings.ini renderer=) */
+            hd2d_mode = renderer_saved ? 1 : -1;
         if (game_mode && !hd2d_mode)
             hd2d_mode = 1;
         int no_hd2d = hd2d_mode < 0;
@@ -1903,7 +2887,9 @@ int main(int argc, char **argv)
        something implements them; the menu shows what the buttons do. */
     actions_set_message(osd);
     actions_set_trace(log_action);
-    actions_set_handler(ACTION_MENU, menu_osd, NULL);
+    actions_set_handler(ACTION_MENU, menu_action, NULL);   /* port: the menu (menu.h) */
+    menu_game_id = game_id;
+    atexit(menu_report);
     use_glyphs_of(pad);
     fprintf(stderr, "ct_sdl: glyphs: %s (%d pictures built in)\n",
             glyphs_family_name(glyphs_in_use()), glyphs_built_in());
@@ -1951,6 +2937,7 @@ int main(int argc, char **argv)
         qol_init(&qh, game_id, game_mode, hd2d_mode, !no_save, recording, scripted);
     }
     key_filter_init(&keys);
+    frontend_ready = 1;   /* port: settings changed from here on apply live */
     perf_freq = SDL_GetPerformanceFrequency();
     pace.last = 0;   /* port: the setup screens' time is not a frame */
     next_frame = SDL_GetPerformanceCounter();
@@ -1960,6 +2947,10 @@ int main(int argc, char **argv)
        loop only keeps the scheduler running. port: QOL pauses it (qol_idle)
        and saves and loads states between frames. */
     while (running && (frames < 0 || sched_frame_count() < frames)) {
+        if (menu_is_open()) {   /* port: the menu (menu.h): the game waits */
+            menu_run(sched_frame_count());
+            continue;
+        }
         if (qol_paused()) {
             qol_idle();
             continue;
@@ -1995,6 +2986,7 @@ int main(int argc, char **argv)
         SDL_GameControllerClose(pad3);
     if (tex2)
         SDL_DestroyTexture(tex2);
+    menu_shutdown();      /* port: before the renderer or GL context goes */
     osd_sdl_shutdown();   /* port */
     if (audio)
         SDL_CloseAudioDevice(audio);

@@ -196,11 +196,11 @@ position too: its bottom button (Nintendo's B) is SNES B.
 | F6 | L4 | Quick save |
 | F9 | R4 | Quick load |
 | Tab (hold) | L5 | Fast-forward while held |
-| F10 | R5 | Menu (for now: a message listing these) |
+| F10 | R5 | The menu (below); L3 + R3 together on any controller |
 | F8 | | Screenshot |
 
-What they do is described in [Quality of life](#quality-of-life); the menu is still a
-message listing the buttons. A Steam Controller's grips are R4 and L4 (paddle1 and paddle2), an Xbox
+What they do is described in [Quality of life](#quality-of-life); F10 / R5 open [the
+menu](#the-menu). A Steam Controller's grips are R4 and L4 (paddle1 and paddle2), an Xbox
 Elite pad's paddles P1-P4 likewise. `settings.ini` changes them: `bind_paddle1=` ...
 `bind_paddle4=`, `bind_misc1=`, `bind_touchpad=` take an action (`none`, `quicksave`,
 `quickload`, `ffwd`, `menu`, `screenshot`), and `key_quicksave=F6` and the like take a
@@ -210,6 +210,44 @@ key name (`none` for no key). Details, and how this works with Steam Input:
 Messages on screen show the buttons of what you used last, a controller's (Steam Deck,
 Steam Controller, Xbox, PlayStation, Switch) or the keyboard's, as small pictures.
 
+### The menu
+
+**F10**, the Deck's **R5**, or **L3 + R3** (both sticks clicked together, on any
+controller) opens the settings menu over the picture. The game waits while it is open:
+no frame runs and the sound stops, so it picks up exactly where it was. Every change is
+saved at once and, where it can be, applied at once (the look, the camera, the volume
+and co-op change while you watch; the renderer and the Steam Controller driver on the
+next start).
+
+| | Controller | Keyboard |
+| --- | --- | --- |
+| Move | D-pad or left stick (hold to repeat) | Arrow keys |
+| Change a value | Left / right, or A | Left / right, or Enter |
+| Run, toggle | A | Enter or Space |
+| Back, close the menu | B (or Start) | Escape or Backspace (or F10) |
+| Switch tabs | L1 / R1 | Q / W, or Page Up / Page Down |
+
+The mouse works too: click a row, click the left or right half of its value to step it,
+the wheel scrolls. The bottom of the menu shows the buttons of what you used last.
+Closing the menu with a button doesn't press it in the game.
+
+| Tab | What is in it |
+| --- | --- |
+| Look | The renderer (original or HD-2D, from the next start), the HD-2D look, the picture shape, the 3D diorama's camera tilt and zoom, gyro aiming and its strength, the debug view |
+| Display | Fullscreen, frame pacing (timer or vsync), the menu's text size, integer scale and the CRT look (original picture), the battery mode |
+| Controls | What each back button does, the quick keys (pick a row, then press the key), the Steam Controller driver, fast-forward (on until turned off) and its speed, always run, turbo per button, pausing in the background or when a controller goes |
+| Co-op | Co-op auto / on / off, which player plays which party member, the experimental split screen |
+| Packs | The asset packs found in your packs folder: off, or on at a place in the order; reload; dump new art |
+| Save states | Load the quick slot, slots 1-4 or the resume point (with a picture of each; loading closes the menu), save to them (press twice), resume on start, take a screenshot |
+| Audio | The volume, muting while another window has the focus |
+| About | The version, the licenses of everything in it, the bring-your-own-ROM note, and Quit (press twice) |
+
+Rows that don't apply right now are grey (the HD-2D settings in the original picture,
+fullscreen in Game Mode). Its settings are in `settings.ini` too, as `renderer=hd2d` or
+`plain`, `cam_tilt=40`, `cam_zoom=100`, `pacing=auto`, `menu_scale=normal`, `volume=100`
+and `mute_unfocused=off`; a `--hd2d`, `--no-hd2d` or `--pacing` at launch still wins.
+The mouse cursor hides after 2 seconds without moving.
+
 ### The HD-2D look
 
 Start with `--hd2d` to draw the game as a lit diorama, with depth of field, bloom, soft
@@ -218,9 +256,9 @@ renderer adds lighting and blur, not new art. More detail is in [HD2D.md](HD2D.m
 
 | Key | Controller | What it does |
 | --- | --- | --- |
-| F1 | R3 (click the right stick) | Cycle the look: original, subtle, HD-2D (the default), HD-2D Steam Deck |
+| F1 | R3 (click and let go of the right stick) | Cycle the look: original, subtle, HD-2D (the default), HD-2D Steam Deck, 3D diorama |
 | F2 | | Cycle the debug views: layers, depth, blur, side-by-side compare, off |
-| F3 | L3 (click the left stick) | Cycle the picture shape: 4:3 (default), pixel 8:7, stretch |
+| F3 | L3 (click and let go of the left stick) | Cycle the picture shape: 4:3 (default), pixel 8:7, stretch |
 | F11 | | Toggle fullscreen |
 
 F11 works without `--hd2d` too. F1–F3, R3 and L3 only do something with `--hd2d`. Each
@@ -430,7 +468,8 @@ on the `--save` file when you give one.
 
 ### Settings
 
-All in `settings.ini`, with their defaults:
+All in the [menu](#the-menu) (Display, Controls and Save states tabs) and in
+`settings.ini`, with their defaults:
 
 | Setting | Default | |
 | --- | --- | --- |
@@ -460,7 +499,7 @@ The engine keeps its files in your user data folder, `~/.local/share/ct-recomp/`
 | `ct/rom_path` | Where your ROM is, so you don't have to pick it again |
 | `ct/ct.srm` | Your in-game saves (see [Your saves](#your-saves)) |
 | `ct/ct.srm.bak` | The save file as it was before the last write |
-| `hd2d/settings.ini` | The HD-2D look and picture shape, the window, co-op, the asset packs to load, the keys and back buttons, the [quality-of-life settings](#settings) |
+| `hd2d/settings.ini` | Everything the menu sets: the look and picture shape, the window, co-op, the buttons and keys, the volume, the asset packs to load, the [quality-of-life settings](#settings) |
 | `ct/states/` | Save states and the resume point, each with a `.png` of the screen (see [Save states](#save-states)) |
 | `ct/packs/NAME/` | Asset pack NAME: `pack.toml` and its pictures. Made from the game's art unless you painted every picture yourself: **never share it.** |
 | `ct/gen/`, `ct/obj/` | Temporary build files, normally deleted after the build. If a build fails they can be left behind: they hold code generated from your ROM, so don't share them. Deleting them is safe. |

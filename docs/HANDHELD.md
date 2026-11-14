@@ -102,13 +102,42 @@ are mapped by position, as on the SNES pad:
 
 | Combo | What it does |
 | --- | --- |
-| R3 (click the right stick) | Cycle the look: original, subtle, HD-2D, HD-2D Steam Deck |
-| L3 (click the left stick) | Cycle the picture shape: 4:3, pixel 8:7, stretch |
+| R5 (back button), or L3 + R3 (click both sticks together) | Opens the settings menu (below) |
+| R3 (click and let go of the right stick) | Cycle the look: original, subtle, HD-2D, HD-2D Steam Deck, 3D diorama |
+| L3 (click and let go of the left stick) | Cycle the picture shape: 4:3, pixel 8:7, stretch |
 | Hold View + Menu for 2 s | Asks "Quit?": **A** quits, **B** goes back to the game |
 | Steam button > Exit Game | Quits too |
 
 While you hold View and Menu together, the game doesn't see them, so the combo doesn't
 open the game's menu. The answer to the question doesn't reach the game either.
+
+None of these clash with the game's own soft reset (L + R + Select + Start): the stick
+clicks and the back buttons are not SNES buttons.
+
+### The menu
+
+**R5**, or **L3 + R3** on a controller without back buttons (the ROG Ally's own buttons,
+an Xbox or PlayStation pad), opens the settings menu. The game waits behind it, silent,
+until you close it with **B**, **Start** or R5 again. It is made for the controller and
+the 7-inch screen: large text, the Deck's or the Ally's button pictures at the bottom.
+
+| Button | In the menu |
+| --- | --- |
+| D-pad or left stick | Move (hold to repeat); left / right change the value |
+| A | Toggle, change, run |
+| B | Back; closes the menu |
+| L1 / R1 | The previous / next tab |
+
+The tabs: **Look** (renderer, HD-2D look, aspect, the 3D camera's tilt and zoom, gyro),
+**Display** (fullscreen, frame pacing, text size, integer scale, CRT, battery mode),
+**Controls** (what each back button does, the quick keys, fast-forward, always run,
+turbo, pausing), **Co-op** (on / auto / off, who plays which party member), **Packs**,
+**Save states** (load and save the slots, with a picture of each; resume; screenshot),
+**Audio** (volume, mute in the background) and **About** (version, licenses, Quit).
+Every change is saved at once. The game waits between two frames while the menu is open,
+so a state saved from it is (nearly always) the picture behind it. The touchscreen works
+the menu too (tap a row; tap the left or right of a value).
+[USER-GUIDE.md](USER-GUIDE.md#the-menu) has the details.
 
 ### Back buttons and grips
 
@@ -120,16 +149,16 @@ are not SNES buttons. They drive the frontend instead:
 | L4 (upper left) | F6 | Quick save |
 | R4 (upper right) | F9 | Quick load |
 | L5 (lower left) | Tab (hold) | Fast-forward while held |
-| R5 (lower right) | F10 | Menu (for now a message listing these buttons) |
+| R5 (lower right) | F10 | The settings menu |
 | | F8 | Screenshot |
 
 What they do, and the rest of the quality-of-life features, is in [Quality of life on a
-handheld](#quality-of-life-on-a-handheld) below. The menu is still a message listing the
-buttons. The keys avoid F1-F4 and F11 (look, debug view, aspect, co-op, fullscreen), F5
+handheld](#quality-of-life-on-a-handheld) below; R5 opens [the menu](#the-menu). The keys
+avoid F1-F4 and F11 (look, debug view, aspect, co-op, fullscreen), F5
 (the asset packs' reload) and F12 (Steam's screenshot key).
 
-To change them, edit `settings.ini` (in `~/.local/share/ct-recomp/hd2d/`) while the game
-is closed:
+To change them, use the menu's **Controls** tab, or edit `settings.ini` (in
+`~/.local/share/ct-recomp/hd2d/`) while the game is closed:
 
 ```
 bind_paddle2=quicksave     # L4
@@ -206,7 +235,7 @@ startup log lists each controller with its vendor:product and glyph set.
 
 ### Gyro aiming (optional)
 
-`gyro=on` in `settings.ini` lets the first controller's gyro tilt and turn the camera of
+The menu's **Look** tab (or `gyro=on` in `settings.ini`) lets the first controller's gyro tilt and turn the camera of
 the HD-2D 3D diorama look a little (up to 8 degrees), easing back when the pad is still.
 It is off by default and does nothing in the other looks. `gyro_strength=1.00` scales it.
 The Deck's gyro reaches the game only without Steam Input (above); under Steam Input,
@@ -247,8 +276,9 @@ the HD-2D look on. Add `--no-hd2d` to the launch options for the original look.
   its firmware product name (Jupiter or Galileo).
 - **ROG Ally:** the full HD-2D look. The renderer takes about 2 ms per frame there.
 
-Once you change the look with R3, your choice is saved and used from then on, on any
-device.
+Once you change the look with R3 or in the menu, your choice is saved and used from then
+on, on any device. The menu's **Display** tab also switches the frame pacing between the
+timer and vsync (`--pacing` at launch still wins).
 
 **Frame pacing.** The console runs at 60.0988 frames per second. The engine paces itself
 with a precise timer, sleeping to each frame's time, and the sound's rate control keeps
@@ -317,7 +347,7 @@ Everything is in `~/.local/share/ct-recomp/`:
 | `ct/rom_path` | Where your ROM is |
 | `ct/ct.srm`, `ct/ct.srm.bak` | Your in-game saves, and the copy before the last write |
 | `ct/states/` | Save states, the resume point (`auto.state`) and their pictures |
-| `hd2d/settings.ini` | The look, the picture shape, the buttons and the settings above |
+| `hd2d/settings.ini` | Everything the menu sets: the look, the buttons, co-op, the volume, the settings above |
 
 Saves are written a few seconds after you save in the game, and again on quit,
 including through the Steam button. To back them up, copy `ct/ct.srm`. More detail is in
