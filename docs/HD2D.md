@@ -420,6 +420,15 @@ is off there.
 **Entrance marks**, off by default (`CT_HD2D_3D=marks=1`): a small pulsing diamond in
 the middle of each entrance (a group of touching exit cells), drawn by the shader alone.
 
+**Render scale, FSR and occlusion** apply as in the field: the surfaces are drawn at the
+render scale, EASU brings them up to the picture's size, and the ambient occlusion runs
+on their depth. The ground gives ssao.frag the nearest of its five normals (up unless a
+slope is steeper than about 45°), which darkens valleys between peaks and the feet of
+mountains and forests; water gets none (it would darken under every shore), and the
+cloud plane leaves the occlusion's input as the ground under it wrote it. The sprites are
+snapped to the render target's pixels, so below 100% FSR's upscale spreads one sprite
+pixel over a non-integer number of output pixels, as it does for the ground.
+
 **The pause menu and transitions** change the NMI vector, so the scene is `OTHER` and the
 picture crossfades to the 2D path, as in the field.
 
@@ -511,10 +520,17 @@ at 800p should take roughly 2–3 ms there, against about 1 ms for `deck`. That 
 60 Hz frame, so `deck3d` is offered, but the Deck still starts in `deck`, the lighter
 choice for its battery.
 
-The world map in `hd2d3d`, same Ally and size, over frames 7400-8700 of a walk across the
-1000 A.D. map (unpaced): a median of 2.4 ms of GPU time per frame (surfaces 1.0 ms, the
-shadow map 0.03 ms, final 0.47 ms, depth of field 0.34 ms, its blur amount 0.28 ms, bloom
-0.29 ms), against 2.4 ms for the field in the same preset. The world mesh is built when
+The world map in `hd2d3d`, same Ally at `--scale 5` (a 1493×1120 picture), over frames
+7400-8700 of a walk across the 1000 A.D. map (unpaced, load average 7-8), median GPU time
+per frame:
+
+| | GPU | surfaces | occlusion (input, AO, blur) | EASU | final |
+| --- | --- | --- | --- | --- | --- |
+| 100%, occlusion (the default) | 2.89 ms | 1.06 | 0.29 | - | 0.51 |
+| 67% + FSR, occlusion | 2.51 ms | 0.59 | 0.14 | 0.35 | 0.45 |
+
+The rest: shadow map 0.03 ms, depth of field 0.35, its blur amount 0.29-0.31, bloom
+0.24-0.30. Before the render scale and occlusion existed, the world map took 2.4 ms. The world mesh is built when
 the map changes: about 10 ms, some fifteen times while a map loads (its tables arrive
 over several frames, behind the fade-in), then not again. The CPU side per frame
 (sprites, the overlay's tilemap, uploads) is about 0.14 ms.
