@@ -184,6 +184,90 @@ static void f_2E10(CPU *cpu)
 static void f_2100(CPU *cpu) { native_loop(cpu, 0x7E2100); }
 static void f_2200(CPU *cpu) { native_loop(cpu, 0x7E2200); }
 
+/* port (GPL-3.0-or-later): a jump table used past its recorded entries,
+   shaped like emitter output. $7E2F00: LDX #$0002 / JSR ($2F10,X) /
+   LDA #$09 / STA $1C / RTS, the table recorded with one entry ($2F20)
+   though $2F10 holds two; $2F30 (entry 1): LDA #$05 / STA $1D / RTS. On
+   hardware the CPU just reads the word: under the scheduler the default
+   case reads it from the bus and runs it through the dispatcher. */
+static void f_2F00(CPU *cpu)
+{
+    cpu_enter(cpu, 0x7E2F00, 1, 0);
+    const uint16_t s0 = cpu->S;
+    ct_insn(cpu, 0x7E2F00, 0xA2, 0x00);
+    ldx16(cpu, 0x0002);
+    ct_insn(cpu, 0x7E2F03, 0xFC, 0x2F);
+    push16(cpu, 0x2F05);
+    switch (cpu->X) {
+    case 0x0000:
+        if (!ct_call_interp(cpu, 0x7E2F20, 0x7E2F06, 2) || cpu->m != 1 || cpu->x != 0) {
+            ct_tail_rest(cpu, s0);
+            return;
+        }
+        break;
+    default:
+        if (!ct_exec_hook)
+            ct_fatal("$7E2F03: jump table index $%04X out of range", cpu->X);
+        {
+            uint16_t p = (uint16_t)(0x2F10 + cpu->X);
+            uint32_t t = read8(0x7E0000u | p);
+            t = 0x7E0000u | t | (uint32_t)read8(0x7E0000u | (uint16_t)(p + 1)) << 8;
+            if (!ct_call_interp(cpu, t, 0x7E2F06, 2) || cpu->m != 1 || cpu->x != 0) {
+                ct_tail_rest(cpu, s0);
+                return;
+            }
+            break;
+        }
+    }
+    if (!cpu_return_ok(cpu, 0x7E2F03, 0x2F06)) {
+        ct_tail_rest(cpu, s0);
+        return;
+    }
+    ct_insn(cpu, 0x7E2F06, 0xA9, 0x09);
+    lda8(cpu, 0x09);
+    ct_insn(cpu, 0x7E2F08, 0x85, 0x1C);
+    write8(ea_dp(cpu, 0x1C), a8(cpu));
+    ct_insn(cpu, 0x7E2F0A, 0x60, 0x60);
+    op_rts(cpu);
+}
+
+/* port: a compiled callee that drops the stack (a soft reset's shape).
+   $7E3000: JSR $3010 / LDA #$0D / STA $1E / RTS; $7E3010: LDX #$01FF /
+   TXS / JMP $2008 (back into the boot program, not compiled: a hand-off).
+   The new S is above both native frames: they give way to the executor
+   (ops.h cpu_return_ok) and $1E is never written. */
+static void f_3010(CPU *cpu)
+{
+    cpu_enter(cpu, 0x7E3010, 1, 0);
+    const uint16_t s0 = cpu->S;
+    ct_insn(cpu, 0x7E3010, 0xA2, 0x01);
+    ldx16(cpu, 0x01FF);
+    ct_insn(cpu, 0x7E3013, 0x9A, 0x9A);
+    cpu->S = cpu->X;
+    ct_insn(cpu, 0x7E3014, 0x4C, 0x20);
+    cpu->PC = 0x2008;
+    ct_tail_rest(cpu, s0);
+}
+
+static void f_3000(CPU *cpu)
+{
+    cpu_enter(cpu, 0x7E3000, 1, 0);
+    const uint16_t s0 = cpu->S;
+    ct_insn(cpu, 0x7E3000, 0x20, 0x30);
+    push16(cpu, 0x3002);
+    ct_run(cpu, f_3010);
+    if (!cpu_return_ok(cpu, 0x7E3000, 0x3003)) {
+        ct_tail_rest(cpu, s0);
+        return;
+    }
+    ct_insn(cpu, 0x7E3003, 0xA9, 0x0D);
+    lda8(cpu, 0x0D);
+    ct_insn(cpu, 0x7E3005, 0x85, 0x1E);
+    write8(ea_dp(cpu, 0x1E), a8(cpu));
+    ct_insn(cpu, 0x7E3007, 0x60, 0x60);
+    op_rts(cpu);
+}
+
 /* The tables a game's generated ct_funcs.c would provide. */
 const ct_func ct_funcs[] = {
     {"TestLoop", 0x7E2100, 1, 0, 14, -1, -1, 0, f_2100},
@@ -195,8 +279,11 @@ const ct_func ct_funcs[] = {
     {"TestTailB", 0x7E2D10, 1, 0, 3, -1, -1, 0, f_2D10},
     {"TestRestA", 0x7E2E00, 1, 0, 16, -1, -1, 0, f_2E00},
     {"TestRestB", 0x7E2E10, 1, 0, 3, -1, -1, 0, f_2E10},
+    {"TestTablePast", 0x7E2F00, 1, 0, 11, -1, -1, 0, f_2F00},
+    {"TestDropCaller", 0x7E3000, 1, 0, 8, -1, -1, 0, f_3000},
+    {"TestDropStack", 0x7E3010, 1, 0, 7, -1, -1, 0, f_3010},
 };
-const unsigned ct_func_count = 9;
+const unsigned ct_func_count = 12;
 const ct_extern ct_externs[] = {{0, 0, 0}};
 const unsigned ct_extern_count = 0;
 const ct_jumptable ct_jumptables[] = {{0, 0}};
@@ -270,7 +357,7 @@ typedef struct {
     uint64_t clock, native_insns, interp_insns;
     char profile[1024];
     long nmis;
-    uint8_t w10, w11, w12, w13, w14, w15, w17, w19, w1b;
+    uint8_t w10, w11, w12, w13, w14, w15, w17, w19, w1b, w1c, w1d, w1e;
     size_t stack;
     int prof_depth;
     CPU cpu;
@@ -316,6 +403,20 @@ static Outcome run_with(uint16_t target, int native, const uint8_t *nmi, size_t 
     memcpy(w + 0x2C00, overwrite, sizeof overwrite);
     pingpong_install(w, 0x2D00, 0x18);
     pingpong_install(w, 0x2E00, 0x1A);
+    /* port: the table past its recorded entries, and the stack drop */
+    static const uint8_t table_past[] = {0xA2, 0x02, 0x00, 0xFC, 0x10, 0x2F, 0xA9, 0x09, 0x85,
+                                         0x1C, 0x60};
+    static const uint8_t table_words[] = {0x20, 0x2F, 0x30, 0x2F};
+    static const uint8_t entry0[] = {0xA9, 0x01, 0x85, 0x1D, 0x60};
+    static const uint8_t entry1[] = {0xA9, 0x05, 0x85, 0x1D, 0x60};
+    memcpy(w + 0x2F00, table_past, sizeof table_past);
+    memcpy(w + 0x2F10, table_words, sizeof table_words);
+    memcpy(w + 0x2F20, entry0, sizeof entry0);
+    memcpy(w + 0x2F30, entry1, sizeof entry1);
+    static const uint8_t drop_caller[] = {0x20, 0x10, 0x30, 0xA9, 0x0D, 0x85, 0x1E, 0x60};
+    static const uint8_t drop_stack[] = {0xA2, 0xFF, 0x01, 0x9A, 0x4C, 0x08, 0x20};
+    memcpy(w + 0x3000, drop_caller, sizeof drop_caller);
+    memcpy(w + 0x3010, drop_stack, sizeof drop_stack);
     if (ovl_patch)
         w[0x2801] = 0x43;   /* LDA #$43: the bytes no longer match the compiled code */
     static const uint8_t to_m0[] = {0xC2, 0x20, 0x60};   /* REP #$20 / RTS */
@@ -357,6 +458,9 @@ static Outcome run_with(uint16_t target, int native, const uint8_t *nmi, size_t 
     o.w17 = w[0x17];
     o.w19 = w[0x19];
     o.w1b = w[0x1B];
+    o.w1c = w[0x1C];
+    o.w1d = w[0x1D];
+    o.w1e = w[0x1E];
     o.stack = sched_max_stack();
     o.prof_depth = sched_profile_depth();
     o.cpu = c;
@@ -546,6 +650,20 @@ int main(void)
         CHECK(r1 == 1 && r2 == 1 && r3 == 1 && sched_frame_count() == 3,
               "a frame per call: %ld %ld %ld, count %ld", r1, r2, r3, sched_frame_count());
         CHECK(bus_wram()[0x16] != c2, "still running in frame 3");
+    }
+
+    /* port: a table index past the recorded entries runs the word the
+       table holds; a callee that drops the stack unwinds its native callers.
+       Both as the interpreter runs them. */
+    {
+        Outcome pref = run(0x2F00, 0), pn = run(0x2F00, 1);
+        CHECK(pref.w1d == 0x05 && pref.w1c == 0x09 && same(&pref, &pn),
+              "table past its entries == interpreter: $1C %02X $1D %02X, %d", pn.w1c, pn.w1d,
+              same(&pref, &pn));
+        Outcome dref = run(0x3000, 0), dn = run(0x3000, 1);
+        CHECK(dref.w12 == 1 && dref.w1e == 0 && dn.w1e == 0 && same(&dref, &dn),
+              "stack drop == interpreter: $12 %02X $1E %02X, %d", dn.w12, dn.w1e,
+              same(&dref, &dn));
     }
 
     /* The cached check follows CPU writes: a patch, then the original back. */

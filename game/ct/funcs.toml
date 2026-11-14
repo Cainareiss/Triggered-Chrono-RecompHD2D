@@ -1009,11 +1009,12 @@ module = "bankcd"
 site = 0xC2584E
 count = 33
 
-# TextModeTable: index $0230 not bounded in code; 2 code pointers at
-# $C25842, then 4 unidentified bytes before code at $C2584A.
+# TextModeTable: index $0230 not bounded in code; 4 code pointers at
+# $C25842-$C25849 ($58B2 $5BF5 $5C3E $5C77), code at $C2584A. (Was
+# count = 2: mode 2, $5C3E, stopped the native path; docs/KNOWN-ISSUES.md.)
 [[jumptable]]
 site = 0xC25839
-count = 2
+count = 4
 
 # index $6A*2, $6A not bounded in code; 8 words at $C25EAF-$C25EBE, code at $C25EBF
 [[jumptable]]

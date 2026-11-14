@@ -106,19 +106,32 @@ static inline void cpu_check_mx(const CPU *c, uint32_t at, int m, int x)
                  at, c->m, c->x, m, x);
 }
 
-/* After a JSR'd callee returns: it must have returned to the JSR site + 3. */
-static inline void cpu_check_return(const CPU *c, uint32_t site, uint16_t expect)
+/* After a compiled callee returns: back at the call site + 3 (JSR) or + 4
+   (JSL)? On hardware the CPU simply goes on wherever the callee went: it
+   may have moved its return address, or dropped the whole stack and jumped
+   away (a soft reset to the program's start, S reloaded). In the frame
+   scheduler the caller then hands the rest to the system executor (0
+   returned: ct_interp_rest with its entry S), which runs from there as the
+   interpreter does, until this function's frame is popped; a frame the new
+   S is already above is gone at once, and so on up the C stack. Without
+   the scheduler (diff_all's strict oracle) a wrong return is fatal. */
+static inline int cpu_return_ok(const CPU *c, uint32_t site, uint16_t expect)
 {
-    if (c->PC != expect)
+    if (c->PC == expect)
+        return 1;
+    if (!ct_exec_hook)
         ct_fatal("$%06X: callee returned to $%04X, expected $%04X", site, c->PC, expect);
+    return 0;
 }
 
-/* After a JSL'd callee returns: PB:PC must be the JSL site + 4. */
-static inline void cpu_check_return_long(CPU *c, uint32_t site, uint32_t expect)
+static inline int cpu_return_ok_long(const CPU *c, uint32_t site, uint32_t expect)
 {
-    if (c->PC != (uint16_t)expect || c->PB != (uint8_t)(expect >> 16))
+    if (c->PC == (uint16_t)expect && c->PB == (uint8_t)(expect >> 16))
+        return 1;
+    if (!ct_exec_hook)
         ct_fatal("$%06X: callee returned to $%02X%04X, expected $%06X", site, c->PB, c->PC,
                  expect);
+    return 0;
 }
 
 /* ---- effective addresses ---- */

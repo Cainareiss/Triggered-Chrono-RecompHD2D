@@ -324,11 +324,10 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
         '{',
         f'    cpu_enter(cpu, 0x{fm.addr:06X}, {int(st.m)}, {int(st.x)});',
     ]
-    ext_edges = [t for t, c in list(fn.calls.values()) + list(fn.tails.values())
-                 if _routed(t) or _via_dispatch(t, c)]
-    ext_edges += [t for ts, c in fn.tables.values() for t in ts if _via_dispatch(t, c)]
-    if fn.interp_calls or fn.dyn_tables or fn.interp_tails or fn.table_interp or ext_edges:
-        lines.append('    const uint16_t s0 = cpu->S;   /* the return address sits above */')
+    # s0: every function can hand its rest to the executor (a callee that
+    # came back elsewhere: ops.h cpu_return_ok)
+    lines.append('    const uint16_t s0 = cpu->S;   /* the return address sits above */')
+    lines.append('    (void)s0;')
     keys = {i.key for i in fn.insns}
     per_addr: dict[int, int] = {}
     for i in fn.insns:
@@ -395,7 +394,8 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
         elif i.opcode == 0x20 and i.key in fn.calls:
             target, cst = fn.calls[i.key]
             ret = (i.addr + 2) & 0xFFFF
-            chk = f'cpu_check_return(cpu, 0x{i.addr:06X}, 0x{(ret + 1) & 0xFFFF:04X});'
+            chk = (f'if (!cpu_return_ok(cpu, 0x{i.addr:06X}, 0x{(ret + 1) & 0xFFFF:04X})) '
+                   '{ ct_interp_rest(cpu, s0); return; }')
             if _routed(target) or _via_dispatch(target, cst):
                 back = (i.addr & 0xFF0000) | ((ret + 1) & 0xFFFF)
                 t = lambda i, target=target, cst=cst, ret=ret, back=back, chk=chk: \
@@ -407,7 +407,8 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
             target, cst = fn.calls[i.key]
             ret = (i.addr + 3) & 0xFFFF
             bank = i.addr >> 16
-            chk = f'cpu_check_return_long(cpu, 0x{i.addr:06X}, 0x{bank:02X}{(ret + 1) & 0xFFFF:04X});'
+            chk = (f'if (!cpu_return_ok_long(cpu, 0x{i.addr:06X}, 0x{bank:02X}{(ret + 1) & 0xFFFF:04X})) '
+                   '{ ct_interp_rest(cpu, s0); return; }')
             if _routed(target) or _via_dispatch(target, cst):
                 back = (bank << 16) | ((ret + 1) & 0xFFFF)
                 t = lambda i, target=target, cst=cst, ret=ret, bank=bank, back=back, chk=chk: [
@@ -454,11 +455,26 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
                         body.append(f'case 0x{2 * n:04X}: ct_run(cpu, {callee(tg, cst)}); break;')
                     else:
                         body.append(f'case 0x{2 * n:04X}: ct_tail(cpu, {callee(tg, cst)}); return;')
-                body.append(f'default: ct_fatal("${i.addr:06X}: jump table index $%04X out of range", '
-                            'cpu->X);')
+                # past the recorded entries: the CPU reads whatever word is
+                # there (bus reads, as for a table of unknown length) and goes
+                # on through the dispatcher; strict without the scheduler
+                bank = i.addr >> 16
+                read = [f'uint16_t p = (uint16_t)(0x{i.operand:04X} + cpu->X);',
+                        f'uint32_t t = read8(0x{bank:02X}0000u | p);',
+                        f't = 0x{bank:02X}0000u | t | (uint32_t)read8(0x{bank:02X}0000u | '
+                        '(uint16_t)(p + 1)) << 8;']
+                if is_call:
+                    cond = ' || '.join([f'!ct_call_interp(cpu, t, 0x{back:06X}, 2)'] + mx)
+                    rest = [f'if ({cond}) {{ ct_interp_rest(cpu, s0); return; }}', 'break;']
+                else:
+                    rest = ['cpu->PC = (uint16_t)t;', 'ct_interp_rest(cpu, s0);', 'return;']
+                body.append(f'default: if (!ct_exec_hook) ct_fatal("${i.addr:06X}: jump table index '
+                            '$%04X out of range", cpu->X);')
+                body.append('    { ' + ' '.join(read + rest) + ' }')
                 body.append('}')
                 if is_call:
-                    body.append(f'cpu_check_return(cpu, 0x{i.addr:06X}, 0x{(ret + 1) & 0xFFFF:04X});')
+                    body.append(f'if (!cpu_return_ok(cpu, 0x{i.addr:06X}, 0x{(ret + 1) & 0xFFFF:04X})) '
+                                '{ ct_interp_rest(cpu, s0); return; }')
                 return body
         elif i.opcode == 0x5C and i.key in fn.interp_tails:
             target, cst = fn.interp_tails[i.key]
