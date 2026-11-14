@@ -34,7 +34,10 @@
    shader's tileTexel(), shaders/scene3d.frag) gets the whole value, so it
    can look a tile up by (VRAM address = character base + tile id * words
    per tile, palette) or by a flag of its own set from s3d_set_cell_hook. */
-enum { S3D_N_UP, S3D_N_SOUTH, S3D_N_EAST, S3D_N_WEST, S3D_N_NORTH, S3D_N_SPRITE };
+enum { S3D_N_UP, S3D_N_SOUTH, S3D_N_EAST, S3D_N_WEST, S3D_N_NORTH, S3D_N_SPRITE,
+       S3D_N_TERRAIN,   /* the world map's ground: the normal from its height map */
+       S3D_N_WATER };   /* the world map's water: up, with a shimmer (with S3D_OBJ: an
+                           entrance marker, drawn by the shader alone) */
 
 typedef struct {
     float x, y, z;   /* world, map px */
@@ -73,6 +76,9 @@ int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m);
    mirror the image. For the cell hook below and for the builders. */
 void s3d_emit(s3d_mesh *m, const float tl[3], const float u[3], const float v[3],
               uint32_t tile, int hflip, int vflip);
+/* The same with the four corners given (tl, tr, bl, br): a tile draped
+   over uneven ground. Returns 0, or -1 out of memory. */
+int s3d_emit_corners(s3d_mesh *m, float c[4][3], uint32_t tile, int hflip, int vflip);
 
 /* Asset packs (later): a hook asked for every cell before the builder
    makes its quads. It may emit its own with s3d_emit and return nonzero,
@@ -88,5 +94,40 @@ void s3d_map_bounds(int *x0, int *z0, int *x1, int *z1);
    raised geometry over cell (x, z) of the world grid (16 px cells), from
    the last s3d_build_map. */
 int s3d_height_at(int x, int z);
+
+/* ---- the world map (CT_SCENE_WORLD), scene3d_world.c ----
+   One copy of the (wrapping) map as a heightfield of 8 px tiles: water
+   flat and lowest, walkable ground at 0, blocked ground raised by what
+   its pixels look like (docs/HD2D.md, "The world map"). Floor quads
+   first (m->ni_floor), then the raised ones. Rebuild when the scene's
+   map_generation changes. Returns the number of quads, or -1. */
+int s3d_build_world(const ct_scene *s, s3d_mesh *m);
+
+/* What s3d_build_world made of each cell, for tests and the docs. */
+enum { S3D_W_FLOOR, S3D_W_WATER, S3D_W_SHORE, S3D_W_FOREST, S3D_W_MOUNTAIN, S3D_W_FLAT };
+int s3d_world_class(int x, int y);
+/* The ground's height (px) at world point (x, z), wrapping. */
+float s3d_world_height(float x, float z);
+/* Its normals: w x h RGBA8 texels, one per tile corner (x, z) / 8,
+   wrapping; rgb = normal * 0.5 + 0.5, a = 255. */
+const uint8_t *s3d_world_normals(int *w, int *h);
+
+/* The camera, for sprites that keep the console's pixel grid: eye, the
+   point it looks at, unit right / up / forward, focal length in target
+   px, the near plane's distance, the target size. */
+typedef struct {
+    float eye[3], at[3], right[3], up[3], fwd[3];
+    float focal, near;
+    int w, h;
+} s3d_view;
+
+/* This frame's world sprites, as billboards facing the camera: each
+   object's pieces stand at its foot point on the ground, and are snapped
+   so that one sprite pixel is a whole number of target pixels, on the
+   target's pixel grid. Entries no object owns (captions) lie flat over
+   the picture where the console drew them, at that same scale. With
+   marks, a quad on each entrance cell (S3D_N_WATER | S3D_OBJ). Returns
+   the number of quads. */
+int s3d_build_world_sprites(const ct_scene *s, const s3d_view *v, int marks, s3d_mesh *m);
 
 #endif

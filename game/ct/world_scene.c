@@ -43,7 +43,16 @@ static const uint8_t world_nmi[4] = {0x5C, 0x5E, 0x01, 0xC2};   /* JML $C2015E *
    map 0 = every world map. Keep in sync with worldmap_probe.py's
    RELIEF (the scene_decode test compares the two). */
 static const struct { uint16_t map; uint8_t layer, index, cls; } relief[] = {
-    {0, 0, 0, 0},   /* placeholder, filled below */
+    /* Guardia Castle on $1F0: grey-brown stone reads as mountain and its
+       green-lit walls as forest; it stands on flat ground, as drawn. The
+       metatiles are the castle's own (each used once on the map). */
+    {0x1F0, 0, 161, CT_CELL_FLAT}, {0x1F0, 0, 162, CT_CELL_FLAT}, {0x1F0, 0, 163, CT_CELL_FLAT},
+    {0x1F0, 0, 177, CT_CELL_FLAT}, {0x1F0, 0, 178, CT_CELL_FLAT}, {0x1F0, 0, 193, CT_CELL_FLAT},
+    {0x1F0, 0, 194, CT_CELL_FLAT}, {0x1F0, 0, 195, CT_CELL_FLAT}, {0x1F0, 0, 196, CT_CELL_FLAT},
+    {0x1F0, 1, 176, CT_CELL_FLAT}, {0x1F0, 1, 177, CT_CELL_FLAT}, {0x1F0, 1, 178, CT_CELL_FLAT},
+    {0x1F0, 1, 179, CT_CELL_FLAT}, {0x1F0, 1, 180, CT_CELL_FLAT}, {0x1F0, 1, 193, CT_CELL_FLAT},
+    {0x1F0, 1, 194, CT_CELL_FLAT}, {0x1F0, 1, 195, CT_CELL_FLAT}, {0x1F0, 1, 196, CT_CELL_FLAT},
+    {0x1F0, 1, 209, CT_CELL_FLAT}, {0x1F0, 1, 210, CT_CELL_FLAT}, {0x1F0, 1, 211, CT_CELL_FLAT},
 };
 
 static uint16_t tiles[CT_SCENE_LAYERS][CT_SCENE_WORLD_STRIDE * TH];

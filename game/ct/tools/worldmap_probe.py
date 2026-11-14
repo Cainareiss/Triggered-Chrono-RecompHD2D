@@ -189,7 +189,10 @@ def print_scene(w, oam):
 # The module's corrections to the renderer's pixel guess (world_scene.c
 # relief[]): (map id or 0 for all, layer 0 = BG1 / 1 = BG2, metatile index)
 # -> ct_scene_cell class. Keep the two in sync (the scene_decode test).
-RELIEF = {}
+CELL_FLAT = 9
+RELIEF = {(0x1F0, 0, i): CELL_FLAT for i in (161, 162, 163, 177, 178, 193, 194, 195, 196)}
+RELIEF.update({(0x1F0, 1, i): CELL_FLAT for i in (176, 177, 178, 179, 180, 193, 194, 195, 196,
+                                                  209, 210, 211)})
 CELL_FLOOR, CELL_SOLID, CELL_WATER = 1, 2, 4
 CELL_OVERHEAD, CELL_EVENT, CELL_COVER = 1, 2, 4
 CAPTION_Y = 184

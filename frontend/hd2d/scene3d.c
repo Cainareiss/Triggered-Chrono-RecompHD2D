@@ -92,6 +92,30 @@ void s3d_emit(s3d_mesh *m, const float tl[3], const float u[3], const float v[3]
     m->ni += 6;
 }
 
+int s3d_emit_corners(s3d_mesh *m, float c[4][3], uint32_t tile, int hflip, int vflip)
+{
+    if (m->nv / 4 >= m->cap && grow(m)) {
+        oom = 1;
+        return -1;
+    }
+    s3d_vertex *q = &m->v[m->nv];
+    for (int k = 0; k < 4; k++) {
+        float a = (float)(k & 1), b = (float)(k >> 1);   /* tl tr bl br */
+        q[k].x = c[k][0];
+        q[k].y = c[k][1];
+        q[k].z = c[k][2];
+        q[k].u = 8 * (hflip ? 1 - a : a);
+        q[k].v = 8 * (vflip ? 1 - b : b);
+        q[k].tile = tile;
+    }
+    static const uint32_t order[6] = {0, 1, 2, 2, 1, 3};
+    for (int k = 0; k < 6; k++)
+        m->idx[m->ni + k] = (uint32_t)m->nv + order[k];
+    m->nv += 4;
+    m->ni += 6;
+    return 0;
+}
+
 /* ---- the map ---- */
 
 typedef struct {
