@@ -286,6 +286,16 @@ add_test(NAME coop_battle_module COMMAND $<TARGET_FILE:ct_boot_engine>
     --module $<TARGET_FILE:ct_game_module> ${ct_coop_battle} --coop
     --expect-wram 14720:95D5=1 --expect-wram 14745:95D5=FF)
 list(APPEND ct_game_tests coop_battle coop_battle_off coop_battle_module)
+# port: co-op in the field (replay/coop_field.txt): pad 2 walks follower 1
+# away (her X high byte $1807 is $1D at frame 12540, $19 without --coop),
+# then she rejoins: at 12820 she is where the one-player run has her
+# (345.5, 211.94 px).
+set(ct_coop_field --frames 12820 --script ${GAME_DIR}/test/replay/coop_field.txt
+    --expect-wram 12820:1806=98 --expect-wram 12820:1807=15 --expect-wram 12820:1886=3F
+    --expect-wram 12820:1887=0D)
+add_test(NAME coop_field COMMAND ct_boot ${ct_coop_field} --coop --expect-wram 12540:1807=1D)
+add_test(NAME coop_field_off COMMAND ct_boot ${ct_coop_field} --expect-wram 12540:1807=19)
+list(APPEND ct_game_tests coop_field coop_field_off)
 
 if(SDL2_FOUND)
     # The frontend itself, headless (SDL dummy drivers), unpaced. port: every

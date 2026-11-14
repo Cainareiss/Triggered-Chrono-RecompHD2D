@@ -3532,6 +3532,7 @@ addr = 0xC03002
 states = ["m1x0"]
 e = 0
 module = "bankc0"
+patch = "coop_party_member"   # port: co-op (game/ct/coop.c)
 
 [[func]]
 name = "Obj_StepAlignToTileCenter"
@@ -5541,6 +5542,7 @@ addr = 0xC0A26B
 states = ["m1x1"]
 e = 0
 module = "bankc0"
+patch = "coop_follower"   # port: co-op (game/ct/coop.c)
 
 [[func]]
 name = "Field_MoveFollower2"
