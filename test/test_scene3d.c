@@ -73,7 +73,7 @@ static void test_map(void)
     static ct_scene s;
     make_scene(&s);
     s3d_mesh m = {0};
-    s3d_params p = {3, 0.0f};
+    s3d_params p = {3, 1.0f};
     int quads = s3d_build_map(&s, &p, &m);
     /* Floors: 44 free cells, plus 3 run rows not under the box, filled
        from the ground north of the run; raised: the 4 run cells; sides: 3
@@ -122,7 +122,7 @@ static void test_sprites(void)
     s.n_objects = 1;
     s.object[0] = (ct_scene_object){.x = 148, .y = 274, .facing = 1, .n_pieces = 1, .piece = {3}};
     s3d_mesh m = {0};
-    s3d_params p = {3, 0.0f};
+    s3d_params p = {3, 1.0f};
     int quads = s3d_build_sprites(&s, &p, &m);
     CHECK(quads == 4 + 1, "sprite quads %d", quads);
     /* Its top-left tile: x = camera + 40, top at 74 + 2 - 60 = 16 px up, at the foot's z. */

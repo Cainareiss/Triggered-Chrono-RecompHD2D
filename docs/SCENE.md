@@ -365,6 +365,16 @@ Minimum for a playable prototype: the `ct_scene` export, the map-generation coun
 
 ## Proposed `ct_scene` (generic, for runtime/module.h)
 
+**Since implemented,** in a refined form: `ct_scene` in `runtime/module.h`, filled by
+`game/ct/scene.c` through the module export `ct_module_info.scene`, and drawn by the 3D
+diorama preset ([HD2D.md](HD2D.md), "The 3D diorama"). The differences from the proposal
+below: layers come as expanded 8x8 tilemaps (no metatile tables), with their VRAM
+character base and depth; cells carry a class (floor, solid, wall-ish, water, stairs,
+unknown) and flags; objects list OAM entry numbers, and the engine reads the pieces from
+OAM itself; the field / other mode is the field loop's NMI vector at `$0500` (`$C0EA63`;
+battles install `$D1E77C`, menus `$C2840E`, the world map `$C2015E`); co-op fields are
+left for later. The original proposal follows.
+
 The module fills this struct once per frame at the frame edge. The engine never parses game memory. The
 names are game-agnostic on purpose (tools/check_agnostic.py). This is a proposal. It is not added to
 module.h yet, because it would change `CT_MODULE_ABI`.

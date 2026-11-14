@@ -9,7 +9,7 @@
  *
  * World space: x is the map's x and z its y, in map pixels; y is height
  * above the floor. The game stores no heights, so they are inferred from
- * the cells (docs/HD2D.md, "3D"): each column's runs of blocked or
+ * the cells (docs/HD2D.md, "Heights"): each column's runs of blocked or
  * overhead cells stand up from their south edge, as a wall up to hmax
  * cells high, and whatever is left of a run north of that lies flat on
  * top of it, as a roof. That keeps every tile where the original's
@@ -30,6 +30,10 @@
 #define S3D_OPAQUE      (1u << 23)   /* color 0 shows the backdrop instead of nothing */
 #define S3D_RAISED      (1u << 24)   /* stood up or lifted (not floor): casts shadows */
 #define S3D_OVERHEAD    (1u << 25)   /* the original drew it over sprites */
+/* Bits 26-31 are free, for asset packs: a pack's sampling hook (the
+   shader's tileTexel(), shaders/scene3d.frag) gets the whole value, so it
+   can look a tile up by (VRAM address = character base + tile id * words
+   per tile, palette) or by a flag of its own set from s3d_set_cell_hook. */
 enum { S3D_N_UP, S3D_N_SOUTH, S3D_N_EAST, S3D_N_WEST, S3D_N_NORTH, S3D_N_SPRITE };
 
 typedef struct {
@@ -47,7 +51,8 @@ typedef struct {
 
 typedef struct {
     int hmax;        /* wall height cap, cells */
-    float lean;      /* sprite billboards lean back by this, radians */
+    float stretch;   /* sprite billboards' height per screen px (upright things
+                        look shorter from above than the floor does) */
 } s3d_params;
 
 void s3d_mesh_free(s3d_mesh *m);
@@ -74,6 +79,10 @@ void s3d_emit(s3d_mesh *m, const float tl[3], const float u[3], const float v[3]
    and the cell's generated quads are skipped. NULL (the default): none. */
 typedef int (*s3d_cell_hook)(void *user, const ct_scene *s, int x, int y, s3d_mesh *m);
 void s3d_set_cell_hook(s3d_cell_hook fn, void *user);
+
+/* The part of the map with pixels (map px), from the last s3d_build_map:
+   the renderer keeps its camera from showing much beyond it. */
+void s3d_map_bounds(int *x0, int *z0, int *x1, int *z1);
 
 /* For tests and the renderer: the inferred height (px) of the top of the
    raised geometry over cell (x, z) of the world grid (16 px cells), from

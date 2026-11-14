@@ -14,12 +14,14 @@
  *   height k..k+1 cells. The rest of the run lies flat at the wall's top,
  *   moved south by the wall's height, so its screen row (z - height) is
  *   where the original drew it: a roof, or the top of a hedge.
- * - A run longer than its wall is a box: where neighboring columns' boxes
- *   differ in height, side walls close it, textured with the wall's own
- *   tiles. Shorter runs (posts, trunks, canopies, arches) stay thin
- *   cut-outs.
- * - In an overhead cell that is walkable, only the overhead tiles rise:
- *   the ground under a canopy stays a floor.
+ * - A run blocked deeper than its wall is a box: where neighboring
+ *   columns' boxes differ in height, side walls close it, textured with
+ *   the wall's own tiles. Other runs (posts, trunks, canopies, arches)
+ *   stay thin cut-outs.
+ * - Overhead tiles over walkable cells belong to the blocked run north of
+ *   them (a canopy over its trunk, eaves behind a roof), and only those
+ *   tiles rise: the ground under a canopy stays a floor. A long run of
+ *   them with nothing blocked (railings, edges) stays on the floor.
  * - Floor the raised cells leave uncovered (behind a wall, north of its
  *   box) is filled with the ground of the cell north of the run.
  *
@@ -99,12 +101,27 @@ typedef struct {
     uint8_t raised[MAXC][MAXC];
     int8_t run_a[MAXC][MAXC], run_b[MAXC][MAXC], run_h[MAXC][MAXC];   /* -1: not in a run */
     uint8_t solid[MAXC][MAXC];
+    uint8_t boxed[MAXC][MAXC];      /* its floor is inside a box */
 } build_ctx;
+
+static build_ctx ctx;   /* the last build's, also for placing sprites */
+static int ctx_ok;
 
 /* Per world cell (x, z), z up to MAXC + HMAX_CAP: the box top there (px)
    and the run's bottom row, for the side walls. */
 static int16_t box_h[MAXC + HMAX_CAP][MAXC];
 static int8_t box_b[MAXC + HMAX_CAP][MAXC];
+
+/* Cells with pixels, from the last build: [x0, x1) x [z0, z1), px. */
+static int bounds[4];
+
+void s3d_map_bounds(int *x0, int *z0, int *x1, int *z1)
+{
+    *x0 = bounds[0];
+    *z0 = bounds[1];
+    *x1 = bounds[2];
+    *z1 = bounds[3];
+}
 
 int s3d_height_at(int x, int z)
 {
@@ -189,6 +206,8 @@ static void raised_place(const build_ctx *c, place *p, int x, int y)
 static void find_runs(build_ctx *c)
 {
     const ct_scene *s = c->s;
+    bounds[0] = bounds[1] = 1 << 20;
+    bounds[2] = bounds[3] = 0;
     memset(c->run_a, -1, sizeof c->run_a);
     memset(c->run_b, -1, sizeof c->run_b);
     memset(c->run_h, -1, sizeof c->run_h);
@@ -202,6 +221,12 @@ static void find_runs(build_ctx *c)
                     empty = tile_empty(s, L, entry_at(L, x, y, q));
             }
             c->empty[y][x] = (uint8_t)empty;
+            if (!empty) {
+                bounds[0] = x * 16 < bounds[0] ? x * 16 : bounds[0];
+                bounds[1] = y * 16 < bounds[1] ? y * 16 : bounds[1];
+                bounds[2] = x * 16 + 16 > bounds[2] ? x * 16 + 16 : bounds[2];
+                bounds[3] = y * 16 + 16 > bounds[3] ? y * 16 + 16 : bounds[3];
+            }
             c->solid[y][x] = cl->cls == CT_CELL_SOLID || cl->cls == CT_CELL_WALLISH;
             c->raised[y][x] = !empty && (c->solid[y][x] || (cl->flags & CT_CELL_OVERHEAD));
         }
@@ -216,16 +241,33 @@ static void mark_runs(build_ctx *c, int hmax)
         for (int y = s->map_h - 1; y >= 0; y--) {
             if (!c->raised[y][x])
                 continue;
+            /* Overhead tiles over walkable cells belong to a blocked run
+               north of them (a canopy over its trunk, a roof's eaves), not
+               south: a run that holds blocked cells starts with one. */
             int b = y;
-            while (y > 0 && c->raised[y - 1][x])
+            while (y > 0 && c->raised[y - 1][x] && (c->solid[y][x] || !c->solid[y - 1][x]))
                 y--;
-            int a = y, len = b - a + 1, h = len < hmax ? len : hmax;
+            int a = y, len = b - a + 1, h = len < hmax ? len : hmax, nsolid = 0;
+            for (int r = a; r <= b; r++)
+                nsolid += c->solid[r][x];
+            /* Long runs of overhead tiles over walkable ground (railings,
+               edges drawn over sprites) stay on the floor: standing them
+               up would make walls the original never had. */
+            if (!nsolid && len > hmax) {
+                for (int r = a; r <= b; r++)
+                    c->raised[r][x] = 0;
+                continue;
+            }
             for (int r = a; r <= b; r++) {
                 c->run_a[r][x] = (int8_t)a;
                 c->run_b[r][x] = (int8_t)b;
                 c->run_h[r][x] = (int8_t)h;
             }
-            for (int z = a + h; z <= b && len > h; z++) {   /* the box under the top */
+            /* The box under the top, closed by side walls: only where the
+               run is solid deeper than its wall (a canopy over a short
+               trunk is a cut-out with a lid, not a block). */
+            for (int z = a + h; z <= b && nsolid > h; z++) {
+                c->boxed[z][x] = 1;
                 box_h[z][x] = (int16_t)(h * 16);
                 box_b[z][x] = (int8_t)b;
             }
@@ -259,17 +301,32 @@ static void emit_cell(build_ctx *c, int x, int y)
             emit_quarter(c, L, e, rise ? &up : &fl, q, li, base);
         }
     }
-    /* Ground under raised tiles that no box covers: the ground north of the run. */
-    int a = c->run_a[y][x];
-    if (!in_run || y >= a + c->run_h[y][x] || a <= 0 || c->raised[a - 1][x] ||
-        c->empty[a - 1][x])
+    /* Ground under raised tiles that no box covers: the ground north of the
+       run, else south of it. */
+    if (!in_run || c->boxed[y][x])
+        return;
+    int src = -1, sx = x;
+    for (int k = 0; k < 2 && src < 0; k++) {
+        int r = k == 0 ? c->run_a[y][x] - 1 : c->run_b[y][x] + 1;
+        if (r >= 0 && r < s->map_h && !c->raised[r][x] && !c->empty[r][x])
+            src = r;
+    }
+    /* Else the cell beside it, west or east (a post between two others). */
+    for (int k = 0; k < 2 && src < 0; k++) {
+        int nx = k == 0 ? x - 1 : x + 1;
+        if (nx >= 0 && nx < s->map_w && !c->raised[y][nx] && !c->empty[y][nx]) {
+            src = y;
+            sx = nx;
+        }
+    }
+    if (src < 0)
         return;
     for (int li = 0; li < 2; li++) {
         const ct_scene_layer *L = layer_of(s, draw_layers[li]);
         for (int q = 0; L && q < 4; q++) {
             if (floor_drawn[q])
                 continue;
-            uint16_t e = entry_at(L, x, a - 1, q);
+            uint16_t e = entry_at(L, sx, src, q);
             if (!tile_empty(s, L, e) && !(e & 0x2000))
                 emit_quarter(c, L, e, &fl, q, li, li == 0 ? S3D_OPAQUE : 0);
         }
@@ -311,27 +368,28 @@ static void emit_sides(build_ctx *c)
 
 int s3d_build_map(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
 {
-    static build_ctx c;
-    memset(&c, 0, sizeof c);
-    c.s = s;
+    build_ctx *c = &ctx;
+    memset(c, 0, sizeof *c);
+    c->s = s;
+    ctx_ok = 0;
     m->nv = m->ni = m->ni_floor = 0;
     oom = 0;
     if (s->mode != CT_SCENE_FIELD || !s->cells || !s->vram || s->map_w > MAXC ||
         s->map_h > MAXC)
         return 0;
     int hmax = p->hmax < 1 ? 1 : p->hmax > HMAX_CAP ? HMAX_CAP : p->hmax;
-    find_runs(&c);
-    mark_runs(&c, hmax);
+    find_runs(c);
+    mark_runs(c, hmax);
 
     /* Two passes over the cells: floor quads first, then raised ones, so
        the shadow pass can draw only the second range. */
     static s3d_mesh tmp;
     tmp.nv = tmp.ni = 0;
-    c.m = &tmp;
+    c->m = &tmp;
     for (int y = 0; y < s->map_h; y++)
         for (int x = 0; x < s->map_w; x++)
             if (!cell_hook || !cell_hook(cell_hook_user, s, x, y, &tmp))
-                emit_cell(&c, x, y);
+                emit_cell(c, x, y);
     /* tmp holds every quad in cell order: copy the floor ones, then the
        raised ones (a hook's quads sort by their S3D_RAISED flag too). */
     for (int pass = 0; pass < 2; pass++) {
@@ -353,8 +411,9 @@ int s3d_build_map(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
         if (pass == 0)
             m->ni_floor = m->ni;
     }
-    c.m = m;
-    emit_sides(&c);
+    c->m = m;
+    emit_sides(c);
+    ctx_ok = 1;
     return oom ? -1 : m->ni / 6;
 }
 
@@ -376,10 +435,11 @@ static int oam_visible(const ct_scene *s, int e, int *x, int *y, int *size)
     return *x > -*size && *x < 256;
 }
 
-/* One OAM entry as 8x8 quads standing at world z = foot_z, its screen
-   rows mapped to heights by foot_sy (the foot's screen row) and lift. */
-static void emit_piece(const ct_scene *s, s3d_mesh *m, int e, float foot_z, int foot_sy,
-                       float lift, float lean)
+/* One OAM entry as 8x8 quads standing upright at world z = foot_z: a
+   screen row r is at height base_y + (foot_sy - r + lift) * stretch,
+   foot_sy being the foot's screen row. */
+static void emit_piece(const ct_scene *s, s3d_mesh *m, int e, float foot_z, float base_y,
+                       int foot_sy, float lift, float stretch)
 {
     int x, y, size;
     if (!oam_visible(s, e, &x, &y, &size))
@@ -387,8 +447,7 @@ static void emit_piece(const ct_scene *s, s3d_mesh *m, int e, float foot_z, int 
     uint16_t w1 = s->oam[2 * e + 1];
     int hf = (w1 >> 14) & 1, vf = (w1 >> 15) & 1, n = size / 8;
     uint32_t base = s->obj_chr[(w1 >> 8) & 1], pal = (w1 >> 9) & 7;
-    float cl = cosf(lean), sl = sinf(lean);
-    const float U[3] = {1, 0, 0}, V[3] = {0, -cl, sl};
+    const float U[3] = {1, 0, 0}, V[3] = {0, -stretch, 0};
     /* Lower OAM entries draw in front: a hair toward the camera. */
     float push = (float)(127 - e) * 0.004f;
     for (int ty = 0; ty < n; ty++)
@@ -396,9 +455,9 @@ static void emit_piece(const ct_scene *s, s3d_mesh *m, int e, float foot_z, int 
             int col = (hf ? n - 1 - tx : tx) * 8, row = (vf ? n - 1 - ty : ty) * 8;
             int used = ((((w1 & 0xFF) >> 4) + (row >> 3)) << 4) | (((w1 & 0xF) + (col >> 3)) & 0xF);
             uint32_t addr = (base + (uint32_t)used * 16) & S3D_ADDR_MASK;
-            float h = (float)(foot_sy - (y + ty * 8)) + lift;   /* height of the tile's top */
-            float tl[3] = {(float)(s->camera_x + x + tx * 8), h * cl + push * sl,
-                           foot_z - h * sl + push * cl};
+            float h = (float)(foot_sy - (y + ty * 8)) + lift;   /* the tile's top, screen px */
+            float tl[3] = {(float)(s->camera_x + x + tx * 8), base_y + h * stretch,
+                           foot_z + push};
             s3d_emit(m, tl, U, V,
                      addr | pal << S3D_PAL_SHIFT | S3D_OBJ |
                          (uint32_t)S3D_N_SPRITE << S3D_NORMAL_SHIFT | S3D_RAISED,
@@ -429,8 +488,29 @@ int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
             continue;
         float lift = bottom > foot_sy ? (float)(bottom - foot_sy) : 0.0f;
         lift -= (float)o->z;
+        if (lift < 0)
+            lift = 0;
+        /* Standing in a raised cell: the console drew it over the wall
+           there if its priority beats the wall's tiles (always for
+           priority 3; for less, unless they are overhead tiles). Then it
+           stands in front of the wall, or on top of it, raised so its
+           screen row stays where the console had it. */
+        float foot_z = (float)o->y, base_y = 0.0f;
+        int cx = o->x / 16, cy = o->y / 16, prio = 0;
         for (int j = 0; j < o->n_pieces; j++) {
-            emit_piece(s, m, o->piece[j], (float)o->y, foot_sy, lift < 0 ? 0 : lift, p->lean);
+            int pr = (s->oam[2 * (o->piece[j] & 127) + 1] >> 12) & 3;
+            prio = pr > prio ? pr : prio;
+        }
+        if (ctx_ok && cx >= 0 && cy >= 0 && cx < s->map_w && cy < s->map_h &&
+            ctx.run_b[cy][cx] >= 0 &&
+            (prio == 3 || !(s->cells[cy * CT_SCENE_MAX_CELLS + cx].flags & CT_CELL_OVERHEAD))) {
+            int b = ctx.run_b[cy][cx], h = ctx.run_h[cy][cx];
+            float up = b - cy < h ? (float)((b + 1) * 16 + 2 - o->y) : (float)(h * 16);
+            foot_z += up;
+            base_y = up;
+        }
+        for (int j = 0; j < o->n_pieces; j++) {
+            emit_piece(s, m, o->piece[j], foot_z, base_y, foot_sy, lift, p->stretch);
             owned[o->piece[j] & 127] = 1;
         }
     }
@@ -439,7 +519,7 @@ int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
         int x, y, size;
         if (owned[e] || !oam_visible(s, e, &x, &y, &size))
             continue;
-        emit_piece(s, m, e, (float)(s->camera_y + y + size), y + size, 0.0f, p->lean);
+        emit_piece(s, m, e, (float)(s->camera_y + y + size), 0.0f, y + size, 0.0f, p->stretch);
     }
     return oom ? -1 : m->ni / 6;
 }

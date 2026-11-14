@@ -22,7 +22,7 @@ build/ct_sdl --hd2d --fullscreen    # or press F11; automatic under gamescope
 
 | Key | Action |
 | --- | --- |
-| F1 | Cycle the preset: `off`, `subtle`, `hd2d` (default) |
+| F1 | Cycle the preset: `off`, `subtle`, `hd2d` (default), `deck`, `hd2d3d` (the 3D diorama, below) |
 | F2 | Cycle the debug view: layer classes, depth, blur amount, split compare (original pixels on the left), background plane, off |
 | F3 | Cycle the aspect: 4:3 (default), 8:7 pixel aspect, stretch |
 | F11 | Toggle fullscreen |
@@ -34,7 +34,7 @@ command-line options override them.
 
 | Option | Effect |
 | --- | --- |
-| `--preset off\|subtle\|hd2d` | Choose the starting preset |
+| `--preset off\|subtle\|hd2d\|deck\|hd2d3d` | Choose the starting preset |
 | `--aspect 4:3\|pixel\|stretch` | Choose the picture shape |
 | `--debug-view N` | Start in debug view N (0 off, 1 classes, 2 depth, 3 blur, 4 split compare, 5 background plane) |
 | `--log-gpu` | Print the renderer's frame time every 60 frames (stalls the GPU to measure) |
@@ -141,6 +141,121 @@ SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy build/ct_sdl --hd2d --fast \
 
 Menus that cover more than 15–30% of the screen with UI ease the scene effects off.
 
+## The 3D diorama (`hd2d3d`)
+
+The `hd2d3d` preset rebuilds map views as real geometry, in the manner of the HD-2D
+remakes: floors, walls that rise, roofs on top of them, characters standing up as
+billboards, a perspective camera tilted back from straight down, a key light with a
+shadow map, and the depth of field driven by real depth. Everything else (battles,
+menus, the world map, mode 7, title and transition screens) is the `hd2d` picture,
+pixel for pixel, with a short crossfade (8 frames) between the two.
+
+**It still draws nothing of its own.** The geometry comes from the game's map as the
+running game holds it in WRAM, and every surface is textured with the console's own
+tile pixels, decoded from VRAM and CGRAM as they are drawn.
+
+### Where the scene comes from
+
+The renderer is game-agnostic: it never reads game memory. The game module describes
+what is on screen through an optional export, `ct_module_info.scene`
+(`runtime/module.h`, `ct_scene`): the map's size, its tile layers as BG tilemap words
+(tile, palette, priority, flips) with their VRAM character base, a class per cell
+(floor, solid, wall-ish, water, stairs, unknown) with flags (overhead: drawn over
+sprites; event), the objects with their foot point and the OAM entries that draw them,
+the player's object, the camera in map pixels, a map generation counter and a mode
+(map view or other). The engine adds the console's state (`ct_scene_capture`: VRAM,
+CGRAM, OAM, the OBJ size and base, brightness). A module with no scene export, or a
+mode other than `CT_SCENE_FIELD`, gets the 2D picture.
+
+For this game, `game/ct/scene.c` fills it from the addresses in [SCENE.md](SCENE.md). A
+frame is a map view while the field loop's NMI handler is installed (`$0500`); battles,
+menus, the world map and the title install their own. The generation counter changes when
+the map grids, property bytes or metatile tables hash differently, which also catches
+tiles changed in place. The `scene_decode` test checks the description against an
+independent decoding of the same WRAM and OAM (`scene_probe.py --text`).
+
+### Heights
+
+The game keeps no heights, so `frontend/hd2d/scene3d.c` infers them, per map column,
+from the cells (all of them generic: a cell's class and its tiles' priority bits):
+
+1. A cell is *raised* if it is blocked (solid or wall-ish) or has overhead tiles, and has
+   pixels at all (the empty void around a map is nothing).
+2. Each run of raised cells in a column, seen from the south, stands up from its south
+   edge as a wall facing the camera: up to `hmax` cells (3, 48 px) high, fewer for a
+   shorter run. The rest of the run lies flat on top of the wall, moved south by the
+   wall's height. A tile's screen row is then `z - height`, where the original's
+   three-quarter view drew it, so the art keeps its layout.
+3. A run whose blocked cells go deeper than its wall is a box: side walls close it where
+   the neighbouring columns differ, textured with the wall's own tiles. Shorter runs
+   (posts, trunks, canopies over a trunk, arches) stay cut-outs, and see-through where
+   the tiles are.
+4. Overhead tiles over walkable cells belong to the blocked run north of them (a
+   canopy over its trunk, a roof's eaves); in such a cell only the overhead tiles rise,
+   the ground under them stays a floor. A long run of overhead tiles with nothing
+   blocked in it (railings, edges drawn over sprites) stays on the floor.
+5. Floor a wall leaves uncovered behind it is filled with the ground of the cell north
+   of its run.
+6. Sprites are billboards: each visible OAM entry, standing at its object's foot point
+   on the floor, made taller by `cos(tilt) / sin(tilt)` (at most 1.4) so it keeps its
+   drawn proportions under the tilt. An object standing in a raised cell whose priority
+   puts it over that cell's tiles in the original (priority 3, or tiles that aren't
+   overhead) stands in front of the wall, or on top of it, at the same screen row.
+   Entries no object owns (effects, markers) stand at their own bottom edge.
+
+Where these are wrong:
+
+- Height is a guess. Walls are at most `hmax` cells; a tall building shows its upper
+  facade lying on the roof. Ground-coloured blocked cells (invisible walls at the edge of
+  a path) rise as low walls of ground.
+- The walk planes (bridges, balconies: the cells' `plane`) and stairs are flat. The
+  game's two walk levels aren't separated, so an upper floor is at floor level behind
+  the wall that should hold it up.
+- Shaped cells (wall-ish: corners, diagonals) count as blocked, so diagonal walls are
+  stepped.
+- BG3 (in map views mostly fog, light shafts and other color-math overlays) and color
+  math in general aren't drawn in 3D; the UI from BG3's top level is laid flat over the
+  picture as in the 2D path. Translucent or tinted sprites are opaque.
+- Sprites are flat cut-outs; one that the original split between priorities (half
+  behind a roof edge) is drawn whole at its foot point.
+- The camera sees further and wider at the top of the picture than the console's, so
+  it stops sooner at the map's edges, keeping the floor at the picture's edges on the
+  map; it then doesn't follow the player all the way to an edge. A map smaller than the
+  view is centered, on a dark ground.
+
+The camera can be changed with `CT_HD2D_3D`, a comma-separated list:
+`tilt=40` (degrees from straight down), `fov=30` (vertical field of view), `zoom=0.75`
+(1: the console's 256 px across at the focus), `hmax=3` (wall cap in cells) and
+`stretch=1.2` (billboard height scale; default from the tilt).
+
+### Drawing
+
+1. The map's quads (one per 8x8 tile of BG2 and BG1: floor ones first) are rebuilt when
+   the generation changes, or when the set of empty tiles in VRAM does (a map whose
+   tiles were still loading). The sprites' quads are rebuilt every frame. VRAM (as a
+   16-bit texture) and CGRAM are uploaded every frame, so animated tiles and palettes
+   show as the console changes them.
+2. A 1024×1024 shadow map from the key light, low from the south-west, of the raised
+   geometry and the sprites (cut-outs tested per pixel).
+3. The surfaces into a picture-size target with a depth buffer: each pixel decodes its
+   tile's bitplanes and palette, is lit relative to the sunlit floor (which keeps the
+   original colors), shadowed with 4 PCF taps, lit by the 2D path's point-light map at
+   the screen position the console drew it, hazed with distance and scaled by the
+   console's brightness. Alpha holds the depth for the depth of field (0.5 at the focus).
+4. The UI from the console frame on top, flat and sharp.
+5. The 2D path's depth of field, bloom, grade and side fill, compiled again with
+   `scene3d_pic.frag` in place of the upscale: one plane, real depth. The tilt-shift band
+   is turned down to a quarter, as depth does most of the blur.
+
+The `deck` preset has no 3D. A GPU or driver that cannot build the 3D programs keeps
+`hd2d3d` on the 2D path (the log says so).
+
+Two hook points are left for asset packs: the cell hook (`s3d_set_cell_hook` in
+`scene3d.h`), where a pack can replace a cell's generated geometry with its own, and the
+tile lookup (`tileTexel()` in `shaders/scene3d.frag`), the one function every 3D
+surface samples its texture through, keyed by the tile (VRAM address, which gives the
+tile id, and palette), where a pack can return its own texture.
+
 ## Performance
 
 Measured on a ROG Ally (Ryzen Z1 Extreme, Radeon 780M, Mesa radeonsi) at 1706×1120
@@ -162,6 +277,17 @@ On the GPU, from `CT_HD2D_PROFILE`, the frame went from about 2.2 ms to 0.9–1.
 the gain is that the two picture-size half-float planes (about 27 MB written and read back
 per frame) are gone. The depth-of-field blur is now the largest pass (0.3–0.5 ms), then the
 final pass (0.25–0.3 ms). Desktop AMD and NVIDIA GPUs have a large margin.
+
+The 3D diorama, from `CT_HD2D_PROFILE` on the same Ally at `--scale 5` (a 1493×1120
+picture), over the Leene Square and bell plaza frames of the replay (8300–9200, unpaced,
+while other work loaded the machine): a median of 2.4 ms of GPU time per frame, against
+1.2 ms for `hd2d` in the same run. The surfaces pass is the largest (about 0.96 ms: every
+pixel decodes its tile from VRAM and takes four shadow taps), then the final pass
+(0.39 ms), the depth of field (0.35 ms) and its blur amount (0.28 ms); the shadow map
+costs 0.05 ms. The CPU side (scene capture, sprite quads, uploads including VRAM) is about
+0.18 ms; a map's mesh rebuild, on a map change, a few milliseconds once. Both presets
+showed 95th percentiles of 15–19 ms in that run: the GPU's clock drops while other work
+loads the machine, so those are the machine's, not the passes'.
 
 The behind buffer costs CPU time in the PPU. Headless (`ct_boot`, 9,200 frames of the
 Leene Square replay), the game runs at about 388 frames per second without it and

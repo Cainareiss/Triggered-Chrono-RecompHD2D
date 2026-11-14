@@ -175,7 +175,8 @@ if(SDL2_FOUND)
     # chrono-recomp: HD-2D renderer (frontend/hd2d), OpenGL 3.3 / ES 3.0
     # through SDL; shaders are embedded as strings at build time.
     set(CT_HD2D_SHADERS fullscreen.vert emit.frag light.frag upscale.frag coc.frag dofblur.frag
-        bright.frag gauss.frag final.frag)
+        bright.frag gauss.frag final.frag
+        scene3d.vert scene3d.frag scene3d_pic.frag ui3d.frag)   # the 3D diorama (scene3d.h)
     list(TRANSFORM CT_HD2D_SHADERS PREPEND ${CMAKE_SOURCE_DIR}/frontend/hd2d/shaders/)
     set(CT_HD2D_GEN ${CMAKE_BINARY_DIR}/hd2d_gen/hd2d_shaders.h)
     if(CT_ANDROID)   # port: no Python: the same header from a CMake script
