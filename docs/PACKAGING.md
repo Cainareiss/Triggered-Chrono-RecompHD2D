@@ -186,6 +186,10 @@ packages pass without exemptions:
 python3 tools/check_dist.py PACKAGE --rom ROM
 ```
 
+It also fails any asset pack (docs/ASSET-PACKS.md): a `pack.toml`, or a picture
+named by a content key under `tiles/`, `sprites/` or `objects/`. Packs are made from the
+user's own ROM and live in their data folder; they never go into a package.
+
 `--allow packaging/check_dist_allow.txt` remains for an unmodified, pinned upstream
 binary that matches some other ROM window by chance. Listed files skip the ROM-window
 check only; the name, ELF-export and generated-name checks still apply. It lists the

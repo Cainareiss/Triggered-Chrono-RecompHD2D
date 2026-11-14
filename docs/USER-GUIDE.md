@@ -111,6 +111,8 @@ flatpak run io.github.jerbanpls.CtRecomp --hd2d
 | `--log-pacing` | Print frame-time statistics every 60 frames (every exit prints them for the whole run) |
 | `--save FILE` | Keep the game's save memory in FILE instead of `ct/ct.srm` (see [Your saves](#your-saves)) |
 | `--no-save` | Don't load or write the save file: in-game saves last only until you quit |
+| `--pack NAME` | Load an asset pack (replacement art; repeat to stack packs, first wins), remembered for next time; `--pack none` loads none (see [Asset packs](#asset-packs)) |
+| `--pack-dump NAME` | While you play, save each new tile and sprite into asset pack NAME |
 
 ## First launch
 
@@ -203,6 +205,27 @@ F11 works without `--hd2d` too. F1–F3, R3 and L3 only do something with `--hd2
 change shows a short message on screen, and the look and the picture shape are
 remembered for next time.
 
+### Asset packs
+
+An asset pack replaces the game's tiles and sprites with pictures at a higher
+resolution. You make one yourself from your own copy of the game: play with
+`--pack-dump mydump` to save the pictures the game shows, upscale them with
+`python3 tools/pack_upscale.py mydump --scale 4 --out my4x` (in the source tree;
+packages install it as `share/ct-recomp/tools/pack_upscale.py`), and play with
+`--pack my4x`. Edit any of its PNGs and press **F5** to see the change. The whole
+workflow, the format and the rules are in [ASSET-PACKS.md](ASSET-PACKS.md).
+
+**A pack made by dumping is the game's own art, and an upscaled or edited copy of it
+still is. It is for your personal use only: never share or upload it.** Pictures you
+paint yourself from scratch are yours.
+
+Packs need the GL renderer. Without `--hd2d` the game switches to it with the original
+look while a pack is loaded.
+
+| Key | What it does |
+| --- | --- |
+| F5 | Reload the asset packs (after editing their pictures) |
+
 ## Where your files live
 
 The engine keeps its files in your user data folder, `~/.local/share/ct-recomp/` (or
@@ -216,7 +239,8 @@ The engine keeps its files in your user data folder, `~/.local/share/ct-recomp/`
 | `ct/rom_path` | Where your ROM is, so you don't have to pick it again |
 | `ct/ct.srm` | Your in-game saves (see [Your saves](#your-saves)) |
 | `ct/ct.srm.bak` | The save file as it was before the last write |
-| `hd2d/settings.ini` | The HD-2D look and picture shape |
+| `hd2d/settings.ini` | The HD-2D look and picture shape, and the asset packs to load |
+| `ct/packs/NAME/` | Asset pack NAME: `pack.toml` and its pictures. Made from the game's art unless you painted every picture yourself: **never share it.** |
 | `ct/gen/`, `ct/obj/` | Temporary build files, normally deleted after the build. If a build fails they can be left behind: they hold code generated from your ROM, so don't share them. Deleting them is safe. |
 
 The ROM itself is never copied: only its location is saved.

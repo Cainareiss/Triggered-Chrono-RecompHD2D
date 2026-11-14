@@ -80,6 +80,12 @@
  *       HD-2D on unless --no-hd2d; on a Steam Deck with no saved look the
  *       "deck" preset is the default. Holding View+Menu (Back+Start) for
  *       2 s asks whether to quit (A quits, B goes back).
+ *   --pack NAME (repeatable) | --pack none, --pack-dump NAME
+ *       asset packs (docs/ASSET-PACKS.md, frontend/packs): load replacement
+ *       art from <pref path>/packs/NAME (stacked, the first wins; saved as
+ *       packs= in settings.ini; F5 reloads), or dump every new tile and
+ *       sprite drawn into a pack. A pack needs the GL renderer: without
+ *       --hd2d it is used with the off preset.
  *   --pacing auto|timer|vsync [--log-pacing]
  *       how frames are paced: a sleep to each 60.0988 Hz frame time
  *       (timer; auto, the default, is the timer for now), or the
@@ -245,6 +251,17 @@ static char pack_names[MAX_PACK_NAMES][256];   /* loaded, highest priority first
 static int n_pack_names, packs_given;          /* --pack seen: beats settings.ini */
 static int preset_forced = -1;   /* the saved look, while packs force the GL path */
 static uint16_t pack_map[SCHED_WIDTH * SCHED_HEIGHT * 4];
+static double pack_map_ms;   /* CPU time building the maps, and how many */
+static long pack_map_frames, pack_map_pixels;
+
+static void pack_map_report(void)
+{
+    if (pack_map_frames)
+        fprintf(stderr, "ct_sdl: asset packs: %ld frames, %.1f%% of pixels replaced, "
+                        "map %.3f ms per frame (CPU)\n", pack_map_frames,
+                100.0 * pack_map_pixels / ((double)pack_map_frames * SCHED_WIDTH * SCHED_HEIGHT),
+                pack_map_ms / pack_map_frames);
+}
 
 /* "a,b": the names, in order. */
 static void pack_names_parse(const char *list)
@@ -840,7 +857,11 @@ static void on_frame(long f)
     if (hd2d_mode) {
         /* port: this frame's asset pack replacements */
         if (packs_active() && sched_prov()) {
-            packs_map_frame(sched_prov(), sched_prov_mem(), pack_map);
+            uint64_t t0 = SDL_GetPerformanceCounter();
+            pack_map_pixels += packs_map_frame(sched_prov(), sched_prov_mem(), pack_map);
+            pack_map_ms += (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 /
+                           (double)SDL_GetPerformanceFrequency();
+            pack_map_frames++;
             hd2d_pack_map(pack_map);
         } else {
             hd2d_pack_map(NULL);
@@ -1052,6 +1073,7 @@ static void usage(FILE *out)
           "  F11               fullscreen on / off\n"
           "  F1                HD-2D look: original, subtle, HD-2D, Steam Deck, 3D\n"
           "  F2                HD-2D debug view      F3  aspect: 4:3, pixel 8:7, stretch\n"
+          "  F5                reload the asset packs (--pack)\n"
           "  Ctrl+Q            quit\n"
           "Controllers: south = B, east = A, west = Y, north = X, shoulders = L / R,\n"
           "  Start, Back = Select, d-pad or left stick. The window's size, place and\n"
@@ -1336,6 +1358,7 @@ int main(int argc, char **argv)
                 (double)(SDL_GetPerformanceCounter() - tw) * 1000.0 / SDL_GetPerformanceFrequency());
         if (packs_active()) {   /* port: asset packs: the atlas to the GPU */
             packs_upload();
+            atexit(pack_map_report);
             static char msg[48];
             int n;
             packs_entries(&n);

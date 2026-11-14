@@ -26,7 +26,7 @@ def check(ok, msg):
 
 
 def picture():
-    """12x12: transparent background, a red square in the top-left, a
+    """12x12: transparent background, a red block in the top-left, a
     blue diagonal staircase."""
     w = h = 12
     rgba = bytearray(w * h * 4)

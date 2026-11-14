@@ -26,6 +26,7 @@ build/ct_sdl --hd2d --fullscreen    # or press F11; automatic under gamescope
 | F2 | Cycle the debug view: layer classes, depth, blur amount, split compare (original pixels on the left), background plane, off |
 | F3 | Cycle the aspect: 4:3 (default), 8:7 pixel aspect, stretch |
 | F11 | Toggle fullscreen |
+| F5 | Reload the asset packs ([ASSET-PACKS.md](ASSET-PACKS.md)) |
 | R3 / L3 (controller) | Same as F1 / F3, for handhelds without function keys |
 
 Each change shows a short on-screen message. Preset and aspect are saved to
@@ -293,6 +294,13 @@ The behind buffer costs CPU time in the PPU. Headless (`ct_boot`, 9,200 frames o
 Leene Square replay), the game runs at about 388 frames per second without it and
 about 314 with it (`--behind`). That is about 0.6 ms more per frame, so it is only on
 while a preset uses it.
+
+## Asset packs
+
+With `--pack`, replacement art is composited at the output resolution in the upscale
+(`shaders/upscale.frag`), before the lighting, depth of field and grade see the picture.
+It is driven by a third G-buffer, the PPU's provenance buffer. Details, the format and
+the cost are in [ASSET-PACKS.md](ASSET-PACKS.md).
 
 ## Limits and next steps
 
