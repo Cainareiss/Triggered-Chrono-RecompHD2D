@@ -151,3 +151,54 @@ int quit_combo_masks(const quit_combo *q)
 {
     return q->state != QC_IDLE;
 }
+
+/* port: controller hints (input.h). SDL_SetHint at normal priority: an
+   environment variable of the same name beats it. */
+void input_sdl_hints(int native_steam)
+{
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_STEAMDECK, "1");
+#ifndef __ANDROID__
+    if (native_steam)
+        SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_STEAM, "1");
+#else
+    (void)native_steam;
+#endif
+    SDL_SetHint(SDL_HINT_GAMECONTROLLER_USE_BUTTON_LABELS, "0");
+}
+
+int input_under_steam_input(const char **why)
+{
+    static const char *const vars[] = {"SteamVirtualGamepadInfo",
+                                       "SDL_GAMECONTROLLER_IGNORE_DEVICES"};
+    for (unsigned k = 0; k < sizeof vars / sizeof *vars; k++) {
+        const char *v = SDL_getenv(vars[k]);
+        if (v && *v) {
+            if (why)
+                *why = vars[k];
+            return 1;
+        }
+    }
+    if (why)
+        *why = NULL;
+    return 0;
+}
+
+/* port: gyro aiming (input.h). */
+static float clampf(float v, float m)
+{
+    return v > m ? m : v < -m ? -m : v;
+}
+
+void gyro_cam_step(gyro_cam *gc, const float rate[3], float dt, float strength)
+{
+    const float dead = 0.03f;   /* rad/s: sensor noise and a resting hand */
+    const float deg = 57.2957795f;
+    float rx = rate[0], ry = rate[1];
+    rx = rx > dead ? rx - dead : rx < -dead ? rx + dead : 0.0f;
+    ry = ry > dead ? ry - dead : ry < -dead ? ry + dead : 0.0f;
+    float keep = 1.0f - dt * 1.5f;   /* back toward the preset's view, ~0.7 s */
+    if (keep < 0.0f)
+        keep = 0.0f;
+    gc->tilt = clampf((gc->tilt + rx * dt * deg * strength) * keep, GYRO_MAX_DEG);
+    gc->yaw = clampf((gc->yaw + ry * dt * deg * strength) * keep, GYRO_MAX_DEG);
+}

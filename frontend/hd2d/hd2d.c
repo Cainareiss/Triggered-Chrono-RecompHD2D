@@ -34,7 +34,7 @@
 #include <SDL.h>
 
 #include "hd2d_shaders.h"   /* generated: tools/embed_text.py */
-#include "osd_font.h"
+#include "osd_text.h"   /* port: the message mask, with glyphs */
 #include "scene3d.h"
 
 /* ---- the GL subset used here (values from the Khronos registry) ---- */
@@ -395,7 +395,7 @@ static struct {
     float focus_y;
     unsigned frame;
     /* On-screen message: text, frames left, and its mask texture. */
-    char osd_text[48];
+    char osd_text[160];   /* port: room for [token] glyphs */
     int osd_frames, osd_dirty, osd_w, osd_h;
     GLuint t_osd;
     /* The 3D diorama (scene3d.h): ok once its programs built. */
@@ -413,6 +413,7 @@ static struct {
         GLuint t_color, t_mat, t_depth, fbo;   /* picture size */
         int w, h;
         GLuint t_shadow, fbo_shadow;
+        float dtilt, dyaw;   /* port: hd2d_set_camera_offset (gyro), degrees */
         float tilt, fov, zoom, stretch;   /* camera: degrees from straight down, vertical fov,
                                              zoom; sprites' height scale */
         int hmax;
@@ -427,9 +428,14 @@ static void s3d_shutdown(void);
 
 void hd2d_set_scene(const ct_scene *scene) { g.s3.scene = scene; }
 
+void hd2d_set_camera_offset(float dtilt, float dyaw)
+{
+    float m = HD2D_CAMERA_MAX;
+    g.s3.dtilt = dtilt < -m ? -m : dtilt > m ? m : dtilt;
+    g.s3.dyaw = dyaw < -m ? -m : dyaw > m ? m : dyaw;
+}
+
 #define OSD_FRAMES 130   /* about two seconds, the last 20 fading */
-#define OSD_GLYPH_W 6    /* 5 pixels and a gap */
-#define OSD_H 11         /* 7 rows and 2 above and below */
 
 void hd2d_osd(const char *text)
 {
@@ -438,28 +444,22 @@ void hd2d_osd(const char *text)
     g.osd_dirty = 1;
 }
 
-/* Rasterize the message into its mask texture (1 = text). */
+/* Rasterize the message into its mask texture (1 = text), with button
+   glyphs (port: osd_text.h; OSD_OS texels per font pixel). */
 static void osd_upload(void)
 {
-    int len = (int)strlen(g.osd_text);
-    g.osd_w = len * OSD_GLYPH_W + 3;
-    g.osd_h = OSD_H;
-    uint8_t *mask = calloc((size_t)g.osd_w * g.osd_h, 1);
-    if (!mask)
+    uint8_t *mask;
+    int w, h;
+    g.osd_dirty = 0;
+    if (osd_text_mask(g.osd_text, &mask, &w, &h))
         return;
-    for (int k = 0; k < len; k++) {
-        const uint8_t *rows = osd_glyph(g.osd_text[k]);
-        for (int y = 0; y < 7; y++)
-            for (int x = 0; x < 5; x++)
-                if (rows[y] & (0x10 >> x))
-                    mask[(y + 2) * g.osd_w + 2 + k * OSD_GLYPH_W + x] = 255;
-    }
+    g.osd_w = w / OSD_OS;   /* units: the rectangle on screen */
+    g.osd_h = h / OSD_OS;
     if (g.t_osd)
         p_glDeleteTextures(1, &g.t_osd);
-    g.t_osd = make_tex(g.osd_w, g.osd_h, GL_R8, GL_RED, GL_UNSIGNED_BYTE, GL_NEAREST);
-    p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, g.osd_w, g.osd_h, GL_RED, GL_UNSIGNED_BYTE, mask);
+    g.t_osd = make_tex(w, h, GL_R8, GL_RED, GL_UNSIGNED_BYTE, GL_NEAREST);
+    p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_BYTE, mask);
     free(mask);
-    g.osd_dirty = 0;
 }
 
 /* lib: an optional source compiled in front of body (upscale.frag). */
@@ -1334,7 +1334,9 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
 
     /* The camera: looking at the middle of the console's view, tilted
        back from straight down, far enough off to show about its width. */
-    float tilt = g.s3.tilt * 3.14159265f / 180.0f, fovy = g.s3.fov * 3.14159265f / 180.0f;
+    float tilt_deg = g.s3.tilt + g.s3.dtilt;   /* port: + the gyro's offset */
+    tilt_deg = tilt_deg < 0 ? 0 : tilt_deg > 80 ? 80 : tilt_deg;
+    float tilt = tilt_deg * 3.14159265f / 180.0f, fovy = g.s3.fov * 3.14159265f / 180.0f;
     float aspect = (float)pw / (float)ph;
     float dist = 128.0f / g.s3.zoom / (tanf(fovy * 0.5f) * aspect);
     float at[3] = {(float)sc->camera_x + 128.0f, 0.0f, (float)sc->camera_y + 120.0f};
@@ -1365,6 +1367,14 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     }
     float eye[3] = {at[0], at[1] + dist * cosf(tilt), at[2] + dist * sinf(tilt)};
     float up[3] = {0.0f, sinf(tilt), -cosf(tilt)};
+    if (g.s3.dyaw != 0.0f) {   /* port: the gyro's turn, about the vertical through at */
+        float yaw = g.s3.dyaw * 3.14159265f / 180.0f, sy = sinf(yaw), cy = cosf(yaw);
+        float h = dist * sinf(tilt);
+        eye[0] = at[0] + h * sy;
+        eye[2] = at[2] + h * cy;
+        up[0] = -cosf(tilt) * sy;
+        up[2] = -cosf(tilt) * cy;
+    }
     float view[16], proj[16], mvp[16];
     m4_look(view, eye, at, up);
     m4_persp(proj, fovy, aspect, dist * 0.15f, dist * 5.0f, 1);

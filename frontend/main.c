@@ -80,6 +80,13 @@
  *       HD-2D on unless --no-hd2d; on a Steam Deck with no saved look the
  *       "deck" preset is the default. Holding View+Menu (Back+Start) for
  *       2 s asks whether to quit (A quits, B goes back).
+ *   controls (docs/HANDHELD.md): SDL's own Steam Deck / Steam Controller
+ *       drivers when Steam Input isn't in between (input_sdl_hints); the
+ *       back buttons and grips, and F6 F9 F8 F10 Tab, emit frontend
+ *       actions (actions.h, bindings.h; settings.ini bind_*, key_*);
+ *       messages, in both pictures, show the buttons of the device last
+ *       used (glyphs.h, osd_text.h); settings.ini gyro=on aims the 3D
+ *       diorama's camera with pad 1's gyro.
  *   --coop | --no-coop
  *       two players (docs/USER-GUIDE.md, co-op): a second controller plays
  *       SNES pad 2, and the game module's co-op patches share the game
@@ -118,8 +125,12 @@
 
 #include <SDL.h>
 
+#include "actions.h"  /* port: back buttons, quick save / load, fast-forward */
+#include "bindings.h"
 #include "bus.h"
 #include "device.h"   /* port: Steam Game Mode, Steam Deck */
+#include "glyphs.h"   /* port: button glyphs in messages */
+#include "osd_text.h"
 #include "module.h"   /* port: --module */
 #ifdef CT_FIRSTRUN
 #include "firstrun.h" /* port: engine-only first run */
@@ -213,7 +224,19 @@ static void print_controllers(void)
             char *m = SDL_GameControllerMappingForDeviceIndex(k);
             fprintf(stderr, "ct_sdl:     SDL mapping: %s\n", m ? m : "?");
             SDL_free(m);
+            /* port: what it has for the frontend's actions and glyphs */
+            int type = SDL_GameControllerTypeForIndex(k);
+            uint16_t vid = SDL_JoystickGetDeviceVendor(k), pid = SDL_JoystickGetDeviceProduct(k);
+            int fam = glyphs_family(type, vid, pid, name, device_kind() == DEVICE_STEAM_DECK);
+            fprintf(stderr, "ct_sdl:     %04x:%04x, SDL type %d, glyphs %s\n", vid, pid, type,
+                    glyphs_family_name(fam));
         }
+    }
+    {
+        const char *why;
+        if (input_under_steam_input(&why))
+            fprintf(stderr, "ct_sdl: Steam Input is on (%s): Steam's virtual pad, the back "
+                            "buttons as Steam's layout sends them\n", why);
     }
     fprintf(stderr, "ct_sdl: pad 1: keyboard arrows, Z=B X=A A=Y S=X Q=L W=R, Enter=Start, "
                     "Right Shift=Select; controller south=B east=A west=Y north=X, "
@@ -284,6 +307,15 @@ static uint16_t live_buttons2, live_buttons3;       /* pads 2 and 3, this frame 
 /* port: which player (1-3) has party slot 1-3 (settings.ini coop_chars,
    coop_chars3: the slots players 2 and 3 have). */
 static uint8_t slot_player[3] = {1, 2, 2};
+/* port: the back buttons / grips and their keys (bindings.h, actions.h),
+   per pad (pad, pad2, pad3); the glyphs follow the device last used
+   (glyphs.h); gyro aiming (settings.ini gyro=on, off by default). */
+static binder pad_binder[3];
+static long last_pad_press = -1000;   /* frame of the last controller button */
+static int gyro_on, steam_hidapi = 1;
+static float gyro_strength = 1.0f;
+static gyro_cam gyro;
+static SDL_GameController *gyro_pad;  /* the pad whose gyro is on */
 static long quit_asked = -1;                        /* frame the question went up */
 #define MAX_SHOTS 64
 static struct { long frame; const char *path; } shots[MAX_SHOTS];
@@ -369,6 +401,10 @@ static void present_plain(const uint8_t *bgrx)
     SDL_Rect dst = {p.x, p.y, p.w, p.h};
     SDL_RenderCopy(ren, tex, NULL, &dst);
     touch_draw_sdl(ren);
+    {   /* port: the message, placed and sized as HD-2D's */
+        int s = p.h / 180 > 2 ? p.h / 180 : 2;
+        osd_sdl_draw(ren, p.x + s * 4, p.y + s * 4, s, 1);
+    }
     SDL_RenderPresent(ren);
 }
 
@@ -499,12 +535,23 @@ static int wst_on_screen(int x, int y, int w)
     return 0;
 }
 
-/* port: a message on screen when there is one (HD-2D), always on stderr. */
-static void osd(const char *msg)
+/* port: a message on screen (HD-2D or the plain picture), [token]s as
+   button glyphs of the device in use (glyphs.h). */
+static void osd_show(const char *msg)
 {
-    fprintf(stderr, "ct_sdl: %s\n", msg);
     if (hd2d_mode)
         hd2d_osd(msg);
+    else
+        osd_sdl_show(msg);
+}
+
+/* ... and on stderr, the tokens as their labels. */
+static void osd(const char *msg)
+{
+    char plain[256];
+    osd_text_plain(msg, plain, sizeof plain);
+    fprintf(stderr, "ct_sdl: %s\n", plain);
+    osd_show(msg);
 }
 
 /* port: co-op is on: never when turned off; otherwise while a second
@@ -606,7 +653,7 @@ static int hd2d_key(SDL_Scancode sc)
         static const char *const msg[HD2D_PRESETS] = {"Look: original", "Look: HD-2D subtle",
                                                       "Look: HD-2D", "Look: HD-2D Steam Deck",
                                                       "Look: HD-2D 3D diorama"};
-        hd2d_osd(msg[hd2d_preset()]);
+        osd_show(msg[hd2d_preset()]);
         settings_save();
     } else if (sc == SDL_SCANCODE_F2) {
         hd2d_set_debug((hd2d_debug() + 1) % HD2D_DEBUGS);
@@ -614,13 +661,13 @@ static int hd2d_key(SDL_Scancode sc)
         static const char *const msg[HD2D_DEBUGS] = {"Debug: off", "Debug: layers", "Debug: depth",
                                                      "Debug: blur", "Debug: compare",
                                                      "Debug: behind"};
-        hd2d_osd(msg[hd2d_debug()]);
+        osd_show(msg[hd2d_debug()]);
     } else if (sc == SDL_SCANCODE_F3) {
         hd2d_set_aspect((hd2d_aspect() + 1) % HD2D_ASPECTS);
         settings_save();
         static const char *const msg[HD2D_ASPECTS] = {"Aspect: 4:3", "Aspect: pixel 8:7",
                                                       "Aspect: stretch"};
-        hd2d_osd(msg[hd2d_aspect()]);
+        osd_show(msg[hd2d_aspect()]);
     } else {
         return 0;
     }
@@ -669,6 +716,14 @@ static void settings_load(void)
             parse_chars(val, 3);
         else if (sscanf(line, "coop=%63s", val) == 1)
             coop_pref = !strcmp(val, "on") ? COOP_ON : !strcmp(val, "off") ? COOP_OFF : COOP_AUTO;
+        else if (bindings_parse_line(bindings_current(), line))   /* port: bind_*, key_* */
+            ;
+        else if (sscanf(line, "gyro=%63s", val) == 1)   /* port: gyro aiming */
+            gyro_on = !strcmp(val, "on") || !strcmp(val, "1");
+        else if (sscanf(line, "gyro_strength=%63s", val) == 1)
+            gyro_strength = (float)atof(val);
+        else if (sscanf(line, "steam_hidapi=%63s", val) == 1)   /* port: input_sdl_hints */
+            steam_hidapi = !(!strcmp(val, "off") || !strcmp(val, "0"));
     }
     if (f)
         fclose(f);
@@ -690,6 +745,9 @@ static void settings_save(void)
         fprintf(f, "coop=%s\n", coop_name[coop_pref]);
         print_chars(f, "coop_chars", 2);
         print_chars(f, "coop_chars3", 3);
+        bindings_write(bindings_current(), f);   /* port: back buttons, keys */
+        fprintf(f, "gyro=%s\ngyro_strength=%.2f\nsteam_hidapi=%s\n", gyro_on ? "on" : "off",
+                gyro_strength, steam_hidapi ? "on" : "off");
         fclose(f);
     }
     free(path);
@@ -701,6 +759,63 @@ static int parse_preset(const char *v)
         if (!strcmp(v, hd2d_preset_name(k)))
             return k;
     return -1;
+}
+
+/* port: the glyphs of a controller, when it is the one used. */
+static void use_glyphs_of(SDL_GameController *c)
+{
+    int set = c ? glyphs_family_of(c) : GLYPHS_KEYBOARD;
+    if (set != glyphs_in_use() && log_input)
+        fprintf(stderr, "ct_sdl: glyphs: %s\n", glyphs_family_name(set));
+    glyphs_use(set);
+}
+
+/* port: the menu action until there is a menu: what the buttons do. */
+static void menu_osd(ct_action a, int down, void *user)
+{
+    (void)a;
+    (void)user;
+    if (down)
+        osd("Menu: [@quicksave] save  [@quickload] load  [@ffwd] fast-forward");
+}
+
+static void log_action(ct_action a, int down)
+{
+    if (log_input)
+        fprintf(stderr, "ct_sdl: frame %ld action %s %s\n", sched_frame_count(), action_name(a),
+                down ? "down" : "up");
+}
+
+/* port: a pad was added or removed: let go of what the pads held (the
+   binders see the buttons still down as new presses next frame). */
+static void pads_changed(void)
+{
+    for (int k = 0; k < 3; k++) {
+        binder_release(&pad_binder[k], bindings_current());
+        binder_init(&pad_binder[k]);
+    }
+}
+
+/* port: gyro aiming, once a frame (settings.ini gyro=on). The 3D
+   diorama's camera follows pad 1's gyro, if it has one. */
+static void gyro_frame(void)
+{
+    if (gyro_pad != pad) {
+        gyro_pad = NULL;
+        gyro.tilt = gyro.yaw = 0.0f;
+        if (pad && SDL_GameControllerHasSensor(pad, SDL_SENSOR_GYRO) &&
+            !SDL_GameControllerSetSensorEnabled(pad, SDL_SENSOR_GYRO, SDL_TRUE)) {
+            gyro_pad = pad;
+            fprintf(stderr, "ct_sdl: gyro aiming with \"%s\"\n", SDL_GameControllerName(pad));
+        }
+        if (!gyro_pad)
+            hd2d_set_camera_offset(0.0f, 0.0f);
+    }
+    float rate[3] = {0};
+    if (!gyro_pad || SDL_GameControllerGetSensorData(gyro_pad, SDL_SENSOR_GYRO, rate, 3))
+        return;
+    gyro_cam_step(&gyro, rate, (float)(FRAME_NS / 1e9), gyro_strength);
+    hd2d_set_camera_offset(gyro.tilt, gyro.yaw);
 }
 
 /* Window, keyboard and controller events; live_buttons for pad 1. */
@@ -732,6 +847,16 @@ static void poll_input(long f)
                                            ev.window.event == SDL_WINDOWEVENT_MOVED ||
                                            ev.window.event == SDL_WINDOWEVENT_RESTORED))
             wst_track();
+        if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
+            bindings_keys_release();   /* port: no fast-forward stuck on */
+        if (ev.type == SDL_CONTROLLERBUTTONDOWN) {   /* port: glyphs of the pad used */
+            SDL_GameController *c = SDL_GameControllerFromInstanceID(ev.cbutton.which);
+            last_pad_press = f;
+            if (c)
+                use_glyphs_of(c);
+        } else if (ev.type == SDL_KEYDOWN && !ev.key.repeat && f - last_pad_press > 10) {
+            use_glyphs_of(NULL);   /* not a key Steam Input sent with a button */
+        }
         if (ev.type == SDL_QUIT) {
             set_exit_reason("SDL_QUIT event (window closed, or quit requested by the "
                             "desktop or another program)");
@@ -742,6 +867,10 @@ static void poll_input(long f)
             running = 0;
         } else if (ev.type == SDL_KEYDOWN && !ev.key.repeat && hd2d_key(ev.key.keysym.scancode)) {
             /* port: renderer controls, not game input */
+        } else if ((ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) &&
+                   bindings_key_event(bindings_current(), ev.key.keysym.scancode,
+                                      ev.type == SDL_KEYDOWN, ev.key.repeat)) {
+            /* port: a frontend action's key (bindings.h), not game input */
         } else if ((ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) && !ev.key.repeat) {
             key_filter_key(&keys, ev.key.keysym.scancode, ev.type == SDL_KEYDOWN, f);
         } else if (ev.type == SDL_CONTROLLERBUTTONDOWN && hd2d_mode &&
@@ -755,12 +884,19 @@ static void poll_input(long f)
             key_filter_button(&keys, f);
         } else if (ev.type == SDL_CONTROLLERDEVICEADDED && !pad) {
             pad = open_controller();
+            pads_changed();   /* port */
+            if (pad)
+                use_glyphs_of(pad);
         } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {   /* port: pads 2 and 3 */
             if (!pad2)
                 pad2 = open_controller_except2(pad, pad3);
             else if (!pad3)
                 pad3 = open_controller_except2(pad, pad2);
+            pads_changed();
         } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
+            pads_changed();   /* port: before the pads move up */
+            if (gyro_pad && !SDL_GameControllerGetAttached(gyro_pad))
+                gyro_pad = NULL;
             SDL_GameController **all[3] = {&pad, &pad2, &pad3};
             for (int k = 0; k < 3; k++)
                 if (*all[k] && !SDL_GameControllerGetAttached(*all[k])) {
@@ -776,6 +912,14 @@ static void poll_input(long f)
                 pad = open_controller();
         }
     }
+    {   /* port: back buttons / grips -> frontend actions, on any pad */
+        SDL_GameController *all[3] = {pad, pad2, pad3};
+        for (int k = 0; k < 3; k++)
+            if (all[k])
+                binder_update(&pad_binder[k], bindings_current(), pad_button, all[k]);
+    }
+    if (gyro_on && hd2d_mode)   /* port: off by default */
+        gyro_frame();
     coop_update();   /* port */
     SDL_GameController *p1 = pad, *p2 = coop_players > 1 ? pad2 : NULL;
     SDL_GameController *p3 = coop_players > 2 ? pad3 : NULL;
@@ -784,11 +928,7 @@ static void poll_input(long f)
     live_buttons3 = p3 ? input_controller(pad_button, pad_axis, p3) : 0;
     if (p1) {   /* port: the quit combo first: it can keep the pad from the game */
         int q = quit_combo_update(&quitc, f, pad_button, p1);
-        if (q == QUIT_ASK && !hd2d_mode) {   /* no on-screen messages: the hold quits */
-            fprintf(stderr, "ct_sdl: View+Menu held 2 s: quitting\n");
-            set_exit_reason("View+Menu held 2 s");
-            running = 0;
-        } else if (q == QUIT_ASK) {
+        if (q == QUIT_ASK) {   /* port: both pictures show the question (osd_text.h) */
             fprintf(stderr, "ct_sdl: View+Menu held 2 s: asking to quit\n");
             quit_asked = f;
         } else if (q == QUIT_YES) {
@@ -798,11 +938,11 @@ static void poll_input(long f)
         } else if (q == QUIT_CANCEL) {
             fprintf(stderr, "ct_sdl: quit cancelled\n");
             quit_asked = -1;
-            hd2d_osd("Back to the game");
+            osd_show("Back to the game");
         }
         /* The question stays up (a message lasts about 2 s) until answered. */
         if (quit_asked >= 0 && running && (f - quit_asked) % 90 == 0)
-            hd2d_osd("Quit? A: quit   B: back to the game");
+            osd_show("Quit? [a] quit  [b] back to the game");
         if (!quit_combo_masks(&quitc))
             buttons |= input_controller(pad_button, pad_axis, p1);
     }
@@ -1193,7 +1333,12 @@ static void usage(FILE *out)
           "  F1                HD-2D look: original, subtle, HD-2D, Steam Deck, 3D\n"
           "  F2                HD-2D debug view      F3  aspect: 4:3, pixel 8:7, stretch\n"
           "  F4                co-op on / off (two players: a second controller is pad 2)\n"
+          "  F6 / F9           quick save / quick load   F8   screenshot\n"
+          "  Tab (hold)        fast-forward              F10  menu\n"
           "  Ctrl+Q            quit\n"
+          "Back buttons and grips (Steam Deck L4 R4 L5 R5, Steam Controller grips, Elite\n"
+          "  paddles): L4 quick save, R4 quick load, L5 fast-forward (hold), R5 menu.\n"
+          "  settings.ini: bind_paddle1..4=ACTION, key_ACTION=KEY (docs/HANDHELD.md).\n"
           "Controllers: south = B, east = A, west = Y, north = X, shoulders = L / R,\n"
           "  Start, Back = Select, d-pad or left stick. The window's size, place and\n"
           "  fullscreen state, the look and the aspect are remembered between runs.\n"
@@ -1388,6 +1533,7 @@ int main(int argc, char **argv)
         return r == FIRSTRUN_MODULE ? 0 : 1;
     }
 #endif
+    input_sdl_hints(steam_hidapi);   /* port: Deck / Steam Controller back buttons */
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER)) {
         fprintf(stderr, "ct_sdl: SDL_Init: %s\n", SDL_GetError());
         set_exit_reason("SDL_Init failed");
@@ -1444,8 +1590,8 @@ int main(int argc, char **argv)
         return 1;
     if (hd2d_mode) {
         /* port: say which look is on and how to change it. */
-        static char hello[48];
-        snprintf(hello, sizeof hello, "Look: %s - F1/R3 to change",
+        static char hello[64];
+        snprintf(hello, sizeof hello, "Look: %s - [r3] to change",   /* F1 on a keyboard */
                  hd2d_preset() == HD2D_OFF ? "original" : hd2d_preset() == HD2D_SUBTLE ? "subtle"
                  : hd2d_preset() == HD2D_DECK ? "HD-2D Steam Deck" : "HD-2D");
         hd2d_osd(hello);
@@ -1482,6 +1628,21 @@ int main(int argc, char **argv)
     if (pad3)
         fprintf(stderr, "ct_sdl: third controller \"%s\"\n", SDL_GameControllerName(pad3));
     coop_update();
+    /* port: frontend actions (actions.h): stubs say so on screen until
+       something implements them; the menu shows what the buttons do. */
+    actions_set_message(osd);
+    actions_set_trace(log_action);
+    actions_set_handler(ACTION_MENU, menu_osd, NULL);
+    use_glyphs_of(pad);
+    fprintf(stderr, "ct_sdl: glyphs: %s (%d pictures built in)\n",
+            glyphs_family_name(glyphs_in_use()), glyphs_built_in());
+    {
+        char plain[200];
+        osd_text_plain("actions: [@quicksave] quick save, [@quickload] quick load, [@ffwd] "
+                       "fast-forward (hold), [@menu] menu, [@screenshot] screenshot",
+                       plain, sizeof plain);
+        fprintf(stderr, "ct_sdl: %s\n", plain);
+    }
 
     interp_reset(&cpu);
     sched_init(&cpu);
@@ -1538,6 +1699,7 @@ int main(int argc, char **argv)
         SDL_GameControllerClose(pad3);
     if (tex2)
         SDL_DestroyTexture(tex2);
+    osd_sdl_shutdown();   /* port */
     if (audio)
         SDL_CloseAudioDevice(audio);
     if (glctx) {

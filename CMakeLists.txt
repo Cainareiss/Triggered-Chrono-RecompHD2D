@@ -167,10 +167,30 @@ endif()
 if(SDL2_FOUND)
     # port: the on-screen touch controller (touch.h) and its GL drawer.
     add_library(ct_input STATIC frontend/input.c frontend/touch.c frontend/touch_gl.c
-        frontend/device.c)   # port: device.c: Steam Game Mode, Steam Deck (HANDHELD.md)
+        frontend/device.c   # port: device.c: Steam Game Mode, Steam Deck (HANDHELD.md)
+        # port: frontend actions, their bindings, button glyphs in messages
+        frontend/actions.c frontend/bindings.c frontend/glyphs.c frontend/osd_text.c)
     target_include_directories(ct_input PUBLIC frontend)
     target_link_libraries(ct_input PUBLIC SDL2::SDL2 m)
     target_compile_options(ct_input PRIVATE ${CT_WARN})
+    # port: the button glyphs (third_party/glyphs, Kenney Input Prompts,
+    # CC0) as coverage masks in a generated header. The Android build has
+    # no Python: its messages name the buttons in text.
+    if(NOT CT_ANDROID)
+        file(GLOB CT_GLYPH_PNGS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/third_party/glyphs/*.png)
+        set(CT_GLYPHS_GEN ${CMAKE_BINARY_DIR}/glyphs_gen/glyphs_data.h)
+        add_custom_command(
+            OUTPUT ${CT_GLYPHS_GEN}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/glyphs_gen
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/tools/embed_glyphs.py
+                    ${CT_GLYPHS_GEN} 44 ${CT_GLYPH_PNGS}
+            DEPENDS ${CT_GLYPH_PNGS} ${CMAKE_SOURCE_DIR}/tools/embed_glyphs.py
+            COMMENT "button glyphs"
+            VERBATIM)
+        target_sources(ct_input PRIVATE ${CT_GLYPHS_GEN})
+        target_include_directories(ct_input PRIVATE ${CMAKE_BINARY_DIR}/glyphs_gen)
+        target_compile_definitions(ct_input PRIVATE CT_GLYPHS_DATA)
+    endif()
 
     # chrono-recomp: HD-2D renderer (frontend/hd2d), OpenGL 3.3 / ES 3.0
     # through SDL; shaders are embedded as strings at build time.
@@ -200,7 +220,7 @@ if(SDL2_FOUND)
     endif()
     add_library(ct_hd2d STATIC frontend/hd2d/hd2d.c frontend/hd2d/scene3d.c ${CT_HD2D_GEN})
     target_include_directories(ct_hd2d PUBLIC frontend PRIVATE ${CMAKE_BINARY_DIR}/hd2d_gen)
-    target_link_libraries(ct_hd2d PUBLIC SDL2::SDL2 ct_runtime m)
+    target_link_libraries(ct_hd2d PUBLIC SDL2::SDL2 ct_runtime ct_input m)   # port: ct_input: osd_text.h
     target_compile_options(ct_hd2d PRIVATE ${CT_WARN} -Wno-overlength-strings)
 else()
     if(CT_ENGINE_ONLY)
@@ -344,6 +364,12 @@ if(SDL2_FOUND)
     target_link_libraries(test_handheld ct_input)
     target_compile_options(test_handheld PRIVATE ${CT_WARN})
     add_test(NAME handheld COMMAND test_handheld)
+    # port: back buttons -> frontend actions, glyphs, gyro, through SDL
+    # virtual controllers with paddles
+    add_executable(test_actions test/test_actions.c)
+    target_link_libraries(test_actions ct_input ct_runtime)
+    target_compile_options(test_actions PRIVATE ${CT_WARN})
+    add_test(NAME actions COMMAND test_actions)
     # The 3D diorama's geometry from a scene (frontend/hd2d/scene3d.h)
     add_executable(test_scene3d test/test_scene3d.c)
     target_link_libraries(test_scene3d ct_hd2d)
