@@ -12,7 +12,7 @@ noted; `off` is the reference at the same frame.
 | Route | Frames | Looks | Result |
 | --- | --- | --- | --- |
 | `world_map_save.txt` | 7300-8700 every 100, 7704-7800 every 4 | hd2d3d, deck3d, hd2d, off | looked at, see W1-W5 |
-| `world_map_save.txt` mode 7 race, `--poke-wram 59:12061^2` | 100, 150, 200 | off | race draws; not yet looked at in 3D looks |
+| mode 7 race (`--poke-wram 59:12061^2`) and Epoch flight (`^4`) | 200-300 | hd2d3d, off | see W8 |
 | `gato_win.txt`, `gato_battle.txt` | 4000-14000 | hd2d3d, off | **did not reach a battle** (W6) |
 | other eras (`--poke-wram 7253:100^N`) | 7500 | hd2d3d, off | **poke missed, all showed 1000 A.D.** (W6) |
 | 1280x800, 1920x1080, 5-frame flicker runs, FSR 67% | - | - | not done (time) |
@@ -28,7 +28,7 @@ noted; `off` is the reference at the same frame.
 | W5 | Brightness / forced blank on the world map, fade-in 7300 | hd2d3d | `w_3d_1038/f7300.png` | The map follows the console's fade (dim map at 7300, black 7720-7744, bright again): `uDepth.z` carries `sc->brightness`. TM layer enables on the world 3D path not exercised | - | brightness OK; TM left to qa3d |
 | W6 | Replay routes in `ct_sdl_engine` | all | `scan8.png`, `b_scan.png`, `b_scan2.png`, `b_rt.png`, `probe.png` | In `ct_sdl_engine` the routes do not run on the frame numbers of the docs (`ct_boot` timeline): `world_map_save` is already on the 1000 A.D. map from frame 2500, and `gato_win`/`gato_battle` show the world map from 4000 and Crono's house with the "That brat, Lucca" text from 8500 to 14000, never a battle. Two runs of the same route also differ (md5 of the frame 7800 shot) by a few frames | unknown: the SDL frontend's frame timing against the script (QOL, resume, pacing) differs from `ct_boot`; the mode 7 poke at frame 59 does work, which fits a divergence that starts later | open: battle fallback, battle crossfade and the other eras were **not** visually QA'd. Use `ct_boot --save-state` / `savestate_*` tests or find the SDL divergence first |
 | W7 | Other eras (`$1F1`-`$1F7`) | hd2d3d | `era1.png`-`era7.png` (all 1000 A.D.) | Not reached (W6). The data in docs/SCENE.md W13 predicts three problems: `$1F2` has no blue ("sea" is a dark void tile: should not shimmer), `$1F5` is a flat sky with a full-map overlay (nothing to lift), `$1F7` is a 37x35-metatile map in a blank 96x64 grid (the 3D plain would be the size of the grid) | height heuristic keyed on blue/green/red means | open; recommended: fall back to 2D for `$1F5` and `$1F7` and tune `$1F2`'s sea to a flat dark plain once seen |
-| W8 | Mode 7 race / Epoch flight in 3D looks | hd2d3d | - | `probe.png` shows the race in `off` at frame 200. Not shot in the 3D looks | scene mode is `OTHER`, so the 2D path (as battles) | open, to look at |
+| W8 | Mode 7 race (frames 200, 260) and Epoch cockpit (200, 300), `--poke-wram 59:12061^2` / `^4` | hd2d3d 1038x556 vs off | `m7sheet.png` (`m7r_3d/`, `m7e_3d/`, `m7e_off/`) | Both scenes draw (2D path), nothing missing. The race: dark road with the horizon blurred by the depth of field and the sky glowing (bloom), acceptable. The Epoch cockpit: the sky is washed out, nearly white at frame 200 and the cloud/fire colors at 300 are paler and haloed against `off` (peach and yellow bands): the bloom and grade over-expose a bright mode 7 picture | 2D path bloom/grade tuned for the dark maps; mode 7's wide bright sky exceeds the threshold | open, hand to qa2d (bloom threshold or an `OTHER`-scene exposure cap) |
 
 ## Research options added
 
