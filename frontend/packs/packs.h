@@ -17,12 +17,13 @@
  *
  * Flips are not part of a key: a flipped tile is the same tile, and the
  * renderer flips the replacement as the console flips the original.
- * Whole-object keys (a character's animation frame as one picture,
- * rather than the OAM pieces it is drawn with) come later, from a frame
- * decoder for the game's sprite format; until then the dump groups the
+ * Whole poses (a character's animation frame as one picture, rather than
+ * the OAM pieces it is drawn with) are keyed by the game module's pose
+ * key (module.h ct_scene_pose), [[pose]] below. The dump also groups the
  * pieces drawn together into [[object]] entries, as a finding aid.
  *
- * Nothing here is specific to a game: the data comes from the PPU. */
+ * Nothing here is specific to a game: the data comes from the PPU, and
+ * pose keys are the module's. */
 #ifndef CT_PACKS_H
 #define CT_PACKS_H
 
@@ -74,7 +75,7 @@ int packs_load(const char *const *dirs, int n);
 /* Load the same directories again (F5: after editing PNGs). */
 int packs_reload(void);
 void packs_unload(void);
-int packs_active(void);   /* any replacement loaded */
+int packs_active(void);   /* any replacement or model loaded */
 
 /* Where a replacement is in the atlas: page (layer of the array texture),
    x, y, w, h in texels; src_w x src_h the original piece's size in
@@ -84,6 +85,7 @@ typedef struct {
     uint64_t key;
     int page, x, y, w, h;
     int src_w, src_h;
+    int flags;         /* poses: PACKS_FLIP_H, PACKS_FLIP_V */
 } packs_rect;
 
 /* The replacement for a key, or NULL. This is the lookup a 3D renderer
@@ -109,14 +111,57 @@ unsigned packs_generation(void);
    pixels replaced. */
 long packs_map_frame(const sched_prov_px *prov, const sched_vmem *m, uint16_t *map);
 
-/* ---- models (pack.toml [[model]]; the 3D path hooks them up later) ---- */
+/* ---- poses (pack.toml [[pose]]): a whole animation frame as one picture ----
+   Keyed by the game module's pose key (module.h ct_scene_pose): one
+   picture for all the OAM entries an object is drawn with. It wins over
+   the entries' own [[tile]] replacements; those, then the original, are
+   the fallback. */
 
+/* The replacement for pose key, or NULL. Its flags: PACKS_FLIP_H/V, the
+   picture drawn mirrored (a [[pose]] entry's flip). */
+const packs_rect *packs_lookup_pose(uint32_t key);
+enum { PACKS_FLIP_H = 1, PACKS_FLIP_V = 2 };
+/* Any [[pose]] loaded. */
+int packs_have_poses(void);
+
+/* One object drawn as a pose this frame, for packs_map_frame: the atlas
+   entry (index into packs_entries), the pose's size (console px), whether
+   it is drawn mirrored, and the OAM entries the object is drawn with.
+   The picture's place on screen is the bounding box of those entries in
+   the frame's OAM; where that box isn't w x h (the frame changed, an
+   entry hidden), the pose is not used and the entries keep their own
+   replacements. */
 typedef struct {
-    int map;           /* map id */
-    int cell_x, cell_y;
+    int entry;
+    int w, h, hflip, vflip;
+    int n;
+    uint8_t oam[16];
+} packs_pose_place;
+/* The poses for the next packs_map_frame (copied; n 0 for none) and the
+   OBJ sizes (small, large: px) the frame's OAM is read with. */
+void packs_set_poses(const packs_pose_place *p, int n, const uint8_t obj_size[2]);
+/* The bounding box (screen px) of OAM entries idx[0..n-1] in the
+   console's OAM table (272 words), with the OBJ sizes: 0, or -1 when
+   none is visible. */
+int packs_oam_box(const uint16_t *oam, const uint8_t obj_size[2], const uint8_t *idx, int n,
+                  int *x, int *y, int *w, int *h);
+
+/* ---- models (pack.toml [[model]]): glTF drawn by the 3D view ---- */
+
+enum { PACKS_MODEL_MAX_TILES = 4 };
+typedef struct {
+    int map;           /* map id; -1: any map (with tiles) */
+    int cell_x, cell_y;   /* the footprint, cells: top-left ... */
+    int cells_w, cells_h; /* ... and size (cells = [x0, y0, x1, y1], or size with tiles) */
+    int tiles_layer, n_tiles;   /* tiles = [layer, TL, TR, BL, BR]: every cell showing these */
+    uint16_t tiles[PACKS_MODEL_MAX_TILES];   /* (n_tiles 0: placed by cells) */
     char file[4096];   /* glTF or GLB: the path (pack.toml gives it relative to the pack) */
-    float scale;       /* uniform scale (1 if not given) */
-    float offset[3];   /* translation in cell units */
+    float scale[3];    /* map px per model unit (1 if not given; one number: all three) */
+    float rotate[3];   /* degrees about x, then y, then z */
+    float offset[3];   /* map px, after rotating and scaling: x east, y up, z south */
+    float color[4];    /* multiplies the material's base color (1 1 1 1) */
+    int linear;        /* filter = "linear" (default nearest) */
+    int hide_cells;    /* the generated geometry under the footprint goes */
     int meshes, primitives;   /* filled by packs_model_parse */
     float min[3], max[3];     /* bounds of the POSITION accessors */
 } packs_model;
@@ -127,5 +172,38 @@ const packs_model *packs_models(int *n);
    counts meshes and primitives and the position bounds into *m. Returns
    0, or -1 with the reason in err (errlen bytes). */
 int packs_model_parse(const char *path, packs_model *m, char *err, int errlen);
+
+/* A model's triangles in its own units (glTF axes: y up, +z its front),
+   every node's transform applied, grouped by material. */
+typedef struct {
+    float pos[3], nrm[3], uv[2];
+    uint8_t rgba[4];   /* COLOR_0, else white */
+} packs_mvertex;
+typedef struct {
+    int first, count;  /* indices */
+    float color[4];    /* baseColorFactor */
+    int tex;           /* the base color texture, -1 none */
+    int cutout;        /* alpha mode MASK or BLEND: drawn where alpha >= 0.5 */
+} packs_mpart;
+typedef struct {
+    uint8_t *rgba;
+    int w, h;
+} packs_mtex;
+typedef struct {
+    packs_mvertex *v;
+    uint32_t *idx;
+    packs_mpart *part;
+    packs_mtex *tex;
+    int nv, ni, nparts, ntex;
+} packs_mesh;
+
+/* Model k's mesh, read on first use and kept until the next load (F5):
+   NULL if its file can't be read (said once). Entries naming the same
+   file share one. */
+const packs_mesh *packs_model_mesh(int k);
+/* Build a mesh from a file (packs_model_mesh's loader); free it with
+   packs_mesh_free. 0, or -1 with the reason in err. */
+int packs_mesh_load(const char *path, packs_mesh *out, char *err, int errlen);
+void packs_mesh_free(packs_mesh *m);
 
 #endif

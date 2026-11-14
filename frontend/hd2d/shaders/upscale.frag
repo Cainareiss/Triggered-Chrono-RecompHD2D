@@ -29,7 +29,8 @@ uniform vec3 uTilt;          // focus x, y (texture order, 0..1), enlargement (0
 // Asset packs (docs/ASSET-PACKS.md): replacement art at high resolution.
 // The map says, per console pixel, which atlas entry replaces it (x: entry
 // + 1, 0 none), the texel of the original piece it showed (y: u | v << 8),
-// its provenance flags (z: 4 H flip, 8 V flip, 32 color math) and the
+// its provenance flags (z: 4 H flip, 8 V flip, 32 color math, 64 a pose
+// beyond the original's pixels: no behind G-buffer under it) and the
 // palette color it was drawn with (w: 15-bit). The replacement is sampled
 // at the output pixel's own position within that texel, and given the
 // change the console's pipeline (brightness, color math) and the lighting
@@ -85,7 +86,8 @@ vec3 packColor(vec2 uv, vec3 orig)
     vec3 lit = texelFetch(uLit, p, 0).rgb;
     vec3 col = (m.z & 32u) != 0u ? rep.rgb + (lit - pal)
                                   : (rep.rgb + 0.03) * ((lit + 0.03) / (pal + 0.03)) - 0.03;
-    vec3 under = uPackParams.y > 0.5 ? texelFetch(uPackBehind, p, 0).bgr : orig;
+    // (64: a pose's picture beyond the original's pixels: what is there shows under it)
+    vec3 under = uPackParams.y > 0.5 && (m.z & 64u) == 0u ? texelFetch(uPackBehind, p, 0).bgr : orig;
     return mix(under, max(col, 0.0), rep.a);
 }
 
@@ -121,6 +123,11 @@ void planes(vec2 uv, out vec4 scene, out vec4 back, out vec4 here)
         front.rgb = packColor(uv, front.rgb);
     vec4 b = texture(uLitBack, suv);
     bool hereFore = classOf(here) == C_FORE;
+    // Outside the foreground the background plane is the pixel itself
+    // (light.frag's oBack), so it takes the replacement too: the final
+    // pass draws in-focus pixels from it.
+    if (uPack != 0 && !hereFore)
+        b.rgb = front.rgb;
     if (uTilt.z <= 0.0) {
         scene = front;
         back = vec4(b.rgb, hereFore ? 1.0 : 0.0);

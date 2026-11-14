@@ -23,6 +23,9 @@
 // layer (clouds), drawn as a plane (uPassKind 1) and as the soft shadows
 // it casts.
 //
+// With MODEL defined: an asset pack's model (hd2d.h hd2d_models), lit
+// like the rest, with its own normals, its texture and colors.
+//
 // With SHADOW_PASS defined: only the cut-out test, for the shadow map.
 #ifdef GL_ES
 precision highp sampler2DShadow;
@@ -56,14 +59,14 @@ int colorIndex(uint tile, ivec2 p)
 // depth, BG or sprite: scene3d.h's packing). An asset pack replaces this
 // function (or branches in it on its own flag) to return its own texture
 // for a (tile, palette); the console's pixels are the default.
+uniform usampler2D uPackRects;   // per entry: (page, x, y, w), (h, src w, src h, 0)
+uniform highp sampler2DArray uPackAtlas;
 #ifndef SHADOW_PASS
 // Asset packs (docs/ASSET-PACKS.md): BG tiles with a replacement. The
 // lookup is by (VRAM address / 8, palette, + 8 for sprites), filled each
 // frame for the tiles the meshes show; 0: none, else the atlas entry + 1.
 uniform int uPack;
 uniform usampler2D uPackLut;
-uniform usampler2D uPackRects;   // per entry: (page, x, y, w), (h, src w, src h, 0)
-uniform highp sampler2DArray uPackAtlas;
 #endif
 
 vec4 tileTexel(uint tile, vec2 uv)
@@ -71,6 +74,24 @@ vec4 tileTexel(uint tile, vec2 uv)
 #ifndef SHADOW_PASS
     // Derivatives here, where the control flow is still uniform.
     vec2 duvx = dFdx(uv), duvy = dFdy(uv);
+#endif
+    if ((tile & (1u << 26)) != 0u) {   // S3D_PACKED: a whole picture (a pose), uv 0-8 across it
+        int i = int(tile & 0x3FFFFu);
+        ivec2 rc = ivec2((i % 1024) * 2, i / 1024);
+        uvec4 r0 = texelFetch(uPackRects, rc, 0);
+        uvec4 r1 = texelFetch(uPackRects, rc + ivec2(1, 0), 0);
+        vec2 rect = vec2(float(r0.w), float(r1.x));
+        float asize = float(textureSize(uPackAtlas, 0).x);
+        vec2 t = clamp(uv / 8.0 * rect, vec2(0.5), rect - 0.5);
+        vec3 at = vec3((vec2(float(r0.y), float(r0.z)) + t) / asize, float(r0.x));
+#ifdef SHADOW_PASS
+        return textureLod(uPackAtlas, at, 0.0);
+#else
+        vec2 s = rect / 8.0 / asize;
+        return textureGrad(uPackAtlas, at, duvx * s, duvy * s);
+#endif
+    }
+#ifndef SHADOW_PASS
     if (uPack != 0) {
         int row = int((tile >> 15u) & 7u) + ((tile & (1u << 19)) != 0u ? 8 : 0);
         uint e = texelFetch(uPackLut, ivec2(int((tile & 0x7FFFu) >> 3u), row), 0).r;
@@ -106,9 +127,30 @@ vec4 tileTexel(uint tile, vec2 uv)
 #endif
 }
 
+#ifdef MODEL
+uniform sampler2D uModelTex;
+uniform vec4 uModelColor;        // the part's color
+uniform ivec2 uModelMode;        // texture on, cut-out
+in vec3 vNrm;
+in vec4 vCol;
+
+vec4 modelTexel()
+{
+    vec4 c = uModelColor * vCol;
+    if (uModelMode.x != 0)
+        c *= texture(uModelTex, vUV);
+    return vec4(c.rgb, uModelMode.y != 0 ? c.a : 1.0);
+}
+#endif
+
 #ifdef SHADOW_PASS
 void main()
 {
+#ifdef MODEL
+    if (modelTexel().a < 0.5)
+        discard;
+    return;
+#endif
 #ifdef WORLD_MAP
     uint ni = (vTile >> 20u) & 7u;
     bool flat_ = (vTile & (1u << 19)) != 0u && (vTile & (1u << 25)) != 0u;
@@ -203,6 +245,18 @@ void main()
         return;
     }
 #endif
+#ifdef MODEL
+    vec4 tex = modelTexel();
+    if (tex.a < 0.5)
+        discard;
+    vec3 col = tex.rgb;
+    bool obj = false;
+    vec3 n = normalize(vNrm);
+    if (dot(n, uEye - vWorld) < 0.0)   // a face seen from behind: lit as its other side
+        n = -n;
+    // the nearest of the fixed normals, for the ambient occlusion
+    int ni = n.y > 0.7 ? 0 : abs(n.x) > abs(n.z) ? (n.x > 0.0 ? 2 : 3) : (n.z > 0.0 ? 1 : 4);
+#else
     vec4 tex = tileTexel(vTile, vUV);
     if (tex.a < 0.5)
         discard;
@@ -211,6 +265,7 @@ void main()
 
     int ni = int((vTile >> 20u) & 7u);
     vec3 n = NORMALS[min(ni, 5)];
+#endif
 #ifdef WORLD_MAP
     if (obj && (vTile & (1u << 25)) != 0u) {   // flat over the picture, as the UI
         oLit = vec4(col * uDepth.z, 0.5);
@@ -234,6 +289,8 @@ void main()
         shade *= 1.0 - uCloud.z * 0.25 * c;
     }
     float amb = ni == 0 || ni >= 6 ? 1.0 : 0.85;   // the ground keeps its colors where lit
+#elif defined(MODEL)
+    float amb = mix(0.85, 1.0, clamp(n.y, 0.0, 1.0));
 #else
     float amb = ni == 0 ? 1.0 : 0.85;
 #endif
