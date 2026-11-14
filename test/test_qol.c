@@ -119,6 +119,15 @@ static void test_buttons(void)
         CHECK(qol_buttons(0, PAD_B, f) == PAD_B, "qol_buttons(0, PAD_B, f) == PAD_B");
     qol_setting("turbo", "");
     CHECK(qol_buttons(1, PAD_Y, 2) == PAD_Y, "qol_buttons(1, PAD_Y, 2) == PAD_Y");
+    /* the button that ends a pause doesn't reach the game until let go */
+    qol_pause_toggle();
+    CHECK(qol_paused(), "paused");
+    qol_pause_toggle();
+    CHECK(!qol_paused(), "going on");
+    CHECK(qol_buttons(0, PAD_A, 10) == 0, "held through the pause: kept");
+    CHECK(qol_buttons(0, PAD_A | PAD_UP, 11) == PAD_UP, "a new one passes");
+    CHECK(qol_buttons(0, 0, 12) == 0, "released");
+    CHECK(qol_buttons(0, PAD_A, 13) == PAD_A, "pressed again: passes");
 }
 
 static void test_rect(void)

@@ -513,7 +513,8 @@ static void pause_clear(int why)
     paused &= ~why;
     if (was && !paused) {
         for (int p = 0; p < 4; p++)
-            swallow[p] = last_live[p];   /* held now: not a press for the game */
+            swallow[p] = 0xFFFF;   /* whatever is held now (the next frame's buttons)
+                                      is not a press for the game until let go */
         if (host.pacing_reset)
             host.pacing_reset();
         fprintf(stderr, "ct_sdl: playing\n");
