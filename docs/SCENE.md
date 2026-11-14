@@ -324,6 +324,12 @@ Minimum for a playable prototype: the `ct_scene` export, the map-generation coun
 
 ## B1 prep
 
+(Built since: `game/ct/coop.c` has B1, B2 and the B3 prototype, described in
+[USER-GUIDE.md](USER-GUIDE.md#two-players-co-op) and [MODULES.md](MODULES.md#game-patches).
+The tether lets go of follower 1 when the game places it (a map change), snaps it back
+into line after a battle on the same map or at an event, and uses `$0138` as the event
+flag. Sprites for the second view use hook 1(a).)
+
 ### Battle: whose menu, and where the pad is read
 
 - **Active command menu: `$7E95D5`.** It holds the party slot (0-2) of the PC whose command menu is

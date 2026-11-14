@@ -203,6 +203,38 @@ F11 works without `--hd2d` too. F1–F3, R3 and L3 only do something with `--hd2
 change shows a short message on screen, and the look and the picture shape are
 remembered for next time.
 
+### Two players (co-op)
+
+A second controller is player 2. As soon as two controllers are connected, co-op is
+on (**F4** turns it on or off; `--coop` and `--no-coop` at launch). The choice is saved in
+`settings.ini` as `coop=auto`, `on` or `off`. Player 1 keeps the keyboard and the first
+controller.
+
+- **Battle:** when the command menu of party member 2 or 3 opens, player 2's controller
+  picks the command and the target. Player 1's buttons do nothing until it closes, and
+  a button player 2 is already holding when the menu opens counts only once it is let
+  go. `coop_chars=2,3` in `settings.ini` lists the party members (1-3) player 2 plays.
+  With a third controller, `coop_chars3=3` gives party member 3 to player 3 (pad 3).
+  If a controller is unplugged, its characters go back to player 1 at once, and the
+  battle doesn't wait.
+- **Field:** player 2 walks party member 2 with the d-pad (hold **B** to run). Walls stop
+  them. When player 2 lets go, the character walks back into line behind the leader
+  and follows as usual. It snaps back into line if it gets stuck, wanders more than a
+  screen away, or when a cutscene starts. After a battle it rejoins the same way, and
+  after a door or map change it starts where the game puts it. Only the leader opens
+  doors, takes exits, talks to people, and starts events and battles.
+- **Split screen (experimental):** with `--coop-split`, when player 2's character is more than
+  about 3/4 of a screen from the leader, the window splits in two. On a wide window the
+  views sit side by side; otherwise one is above the other. The second view follows
+  player 2's character, and the views merge again when the two are close. It needs the
+  plain picture (`--no-hd2d`), and the leash is two screens. People near player 2 are
+  drawn too, but this changes how the game handles its sprites. A busy map can run out
+  of the game's sprite slots, so some people may not show in either view. The
+  background in the second view has no parallax.
+
+Co-op needs the game module (the normal setup). With `--interp-only` the game plays as
+one player.
+
 ## Where your files live
 
 The engine keeps its files in your user data folder, `~/.local/share/ct-recomp/` (or
@@ -216,7 +248,7 @@ The engine keeps its files in your user data folder, `~/.local/share/ct-recomp/`
 | `ct/rom_path` | Where your ROM is, so you don't have to pick it again |
 | `ct/ct.srm` | Your in-game saves (see [Your saves](#your-saves)) |
 | `ct/ct.srm.bak` | The save file as it was before the last write |
-| `hd2d/settings.ini` | The HD-2D look and picture shape |
+| `hd2d/settings.ini` | The HD-2D look and picture shape, the window, co-op |
 | `ct/gen/`, `ct/obj/` | Temporary build files, normally deleted after the build. If a build fails they can be left behind: they hold code generated from your ROM, so don't share them. Deleting them is safe. |
 
 The ROM itself is never copied: only its location is saved.

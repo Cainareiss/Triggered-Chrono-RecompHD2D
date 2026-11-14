@@ -43,6 +43,28 @@ The script does five things:
 
 It took about 40 s on a Ryzen Z1 Extreme. `--native` tunes the code for the local CPU.
 
+## Game patches
+
+A game's generated code can't be edited by hand, so a game changes its behaviour through
+patches. In `funcs.toml`, a `[[func]]` with `patch = "NAME"` makes the translator call
+`int ct_patch_NAME(CPU *)` on entry to that function. The patch lives in the game's own
+C (`game/<id>/*.c`, compiled into the module with the generated code). If it returns 0,
+the translated body runs as usual. If it returns nonzero, it has done the work and the
+return (RTS/RTL) itself. The interpreter never calls patches, so a patch only runs where
+the function runs natively. Co-op is built this way (`game/ct/coop.c`).
+
+The patches read state the engine gives them, through `sched.h`:
+
+- how many players there are (`sched_players`);
+- who has each party slot (`sched_slot_player`);
+- each port's last auto-read (`sched_joypad_read`);
+- whether a second view is allowed (`sched_views`), and the second view itself
+  (`sched_view2`), which the frontend draws with `sched_render_view2`.
+
+With one player, every co-op patch returns 0 without touching memory. Frame hashes then
+match a build without the patches: the gato_win replay's 13,950 per-frame hash lines are
+identical. Module ABI 5 added the patches and that API.
+
 ## Guarantees
 
 - `module_parity` (ctest, needs the ROM): the engine plus the module matches the static

@@ -104,6 +104,29 @@ are mapped by position, as on the SNES pad:
 While you hold View and Menu together, the game doesn't see them, so the combo doesn't
 open the game's menu. The answer to the question doesn't reach the game either.
 
+### Two players on one handheld
+
+Connect a second controller (USB or Bluetooth) and co-op turns on: the built-in controls
+are player 1, the second controller is player 2, and it plays party members 2 and 3 in
+battle and walks party member 2 in the field ([USER-GUIDE.md](USER-GUIDE.md#two-players-co-op)).
+
+Under Steam's Game Mode both controllers reach the game through Steam Input, as two
+virtual Xbox controllers. Steam numbers them in the order they became active. The game
+takes the first one it sees as player 1, and that is the built-in controls once you have pressed something on
+them. If the order comes out wrong, reorder the controllers in Steam's controller settings,
+or unplug the second one and plug it back in.
+Give the second controller a gamepad layout in Steam, not a desktop one. A desktop
+layout sends keyboard keys, and those reach player 1.
+
+On the Ally, Armoury Crate's controller mode and Steam both have to treat the second pad
+as a controller. A pad that shows up only as a joystick is listed as "joystick only: not
+used" at startup (run the AppImage from a terminal to see the list). With no keyboard,
+co-op can only be turned off by disconnecting the second controller, or by binding F4 to a
+back button in Steam Input. The choice is saved.
+
+None of this has been tried on a real Deck or Ally yet. It was tested with scripted
+pad 2 input (the `coop_*` ctests).
+
 ## Looks, frame rate and battery
 
 In Game Mode the engine starts fullscreen at the screen's size, with no mouse cursor and
