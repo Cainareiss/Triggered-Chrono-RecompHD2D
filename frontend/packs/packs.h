@@ -109,6 +109,18 @@ unsigned packs_generation(void);
    pixels replaced. */
 long packs_map_frame(const sched_prov_px *prov, const sched_vmem *m, uint16_t *map);
 
+/* ---- pack.toml lines, for other readers of the same files (music.h) ---- */
+
+typedef struct {
+    char table[32];   /* the last header: "tile", "object", "model", "music", "pack" */
+    int is_array;     /* [[table]] */
+    char key[64];
+    char val[1024];   /* a string without its quotes, or the value as written */
+} packs_toml_line;
+/* Parse one line of pack.toml (s is changed); returns 1 for a header, 2
+   for key = value, 0 for a line to skip. */
+int packs_toml_parse(char *s, packs_toml_line *t);
+
 /* ---- models (pack.toml [[model]]; the 3D path hooks them up later) ---- */
 
 typedef struct {

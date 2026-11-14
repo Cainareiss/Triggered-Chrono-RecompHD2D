@@ -96,6 +96,13 @@ int hd2d_read(uint8_t *bgrx, int out_w, int out_h);
    0-9 and the punctuation in osd_font.h, and [token] button glyphs:
    osd_text.h, glyphs.h; at most 159 bytes). */
 void hd2d_osd(const char *text);
+/* port: HD text (frontend/hdtext.h): a picture drawn over the console's,
+   rgba w x h texels, premultiplied alpha, covering console pixels x, y,
+   cw, ch (it is stretched over them, linearly filtered); after the
+   grading, under the message. rgba is read again only when gen changes,
+   and must stay valid until the next call. NULL: none. */
+void hd2d_set_text_overlay(const uint8_t *rgba, int w, int h, float x, float y, float cw,
+                           float ch, unsigned gen);
 
 /* port: asset packs (docs/ASSET-PACKS.md). The replacement atlas:
    pages x (size x size) RGBA texels, page after page, and n entries of

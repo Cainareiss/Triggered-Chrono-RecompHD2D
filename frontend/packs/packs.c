@@ -203,15 +203,7 @@ static uint64_t raw_id(const sched_prov_px *p)
    key = value lines (strings, numbers, [number, ...]); enough for the
    files this writes and people edit. ---- */
 
-typedef struct {
-    char table[32];   /* "tile", "object", "model", "pack" */
-    int is_array;
-    char key[64];
-    char val[1024];
-} toml_line;
-
-/* Parse one line; returns 1 for a header, 2 for key = value, 0 to skip. */
-static int toml_parse(char *s, toml_line *t)
+int packs_toml_parse(char *s, packs_toml_line *t)
 {
     while (*s == ' ' || *s == '\t')
         s++;
@@ -310,9 +302,9 @@ int packs_dump_open(const char *dir, const char *name)
     int fresh = !old;
     if (old) {   /* keep extending it: its keys are not written again */
         char line[2048];
-        toml_line t = {0};
+        packs_toml_line t = {0};
         while (fgets(line, sizeof line, old)) {
-            int r = toml_parse(line, &t);
+            int r = packs_toml_parse(line, &t);
             if (r == 2 && !strcmp(t.key, "key") && t.is_array) {
                 uint64_t key = strtoull(t.val, NULL, 16);
                 if (!strcmp(t.table, "tile"))
@@ -612,7 +604,7 @@ static void load_one(const char *dir, pending **list, int *n, int *cap, kmap *ha
         fprintf(stderr, "packs: no %s\n", path);
         return;
     }
-    toml_line t = {0};
+    packs_toml_line t = {0};
     char key[64] = "", file[1024] = "";
     int w = 0, h = 0, loaded = 0, missing = 0;
     packs_model mdl;
@@ -620,7 +612,7 @@ static void load_one(const char *dir, pending **list, int *n, int *cap, kmap *ha
     char table[32] = "";
     /* An entry is complete at the next header or the end of the file. */
     for (int eof = 0; !eof;) {
-        int r = fgets(line, sizeof line, f) ? toml_parse(line, &t) : (eof = 1, 1);
+        int r = fgets(line, sizeof line, f) ? packs_toml_parse(line, &t) : (eof = 1, 1);
         if (r == 1) {
             if (!strcmp(table, "tile") && key[0] && file[0] && w > 0 && h > 0) {
                 uint64_t k = strtoull(key, NULL, 16);

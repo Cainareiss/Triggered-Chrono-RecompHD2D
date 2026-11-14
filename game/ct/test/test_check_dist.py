@@ -9,6 +9,7 @@ usage: test_check_dist.py CHECK_DIST ROM --pass FILE... --fail FILE...
 """
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -85,6 +86,25 @@ def main(argv: list[str]) -> int:
             info.size = len(body)
             t.addfile(info, io.BytesIO(body))
         expect([pictar], 1, 'a key-named pack picture in a tar')
+        # Audio packs: a song file in a pack's music/ folder, by its name or,
+        # renamed, by its bytes; but not a sound outside a pack layout.
+        audiozip = os.path.join(d, 'with_music.zip')
+        with zipfile.ZipFile(audiozip, 'w') as z:
+            z.writestr('share/ct-recomp/packs/mine/music/song18.ogg', b'OggS' + os.urandom(60))
+        expect([audiozip], 1, 'an audio pack song (.ogg) in a zip')
+        flactar = os.path.join(d, 'with_flac.tar')
+        with tarfile.open(flactar, 'w') as t:
+            info = tarfile.TarInfo('data/music/track.bin')
+            body = b'fLaC' + os.urandom(60)
+            info.size = len(body)
+            t.addfile(info, io.BytesIO(body))
+        expect([flactar], 1, 'a FLAC song renamed, in a music/ folder in a tar')
+        okdir = os.path.join(d, 'not_a_pack')
+        os.makedirs(os.path.join(okdir, 'share', 'sounds'))
+        with open(os.path.join(okdir, 'share', 'sounds', 'click.wav'), 'wb') as f:
+            f.write(b'RIFF' + os.urandom(60))
+        expect([okdir], 0, 'a sound outside a pack layout')
+        shutil.rmtree(okdir)
         expect([d], 1, 'a directory holding them')
     return 1 if bad else 0
 

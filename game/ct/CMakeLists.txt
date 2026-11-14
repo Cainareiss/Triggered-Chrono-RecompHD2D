@@ -65,10 +65,11 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 
 # The tables (func_table.h), as objects so they precede ct_interp.
-# scene.c: the scene description (runtime/module.h), an object so the
-# weak reference in func_table_static.c finds it.
+# scene.c, world_scene.c, audio.c, text.c: the scene description, the music
+# watcher and the text boxes (runtime/module.h), objects so the
+# weak references in func_table_static.c find them.
 add_library(ct_gen_tables OBJECT ${CT_OUT}/ct_funcs.c ${CMAKE_SOURCE_DIR}/runtime/func_table_static.c
-    scene.c world_scene.c)
+    scene.c world_scene.c audio.c text.c)
 target_compile_definitions(ct_gen_tables PRIVATE CT_TABLES_DEFINE)
 target_include_directories(ct_gen_tables PUBLIC ${CT_OUT})
 target_link_libraries(ct_gen_tables PUBLIC ct_runtime)
@@ -86,6 +87,7 @@ endfunction()
 
 # ---- frontends, at the top of the build tree ----
 ct_game_exe(ct_boot ${CMAKE_SOURCE_DIR}/tools/ct_boot.c ${CMAKE_SOURCE_DIR}/tools/tas_resync.c)
+target_link_libraries(ct_boot ct_packs)   # port: --music-pack (music.h)
 set_target_properties(ct_boot PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 if(SDL2_FOUND)
     ct_game_exe(ct_sdl ${CMAKE_SOURCE_DIR}/frontend/main.c ${CMAKE_SOURCE_DIR}/frontend/saves.c
@@ -94,7 +96,7 @@ if(SDL2_FOUND)
     # port: the game id names its saves folder, as for ct_sdl_engine
     get_filename_component(ct_game_id ${GAME_DIR} NAME)
     target_compile_definitions(ct_sdl PRIVATE CT_GAME_ID="${ct_game_id}")
-    target_link_libraries(ct_sdl ct_input ct_hd2d ct_packs ct_menu)
+    target_link_libraries(ct_sdl ct_input ct_hd2d ct_packs ct_hdtext ct_menu)
     set_target_properties(ct_sdl PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 endif()
 
@@ -124,6 +126,13 @@ add_test(NAME module_parity COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_
     $<TARGET_FILE:ct_boot> $<TARGET_FILE:ct_boot_engine> $<TARGET_FILE:ct_game_module>
     ${GAME_DIR}/test/replay/leene_square.txt 3000)
 list(APPEND ct_game_tests module_parity)
+
+# port: audio packs end to end (game/ct/audio.c, frontend/packs/music.c): the
+# Gato fight's song replaced by a synthetic tone; the music voices muted,
+# the sound effects kept, and the sound before it byte for byte the same.
+add_test(NAME music_pack COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_music_pack.py
+    $<TARGET_FILE:ct_boot_engine> --module $<TARGET_FILE:ct_game_module>)
+list(APPEND ct_game_tests music_pack)
 
 # The scene description (scene.c) against an independent decoding of the
 # same WRAM and OAM (tools/scene_probe.py --text), static and as a module.
@@ -383,6 +392,12 @@ if(SDL2_FOUND)
     # Real-time pacing: other tests running beside it starve the audio queue.
     set_tests_properties(sdl_audio_60s PROPERTIES RUN_SERIAL TRUE)
     list(APPEND ct_game_tests sdl_boot sdl_record sdl_audio_60s)
+    # port: HD text (frontend/hdtext.h): the dialogue box at frame 4800 with a
+    # font found on the system (skipped without one, or without offscreen GL).
+    add_test(NAME sdl_hdtext COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_hdtext_shot.py
+        $<TARGET_FILE:ct_sdl_engine> --module $<TARGET_FILE:ct_game_module>)
+    set_tests_properties(sdl_hdtext PROPERTIES SKIP_RETURN_CODE 77)
+    list(APPEND ct_game_tests sdl_hdtext)
     # port: quality of life (frontend/qol.h): save states, the resume point
     # (SIGTERM, sleep, the prompt), screenshots, pause, fast-forward,
     # battery mode, save RAM import/export; headless, scripted.

@@ -80,6 +80,18 @@ there. `game/ct/rumble.c` patches the battle's damage routine, two event command
 time gate (docs/SCENE.md, "Rumble"); each returns 0. Module ABI 8 added that API and
 export. The gato_win replay's frame hashes are the same with rumble on and off.
 
+Module ABI 9 added two more optional exports, for the frontend's add-ons, in
+`ct_module_info` after the rumble hook: `music` (`ct_music_hooks`: the engine passes every CPU
+write to an APU port to it, and it gives song, fade and stop events in the game's song
+ids at each frame edge, plus the APU RAM byte naming the sound-effect voices; audio
+packs, [ASSET-PACKS.md](ASSET-PACKS.md#music-audio-packs)) and `text` (`ct_text`: the
+characters in each line of the game's text boxes, and the VRAM characters of the lines,
+which the engine finds on the screen; HD text, [USER-GUIDE.md](USER-GUIDE.md#hd-text)).
+The text comes from a patch on the game's glyph routine (`game/ct/text.c`) that only
+reads memory, so hashes match a build without it. Both are only read while the player
+uses them. Save states from ABI 7 and 8 builds still load (`SAVESTATE_ABI_MIN`): the
+exports change nothing a state holds.
+
 ## Guarantees
 
 - `module_parity` (ctest, needs the ROM): the engine plus the module matches the static

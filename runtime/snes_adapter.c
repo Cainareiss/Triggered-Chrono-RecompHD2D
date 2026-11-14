@@ -222,6 +222,7 @@ static void ppu_reg_write(uint16_t reg, uint8_t v)
  * - SPC700 accesses land at the end of their cycle (spc700_host.cpp). */
 
 void (*snes_apu_sync)(unsigned early);
+void (*snes_apu_port_hook)(unsigned port, uint8_t value, const uint8_t ports[4]);
 uint64_t (*snes_master_clock)(void);
 uint64_t (*snes_access_clock)(unsigned early);
 unsigned snes_ref_quirks;
@@ -252,6 +253,11 @@ static void apu_reg_write(uint16_t reg, uint8_t v)
     if (snes_apu_sync)
         snes_apu_sync(0);
     int p = reg & 3;
+    if (snes_apu_port_hook) {   /* port: every CPU write, changed or not */
+        uint8_t now[4] = {port_new[0], port_new[1], port_new[2], port_new[3]};
+        now[p] = v;
+        snes_apu_port_hook((unsigned)p, v, now);
+    }
     if (port_new[p] == v)
         return;
     port_new[p] = v;

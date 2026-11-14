@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <limits.h>
+#include <math.h>
 #include "dsp_regs.h"
 #include "dsp.h"
 
@@ -59,6 +60,67 @@ static void dsp_handleGain(Dsp* dsp, int ch);
 static void dsp_decodeBrr(Dsp* dsp, int ch);
 static int16_t dsp_getSample(Dsp* dsp, int ch, int sampleNum, int offset);
 static void dsp_handleNoise(Dsp* dsp);
+
+// ct-recomp: the voices' sample interpolation (dsp_set_interp). Gaussian
+// is the hardware's and the default; cubic (Catmull-Rom over the same four
+// samples) and sinc (8 taps, Lanczos-windowed, two samples later so that
+// the taps after the point are decoded already) are host options for a
+// less muffled sound. Their history lives here, outside Dsp, so save
+// states and the Gaussian path are as they were.
+int dsp_interp;
+uint8_t dsp_host_mute;
+int dsp_host_keep_addr = -1;
+static int16_t interpRing[8][32];
+static uint32_t interpCount[8];   // samples decoded since key-on
+static float sincTable[256][8];
+static bool sincReady;
+
+void dsp_set_interp(int mode) {
+  dsp_interp = mode == DSP_INTERP_CUBIC || mode == DSP_INTERP_SINC ? mode : DSP_INTERP_GAUSS;
+  if(dsp_interp == DSP_INTERP_SINC && !sincReady) {
+    const double pi = 3.14159265358979323846;
+    for(int p = 0; p < 256; p++) {
+      double f = p / 256.0, sum = 0.0;
+      for(int t = 0; t < 8; t++) {
+        double x = (t - 3) - f;   // taps -3..4 around the point
+        double w = x == 0.0 ? 1.0 : 4.0 * sin(pi * x) * sin(pi * x / 4.0) / (pi * pi * x * x);
+        sincTable[p][t] = (float)w;
+        sum += w;
+      }
+      for(int t = 0; t < 8; t++)   // unity gain at DC
+        sincTable[p][t] = (float)(sincTable[p][t] / sum);
+    }
+    sincReady = true;
+  }
+}
+
+static void interpKeyOn(int ch) {
+  memset(interpRing[ch], 0, sizeof interpRing[ch]);
+  interpCount[ch] = 0;
+}
+
+// The point Gaussian interpolation plays is between decodeBuffer[sampleNum
+// + 1] and [sampleNum + 2], offset / 256 of the way.
+static int16_t interpOther(Dsp* dsp, int ch, int sampleNum, int offset) {
+  float v;
+  if(dsp_interp == DSP_INTERP_CUBIC) {
+    const int16_t *b = &dsp->channel[ch].decodeBuffer[sampleNum];
+    float t = offset / 256.0f, p0 = b[0], p1 = b[1], p2 = b[2], p3 = b[3];
+    v = p1 + 0.5f * t * (p2 - p0 + t * (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3 +
+                                         t * (3.0f * (p1 - p2) + p3 - p0)));
+  } else {
+    // The block's samples are ring entries interpCount - 16 .. - 1; the
+    // point is two samples before Gaussian's, its taps -3..4 around it.
+    uint32_t point = interpCount[ch] - 16 + (uint32_t)sampleNum - 4;
+    const float *k = sincTable[offset];
+    v = 0.0f;
+    for(int t = 0; t < 8; t++)
+      v += k[t] * interpRing[ch][(point - 3 + (uint32_t)t) & 31];
+  }
+  long out = lrintf(2.0f * v);   // the Gaussian sum's scale, before its >> 1
+  out = out < -0x8000 ? -0x8000 : (out > 0x7fff ? 0x7fff : out);
+  return (int16_t)(out >> 1);
+}
 
 Dsp* dsp_init(uint8_t *apu_ram) {
   Dsp* dsp = (Dsp*)malloc(sizeof(Dsp));
@@ -155,8 +217,33 @@ void dsp_cycle(Dsp* dsp) {
   dsp_handleNoise(dsp);
   // ct-recomp: every output sample also goes to the host, which takes the
   // exact count per frame (the buffer below holds 534 and reads back 534).
-  if (dsp_output_hook)
-    dsp_output_hook(totalL, totalR);
+  if (dsp_output_hook) {
+    int hostL = totalL, hostR = totalR;
+    // ct-recomp: the host can leave voices out of what it hears
+    // (dsp_host_mute; an audio pack replacing the music), except those the
+    // byte at dsp_host_keep_addr names. Echo, RAM and registers run as
+    // before; only the host's copy changes, and without the echo return.
+    uint8_t m = dsp_host_mute;
+    if(m && dsp_host_keep_addr >= 0)
+      m &= (uint8_t)~dsp->apu_ram[dsp_host_keep_addr & 0xffff];
+    if(m) {
+      hostL = hostR = 0;
+      for(int i = 0; i < 8; i++) {
+        if(m & (1 << i)) continue;
+        hostL += (dsp->channel[i].sampleOut * dsp->channel[i].volumeL) >> 6;
+        hostR += (dsp->channel[i].sampleOut * dsp->channel[i].volumeR) >> 6;
+        hostL = hostL < -0x8000 ? -0x8000 : (hostL > 0x7fff ? 0x7fff : hostL);
+        hostR = hostR < -0x8000 ? -0x8000 : (hostR > 0x7fff ? 0x7fff : hostR);
+      }
+      hostL = (hostL * dsp->masterVolumeL) >> 7;
+      hostR = (hostR * dsp->masterVolumeR) >> 7;
+      hostL = hostL < -0x8000 ? -0x8000 : (hostL > 0x7fff ? 0x7fff : hostL);
+      hostR = hostR < -0x8000 ? -0x8000 : (hostR > 0x7fff ? 0x7fff : hostR);
+      if(dsp->mute)
+        hostL = hostR = 0;
+    }
+    dsp_output_hook(hostL, hostR);
+  }
   // put it in the samplebuffer, if space
   if (dsp->sampleOffset < 534) {
     dsp->sampleBuffer[dsp->sampleOffset * 2] = totalL;
@@ -352,6 +439,8 @@ static void dsp_handleGain(Dsp* dsp, int ch) {
 }
 
 static int16_t dsp_getSample(Dsp* dsp, int ch, int sampleNum, int offset) {
+  if(dsp_interp != DSP_INTERP_GAUSS)  // ct-recomp: a host option, above
+    return interpOther(dsp, ch, sampleNum, offset);
   int16_t news = dsp->channel[ch].decodeBuffer[sampleNum + 3];
   int16_t olds = dsp->channel[ch].decodeBuffer[sampleNum + 2];
   int16_t olders = dsp->channel[ch].decodeBuffer[sampleNum + 1];
@@ -417,6 +506,7 @@ static void dsp_decodeBrr(Dsp* dsp, int ch) {
     older = old;
     old = s;
     dsp->channel[ch].decodeBuffer[i + 3] = s;
+    interpRing[ch][interpCount[ch]++ & 31] = (int16_t)s;   // ct-recomp: for dsp_interp
   }
   dsp->channel[ch].older = older;
   dsp->channel[ch].old = old;
@@ -573,6 +663,7 @@ void dsp_write(Dsp *dsp, uint8_t adr, uint8_t val) {
             dsp->apu_ram[(samplePointer + 1) & 0xffff] << 8;
         memset(dsp->channel[ch].decodeBuffer, 0,
                sizeof(dsp->channel[ch].decodeBuffer));
+        interpKeyOn(ch);  // ct-recomp: for dsp_interp
         dsp->channel[ch].gain = 0;
         dsp->channel[ch].adsrState = dsp->channel[ch].useGain ? 3 : 0;
       }

@@ -490,6 +490,15 @@ int sched_audio_take(int16_t *stereo, int max)
     return n;
 }
 
+/* port: the DSP's voice interpolation (third_party/snes/dsp.c dsp_interp) */
+void sched_set_audio_interp(int mode) { dsp_set_interp(mode); }
+int sched_audio_interp(void) { return dsp_interp; }
+void sched_set_voice_mute(uint8_t voices, int keep_aram)   /* port: audio packs */
+{
+    dsp_host_mute = voices;
+    dsp_host_keep_addr = keep_aram;
+}
+
 void sched_init(CPU *c)
 {
     cpu = c;

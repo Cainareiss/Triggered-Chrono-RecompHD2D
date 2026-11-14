@@ -176,11 +176,23 @@ if(NOT SDL2_FOUND AND CT_SDL2_SYSTEM_LIB)
 endif()
 # port: asset packs (frontend/packs, docs/ASSET-PACKS.md): content keys,
 # the dump, PNG reading, the atlas. No SDL: unit-tested on its own.
+# music.c: audio packs ([[music]], music.h), with the decoders' vendored
+# implementations in codecs.c (third_party/stb, third_party/dr_libs),
+# built without our warnings.
 add_library(ct_packs STATIC frontend/packs/packs.c frontend/packs/pngio.c
-    frontend/packs/packs_model.c)
-target_include_directories(ct_packs PUBLIC frontend/packs runtime PRIVATE third_party/cgltf)
+    frontend/packs/packs_model.c frontend/packs/music.c frontend/packs/codecs.c)
+target_include_directories(ct_packs PUBLIC frontend/packs runtime
+    PRIVATE third_party/cgltf third_party/stb third_party/dr_libs)
 target_compile_options(ct_packs PRIVATE ${CT_WARN})
+set_source_files_properties(frontend/packs/codecs.c PROPERTIES COMPILE_OPTIONS "-w")
 target_link_libraries(ct_packs PUBLIC m)
+# port: HD text (frontend/hdtext.h): the player's font over the game's text
+# boxes; stb_truetype's implementation in hdtext_ttf.c, without our warnings.
+add_library(ct_hdtext STATIC frontend/hdtext.c frontend/hdtext_ttf.c)
+target_include_directories(ct_hdtext PUBLIC frontend runtime PRIVATE third_party/stb)
+target_compile_options(ct_hdtext PRIVATE ${CT_WARN})
+set_source_files_properties(frontend/hdtext_ttf.c PROPERTIES COMPILE_OPTIONS "-w")
+target_link_libraries(ct_hdtext PUBLIC m)
 if(SDL2_FOUND)
     # port: the on-screen touch controller (touch.h) and its GL drawer.
     add_library(ct_input STATIC frontend/input.c frontend/touch.c frontend/touch_gl.c
@@ -326,11 +338,12 @@ if(CT_ANDROID)
     target_include_directories(main PRIVATE ${CMAKE_SOURCE_DIR}/test)
     target_link_libraries(main ct_tables_empty
         "$<LINK_LIBRARY:WHOLE_ARCHIVE,ct_sched,ct_interp,ct_runtime>" ct_input ct_hd2d
-        ct_packs ct_menu SDL2::SDL2 android log)
+        ct_packs ct_hdtext ct_menu SDL2::SDL2 android log)
     target_compile_options(main PRIVATE ${CT_WARN})
     return()   # no tests, games or install() rules on Android
 endif()
 ct_engine_exe(ct_boot_engine ${CMAKE_SOURCE_DIR}/tools/ct_boot.c ${CMAKE_SOURCE_DIR}/tools/tas_resync.c)
+target_link_libraries(ct_boot_engine ct_packs)   # port: --music-pack (music.h)
 if(SDL2_FOUND)
     # port: without --module it runs the first-run flow (frontend/firstrun.h):
     # find the ROM, build the module with tools/build_module.py, load it.
@@ -350,7 +363,7 @@ if(SDL2_FOUND)
         ${CMAKE_SOURCE_DIR}/frontend/firstrun.c ${CMAKE_SOURCE_DIR}/frontend/saves.c
         ${CMAKE_SOURCE_DIR}/frontend/qol.c   # port: quality of life (qol.h)
         ${CMAKE_SOURCE_DIR}/frontend/padtest.c)   # port: the controller test (padtest.h)
-    target_link_libraries(ct_sdl_engine ct_input ct_hd2d ct_packs ct_menu)
+    target_link_libraries(ct_sdl_engine ct_input ct_hd2d ct_packs ct_hdtext ct_menu)
     target_compile_definitions(ct_sdl_engine PRIVATE CT_FIRSTRUN
         CT_FIRSTRUN_GAME="${CT_GAME_ID}" CT_FIRSTRUN_DATA_DIR="${CT_ENGINE_DATA_DIR}")
 endif()
@@ -426,6 +439,22 @@ add_test(NAME packs COMMAND test_packs ${CMAKE_SOURCE_DIR} ${CMAKE_BINARY_DIR})
 # includes is installed); a gap here breaks every packaged first run.
 add_test(NAME install_layout COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_install_layout.py
          ${CMAKE_COMMAND} ${CMAKE_BINARY_DIR})
+# port: audio packs (music.h): synthetic tones in a test pack; the
+# decoders on tones ffmpeg makes (skipped without it).
+add_executable(test_music test/test_music.c)
+target_link_libraries(test_music ct_packs ct_runtime)
+target_compile_options(test_music PRIVATE ${CT_WARN})
+add_test(NAME music COMMAND test_music ${CMAKE_BINARY_DIR}/test_music_tmp)
+add_test(NAME music_codecs COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_music_codecs.py
+    $<TARGET_FILE:test_music> ${CMAKE_BINARY_DIR}/test_music_codecs_tmp)
+set_tests_properties(music_codecs PROPERTIES SKIP_RETURN_CODE 77)
+# port: HD text (hdtext.h) on a made-up text box, with a font found on the
+# system at run time (skipped without one).
+add_executable(test_hdtext test/test_hdtext.c)
+target_link_libraries(test_hdtext ct_hdtext)
+target_compile_options(test_hdtext PRIVATE ${CT_WARN})
+add_test(NAME hdtext COMMAND test_hdtext)
+set_tests_properties(hdtext PROPERTIES SKIP_RETURN_CODE 77)
 add_test(NAME pack_upscale COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_pack_upscale.py)   # port: asset packs
 add_test(NAME decode_calls COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_decode_calls.py)
 add_test(NAME funcs_meta COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_funcs_meta.py)

@@ -41,6 +41,39 @@ int ct_scene_capture(ct_scene *out)
     return 0;
 }
 
+/* ---- music and text (ABI 9) ---- */
+
+static const ct_music_hooks *music;
+static ct_module_text_fn text_fn;
+
+void ct_music_set_source(const ct_music_hooks *hooks)
+{
+    music = hooks;
+    if (!hooks)
+        snes_apu_port_hook = NULL;
+}
+const ct_music_hooks *ct_music_source(void) { return music; }
+void ct_music_watch(int on)
+{
+    snes_apu_port_hook = on && music ? music->port_write : NULL;
+}
+int ct_music_events(ct_music_event *out, int max)
+{
+    return music && music->events ? music->events(out, max) : -1;
+}
+
+void ct_text_set_source(ct_module_text_fn fn) { text_fn = fn; }
+int ct_text_available(void) { return text_fn != NULL; }
+int ct_text_capture(ct_text *out)
+{
+    out->n_lines = 0;
+    if (!text_fn || text_fn(out)) {
+        out->n_lines = 0;
+        return -1;
+    }
+    return 0;
+}
+
 int ct_module_load(const char *path, const char **err)
 {
     static char msg[512];
@@ -62,7 +95,8 @@ int ct_module_load(const char *path, const char **err)
     const ct_module_info *m = get();
     if (!m || m->abi != CT_MODULE_ABI || m->cpu_size != sizeof(CPU) ||
         m->func_size != sizeof(ct_func) || m->overlay_size != sizeof(ct_overlay_func) ||
-        m->scene_size != sizeof(ct_scene)) {
+        m->scene_size != sizeof(ct_scene) || m->music_size != sizeof(ct_music_hooks) ||
+        m->text_size != sizeof(ct_text)) {
         snprintf(msg, sizeof msg, "%s: built for a different engine (module ABI %u, engine %u)",
                  path, m ? m->abi : 0, CT_MODULE_ABI);
         *err = msg;
@@ -72,5 +106,7 @@ int ct_module_load(const char *path, const char **err)
     ct_tables_install(&m->tables);   /* the module stays loaded for good */
     ct_scene_set_source(m->scene);
     ct_rumble_set_source(m->rumble);
+    ct_music_set_source(m->music);
+    ct_text_set_source(m->text);
     return 0;
 }

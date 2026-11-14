@@ -64,6 +64,12 @@ int savestate_ready(const char **why)
     return sched_state_ready(why);
 }
 
+/* port: the oldest module ABI whose states this build still loads. ABI 9
+   added the music and text exports, which change nothing a state holds,
+   so states saved at ABI 7 (or 8) still load; a section whose layout did
+   change is refused by its length anyway. */
+#define SAVESTATE_ABI_MIN 7
+
 uint8_t *savestate_save(size_t *len, const char **why)
 {
     if (savestate_ready(why))
@@ -110,7 +116,7 @@ int savestate_load(const uint8_t *blob, size_t len, const char **why)
         w = "not a save state";
     else if (get32(blob + 8) != SAVESTATE_VERSION)
         w = "a save state of another format version";
-    else if (get32(blob + 12) != CT_MODULE_ABI)
+    else if (get32(blob + 12) > CT_MODULE_ABI || get32(blob + 12) < SAVESTATE_ABI_MIN)
         w = "a save state from another engine version (module ABI)";
     else if (memcmp(blob + 16, sha, 20))
         w = "a save state for another ROM";

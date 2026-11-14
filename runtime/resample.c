@@ -8,9 +8,13 @@
 #define BETA   8.0
 
 /* Kernel table per filter: PHASES+1 rows of RS_TAPS weights, one row per
-   fractional position (the last row lets phase interpolation run to 1). */
-static float table[PHASES + 1][RS_TAPS];
-static float table_cutoff = -1.0f;
+   fractional position (the last row lets phase interpolation run to 1).
+   port: a few cutoffs are kept, so resamplers at different rates (the
+   game's sound and an audio pack's stream) don't rebuild each other's. */
+#define TABLES 4
+static float tables[TABLES][PHASES + 1][RS_TAPS];
+static float table_cutoffs[TABLES] = {-1.0f, -1.0f, -1.0f, -1.0f};
+static int table_next;
 
 static double bessel_i0(double x)
 {
@@ -24,8 +28,14 @@ static double bessel_i0(double x)
     return sum;
 }
 
-static void build_table(float cutoff)
+static float (*table_for(float cutoff))[RS_TAPS]
 {
+    for (int k = 0; k < TABLES; k++)
+        if (table_cutoffs[k] == cutoff)
+            return tables[k];
+    int k = table_next;
+    table_next = (table_next + 1) % TABLES;
+    float (*table)[RS_TAPS] = tables[k];
     const double pi = 3.14159265358979323846;
     double norm = bessel_i0(BETA);
     for (int p = 0; p <= PHASES; p++) {
@@ -42,7 +52,8 @@ static void build_table(float cutoff)
         for (int t = 0; t < RS_TAPS; t++)   /* unity gain at DC */
             table[p][t] = (float)(table[p][t] / sum);
     }
-    table_cutoff = cutoff;
+    table_cutoffs[k] = cutoff;
+    return table;
 }
 
 void rs_init(resampler *r, double in_hz, double out_hz)
@@ -55,8 +66,7 @@ void rs_init(resampler *r, double in_hz, double out_hz)
     r->cutoff = (float)(0.95 * 0.5 * lower / in_hz);
     r->len = RS_TAPS;   /* silence as history */
     r->pos = HALF - 1;
-    if (table_cutoff != r->cutoff)
-        build_table(r->cutoff);
+    table_for(r->cutoff);
 }
 
 void rs_set_adjust(resampler *r, double factor)
@@ -68,8 +78,7 @@ int rs_process(resampler *r, const int16_t *in, int n, int16_t *out, int max)
 {
     if (n > 4096 || r->len + n > 4096 + RS_TAPS)
         return -1;
-    if (table_cutoff != r->cutoff)
-        build_table(r->cutoff);
+    float (*table)[RS_TAPS] = table_for(r->cutoff);
     for (int k = 0; k < n; k++) {
         r->buf[0][r->len + k] = in[2 * k];
         r->buf[1][r->len + k] = in[2 * k + 1];

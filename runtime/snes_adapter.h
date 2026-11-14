@@ -23,6 +23,11 @@ void snes_hw_soft_reset(void);   /* the reset button: see sched.c soft_reset */
 void snes_apu_run(uint32_t spc_cycles);
 void snes_apu_catch_up(uint64_t master);
 extern void (*snes_apu_sync)(unsigned early);
+/* port: told of every CPU write to an APU port (0-3, mirrors included),
+   with what the CPU has last written to each port, this write included;
+   for watching the commands a game sends its sound program (module.h
+   ct_music_hooks). Reads nothing back; NULL: none. */
+extern void (*snes_apu_port_hook)(unsigned port, uint8_t value, const uint8_t ports[4]);
 
 /* Master clocks since power-on at the current instruction boundary (the
    frame scheduler sets it; general DMA aligns to it). */

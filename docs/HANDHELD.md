@@ -133,7 +133,9 @@ The tabs: **Look** (renderer, HD-2D look, aspect, the 3D camera's tilt and zoom,
 **Controls** (what each back button does, the quick keys, fast-forward, always run,
 turbo, pausing, rumble and its test), **Co-op** (on / auto / off, who plays which party member), **Packs**,
 **Save states** (load and save the slots, with a picture of each; resume; screenshot),
-**Audio** (volume, mute in the background) and **About** (version, licenses, Quit).
+**Audio** (volume, mute in the background, sample interpolation) and **About** (version,
+licenses, Quit). The **Look** tab also has the HD text style and size, once you have set a
+font (below).
 Every change is saved at once. The game waits between two frames while the menu is open,
 so a state saved from it is (nearly always) the picture behind it. The touchscreen works
 the menu too (tap a row; tap the left or right of a value).
@@ -428,6 +430,29 @@ smooth it looks depends on the refresh rate:
   yet: it hasn't been measured in a real Game Mode session.
 - **`--log-pacing`:** prints frame-time statistics when started from a terminal, and
   every exit prints them for the whole run.
+
+## Your own music and fonts
+
+Both are optional, and the project ships neither: you add files of your own to the data
+folder (`~/.local/share/ct-recomp/ct/`; in Desktop Mode, the Dolphin file manager shows
+it with hidden files on, Ctrl+.).
+
+- **Audio packs** replace the game's songs with Ogg Vorbis, FLAC or WAV files: a
+  `[[music]]` entry per song in a pack's `pack.toml`, under `ct/packs/NAME/`. Start once
+  from a terminal with `--music-log` to see each song's id as it plays. Add
+  `--pack NAME` to the launch options once (it is remembered). Sound effects stay the
+  console's; while a song is replaced they play without echo. **A pack made from the
+  game's music is for your personal use only: never share or upload it.** Details:
+  [ASSET-PACKS.md](ASSET-PACKS.md#music-audio-packs). Decoding a song costs well under a
+  millisecond a frame.
+- **HD text:** put a `.ttf` or `.otf` font in `ct/fonts/` and add
+  `--hd-font NotoSans-Bold.ttf` to the launch options once (it is remembered, as
+  `hd_font=` in `settings.ini`). The dialogue boxes' text is then drawn with it at the
+  screen's resolution; the menu's **Look** tab sets its style and size. It needs the GL
+  renderer (the HD-2D renderer; with the original look the game switches to it, as for
+  asset packs). Free fonts to download: [USER-GUIDE.md](USER-GUIDE.md#hd-text).
+- **Sample interpolation** (menu, **Audio**): the console's Gaussian (default), or
+  cubic or sinc for a crisper sound on the handheld's speakers or headphones.
 
 ## Quality of life on a handheld
 

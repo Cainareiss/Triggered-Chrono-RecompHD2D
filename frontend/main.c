@@ -4,7 +4,7 @@
  *
  * usage: ct_sdl [--scale N] [--frames N] [--dump DIR] [--needed-hw FILE] [--fast]
  *               [--require-render] [--log-input] [--interp-only]
- *               [--record FILE] [--script FILE] [--log-audio]
+ *               [--record FILE] [--script FILE] [--log-audio] [--music-log] [--hd-font FILE]
  *               [--require-no-underrun]
  *
  * 256x224, integer scaled (--scale, default 3); paced to 60.0988 Hz
@@ -29,7 +29,11 @@
  * sound card's clock can't drift apart. An empty queue at a frame is an
  * underrun; each exit prints the count. --log-audio prints the queue
  * level and rate factor every frame; --require-no-underrun exits 1 if any
- * happened.
+ * happened. --music-log prints the songs the game asks for (port: audio
+ * packs, music.h), with the pack file that replaces each. --hd-font FILE
+ * draws the text boxes with that TrueType / OpenType font (port: HD text,
+ * hdtext.h; settings.ini hd_font=, a bare name in the fonts/ folder of the
+ * data folder; it needs the GL renderer and switches to it, as packs do).
  *
  * Every exit prints its reason ("ct_sdl: exit: ..."); startup prints each
  * joystick and the button mapping. --log-input prints every key and
@@ -187,6 +191,8 @@
 #include "input.h"
 #include "interp.h"
 #include "packs.h"    /* port: asset packs (docs/ASSET-PACKS.md) */
+#include "music.h"    /* port: audio packs: [[music]] in the same packs */
+#include "hdtext.h"   /* port: HD text: the player's font over the text boxes */
 #include "png.h"
 #include "replay.h"
 #include "resample.h"
@@ -350,12 +356,13 @@ static double level_avg = AUDIO_TARGET;
 static key_filter keys;
 static uint16_t live_buttons;
 static uint64_t perf_freq, next_frame;
-static int running = 1, fast, log_input, log_audio;
+static int running = 1, fast, log_input, log_audio, log_music;
 
 /* port: asset packs (frontend/packs, docs/ASSET-PACKS.md). They live in
    the per-game data folder, <pref path>/packs/NAME; a NAME with a slash
    in it is a directory of its own. */
 static const char *pack_dump;   /* --pack-dump NAME */
+static int want_prov(void) { return packs_active() || pack_dump || hdtext_ready(); }
 #define MAX_PACK_NAMES 16
 static char pack_names[MAX_PACK_NAMES][256];   /* loaded, highest priority first */
 static int n_pack_names, packs_given;          /* --pack seen: beats settings.ini */
@@ -400,20 +407,57 @@ static char *pack_dir(const char *game_id, const char *name)
     return p;
 }
 
-/* Load the named packs; returns how many replacements. */
-static int packs_setup(const char *game_id)
+/* port: HD text (hdtext.h): settings.ini hd_font=PATH (a name without a
+   slash: the fonts/ folder in the data folder), --hd-font PATH. The
+   picture with the console's glyphs taken out, and the overlay, are made
+   once a frame (hdtext_frame_now) and drawn by present_hd2d and the
+   screenshots. */
+static char hd_font[4096];
+static int hd_font_given, hd_text_size = 100, hd_text_style;
+static hdtext_result hd_text_now;
+
+static void hd_font_path(const char *game_id, const char *name, char *out, size_t n)
 {
-    const char *dirs[MAX_PACK_NAMES];
+    if (strchr(name, '/') || strchr(name, '\\')) {
+        snprintf(out, n, "%s", name);
+        return;
+    }
+    char *dir = SDL_GetPrefPath("ct-recomp", game_id);
+    snprintf(out, n, "%sfonts/%s", dir ? dir : "./", name);
+    SDL_free(dir);
+}
+
+static int hd_font_load(const char *game_id)
+{
+    char path[4200], err[4400];
+    if (!hd_font[0] || !strcmp(hd_font, "none"))
+        return hdtext_load_font(NULL, err, sizeof err);
+    hd_font_path(game_id, hd_font, path, sizeof path);
+    if (hdtext_load_font(path, err, sizeof err)) {
+        fprintf(stderr, "ct_sdl: HD text: %s\n", err);
+        return -1;
+    }
+    fprintf(stderr, "ct_sdl: HD text: font %s\n", path);
+    return 0;
+}
+
+/* Load the named packs (their art only when `art`; their [[music]]
+   always: it needs no GL); returns how many art replacements. */
+static int packs_setup_ex(const char *game_id, int art)
+{
+    const char *dirs[MAX_PACK_NAMES] = {0};
     char *owned[MAX_PACK_NAMES];
     int n = 0;
     for (int k = 0; k < n_pack_names; k++)
         if ((owned[n] = pack_dir(game_id, pack_names[k])))
             dirs[n] = owned[n], n++;
-    int r = n ? packs_load(dirs, n) : 0;
+    int r = n && art ? packs_load(dirs, n) : 0;
+    music_load(dirs, n);   /* port: audio packs */
     for (int k = 0; k < n; k++)
         free(owned[k]);
     return r;
 }
+static int packs_setup(const char *game_id) { return packs_setup_ex(game_id, 1); }
 
 /* The 3D diorama's tiles -> atlas entries (hd2d_pack_tiles). */
 static int pack_tile_lookup(void *user, unsigned chr, int pal, int bpp, const uint16_t *vram,
@@ -660,8 +704,9 @@ static void take_shots(long f)
     for (int k = 0; k < n_shots; k++) {
         if (shots[k].frame != f)
             continue;
-        int ok = write_shot(shots[k].path, sched_frame(), sched_layers(), sched_behind(),
-                            sched_behind_layers(), sched_ppu_state_get());
+        int ok = write_shot(shots[k].path, hd_text_now.bgrx ? hd_text_now.bgrx : sched_frame(),
+                            hd_text_now.layers ? hd_text_now.layers : sched_layers(),
+                            sched_behind(), sched_behind_layers(), sched_ppu_state_get());
         fprintf(stderr, "ct_sdl: frame %ld: %s %s\n", f, ok ? "wrote" : "cannot write",
                 shots[k].path);
         if (split_on) {   /* port: the second view beside it */
@@ -678,8 +723,9 @@ static void present_hd2d(void)
     int w, h;
     SDL_GL_GetDrawableSize(win, &w, &h);
     hd2d_set_scene(scene_now());
-    hd2d_render(sched_frame(), sched_layers(), sched_behind(), sched_behind_layers(),
-                sched_ppu_state_get(), w, h, 0);
+    hd2d_render(hd_text_now.bgrx ? hd_text_now.bgrx : sched_frame(),
+                hd_text_now.layers ? hd_text_now.layers : sched_layers(), sched_behind(),
+                sched_behind_layers(), sched_ppu_state_get(), w, h, 0);
     if (menu_is_open()) {   /* port: the menu, after the picture, before the swap */
         menu_draw(w, h);
         take_menu_shot(w, h);
@@ -861,8 +907,9 @@ static int hd2d_key(SDL_Scancode sc)
         return 0;
     if (sc == SDL_SCANCODE_F5 && n_pack_names) {   /* port: reload the packs */
         int n = packs_reload();
+        music_reload();
         packs_upload();
-        sched_set_prov(packs_active() || pack_dump);
+        sched_set_prov(want_prov());
         static char msg[48];
         snprintf(msg, sizeof msg, n < 0 ? "Packs: none readable" : "Packs reloaded: %d", n);
         fprintf(stderr, "ct_sdl: %s\n", msg);
@@ -941,7 +988,7 @@ static int parse_quality(const char *v, int render_scale, float *out)
 
 static void settings_load(void)
 {
-    char *path = settings_path(), line[128], val[64];
+    char *path = settings_path(), line[4352], val[64];
     FILE *f = path ? fopen(path, "r") : NULL;
     while (f && fgets(line, sizeof line, f)) {
         if (settings_parse_line(line))   /* port: the registry's keys (settings.h) */
@@ -949,6 +996,10 @@ static void settings_load(void)
         if (!strncmp(line, "packs=", 6) && !packs_given) {   /* port: asset packs */
             line[strcspn(line, "\r\n")] = 0;
             pack_names_parse(line + 6);
+        }
+        else if (!strncmp(line, "hd_font=", 8) && !hd_font_given) {   /* port: HD text */
+            line[strcspn(line, "\r\n")] = 0;
+            snprintf(hd_font, sizeof hd_font, "%.4095s", line + 8);
         }
         else if (sscanf(line, "window=%dx%d", &wst.w, &wst.h) == 2 && wst.w >= 256 &&
                  wst.h >= 224 && wst.w <= 16384 && wst.h <= 16384)
@@ -988,6 +1039,8 @@ static void settings_save(void)
                 fprintf(f, "%s%s", k ? "," : "", pack_names[k]);
             fputc('\n', f);
         }
+        if (hd_font[0])   /* port: HD text */
+            fprintf(f, "hd_font=%s\n", hd_font);
         if (wst.have_size)
             fprintf(f, "window=%dx%d\n", wst.w, wst.h);
         if (wst.have_pos)
@@ -1347,7 +1400,7 @@ static void packs_apply(void)
     packs_unload();
     int r = n_pack_names ? packs_setup(menu_game_id) : 0;
     packs_upload();
-    sched_set_prov(packs_active() || pack_dump);
+    sched_set_prov(want_prov());
     char msg[64];
     int n;
     packs_entries(&n);
@@ -1394,8 +1447,9 @@ static void run_pack_reload(void *u)
 {
     (void)u;
     int n = packs_reload();
+    music_reload();
     packs_upload();
-    sched_set_prov(packs_active() || pack_dump);
+    sched_set_prov(want_prov());
     char msg[48];
     snprintf(msg, sizeof msg, n < 0 ? "Packs: none readable" : "Packs reloaded: %d", n);
     osd(msg);
@@ -1428,7 +1482,7 @@ static void set_dump(void *u, int v)
     } else if (!v && pack_dump_live) {
         pack_dump_live_close();
         pack_dump = NULL;
-        sched_set_prov(packs_active());
+        sched_set_prov(want_prov());
     }
 }
 static int can_dump(void *u) { (void)u; return hd2d_mode && (!pack_dump || pack_dump_live); }
@@ -1498,11 +1552,30 @@ static void packs_refresh(void)
                                  .text = folder_text, .help = packs_folder});
 }
 
+/* port: HD text */
+static const char *hd_font_text(void *u, char *buf, size_t n)
+{
+    (void)u;
+    const char *p = hdtext_font_path();
+    if (!p)
+        return hd_font[0] && strcmp(hd_font, "none") ? "Not loaded" : "None";
+    const char *b = strrchr(p, '/');
+    snprintf(buf, n, "%s", b ? b + 1 : p);
+    return buf;
+}
+static int hd_text_on(void *u) { (void)u; return hdtext_ready(); }
+static int get_hd_style(void *u) { (void)u; return hd_text_style; }
+static void set_hd_style(void *u, int v) { (void)u; hdtext_set_style(hd_text_style = v); }
+static int get_hd_size(void *u) { (void)u; return hd_text_size; }
+static void set_hd_size(void *u, int v) { (void)u; hdtext_set_size(hd_text_size = v); }
+
 /* Audio */
 static int get_volume(void *u) { (void)u; return volume; }
 static void set_volume(void *u, int v) { (void)u; volume = v; }
 static int get_mute_unfocused(void *u) { (void)u; return mute_unfocused; }
 static void set_mute_unfocused(void *u, int v) { (void)u; mute_unfocused = v; }
+static int get_audio_interp(void *u) { (void)u; return sched_audio_interp(); }
+static void set_audio_interp(void *u, int v) { (void)u; sched_set_audio_interp(v); }
 
 /* About */
 static const char *version_text(void *u, char *buf, size_t n)
@@ -1615,6 +1688,25 @@ static void register_settings(void)
                                  .step = 25, .format = "%d%%", .ini_div = 100,
                                  .get = get_gyro_strength, .set = set_gyro_strength,
                                  .enabled = on_gyro, .help = "Camera degrees per degree turned."});
+    /* port: HD text (hdtext.h) */
+    settings_register(&(setting){.label = "HD text font", .category = "Look", .type = SETTING_INFO,
+                                 .text = hd_font_text,
+                                 .help = "Text boxes drawn with your own font at the screen's "
+                                         "resolution: hd_font=FILE in settings.ini (fonts/ in "
+                                         "the data folder), or --hd-font. Takes effect on the "
+                                         "next start."});
+    static const char *const hd_style_labels[] = {"Shadow", "Outline", "Plain"};
+    static const char *const hd_style_values[] = {"shadow", "outline", "plain"};
+    settings_register(&(setting){
+        .key = "hd_text_style", .label = "HD text style", .category = "Look",
+        .type = SETTING_ENUM, .options = hd_style_labels, .values = hd_style_values, .count = 3,
+        .get = get_hd_style, .set = set_hd_style, .enabled = hd_text_on,
+        .help = "A drop shadow like the console's, an outline all round, or none."});
+    settings_register(&(setting){.key = "hd_text_size", .label = "HD text size",
+                                 .category = "Look", .type = SETTING_INT, .min = 50, .max = 150,
+                                 .step = 5, .format = "%d%%", .get = get_hd_size,
+                                 .set = set_hd_size, .enabled = hd_text_on,
+                                 .help = "The font's size against the console's."});
     settings_register(&(setting){.label = "Debug view", .category = "Look", .type = SETTING_ENUM,
                                  .options = debug_labels, .count = HD2D_DEBUGS, .get = get_debug,
                                  .set = set_debug, .enabled = on_hd2d, .flags = SETTING_NO_SAVE,
@@ -1730,6 +1822,14 @@ static void register_settings(void)
                                  .category = "Audio", .type = SETTING_BOOL,
                                  .get = get_mute_unfocused, .set = set_mute_unfocused,
                                  .help = "Silent while another window has the focus."});
+    static const char *const interp_labels[] = {"Gaussian (console)", "Cubic", "Sinc"};
+    static const char *const interp_values[] = {"gaussian", "cubic", "sinc"};
+    settings_register(&(setting){
+        .key = "audio_interp", .label = "Sample interpolation", .category = "Audio",
+        .type = SETTING_ENUM, .options = interp_labels, .values = interp_values, .count = 3,
+        .get = get_audio_interp, .set = set_audio_interp,
+        .help = "How the sound chip blends its samples. Gaussian is the console's own, slightly "
+                "muffled; cubic and sinc are crisper."});
 
     /* About */
     settings_register(&(setting){.label = APP_NAME, .category = "About", .type = SETTING_INFO,
@@ -2032,6 +2132,34 @@ static void set_input(long f)
     }
 }
 
+/* port: audio packs (music.h): the game module's music events of this
+   frame to the player, and the console's music voices muted while a
+   replacement plays (the sound effects' voices stay). The module starts
+   watching the APU ports once there is a song to replace or a log to
+   write. A jump in the frame count (a save state loaded) stops the
+   replacement: the game's song may be another one now. */
+static void music_frame(long f)
+{
+    static int watching;
+    static long last = -1;
+    if (!watching && (music_count() || log_music) && ct_music_source()) {
+        ct_music_watch(1);
+        watching = 1;
+    }
+    if (!watching)
+        return;
+    long now = sched_frame_count();
+    if (last >= 0 && now != last + 1)
+        music_stop();
+    last = now;
+    ct_music_event ev[16];
+    int n = ct_music_events(ev, 16);
+    for (int k = 0; k < n; k++)
+        music_event(&ev[k], f);
+    const ct_music_hooks *h = ct_music_source();
+    sched_set_voice_mute(music_replacing() ? 0xFF : 0, h ? h->sfx_voices_aram : -1);
+}
+
 /* This frame's DSP output through the resampler into the SDL queue, with
    rate control toward AUDIO_TARGET. */
 static void queue_audio(long f)
@@ -2048,6 +2176,8 @@ static void queue_audio(long f)
     double adjust = rs_rate_control(level_avg, AUDIO_TARGET, AUDIO_MAX_DEV);
     rs_set_adjust(&rs, adjust);
     int n_out = rs_process(&rs, in, n_in, out, 8192);
+    if (n_out > 0)
+        music_mix(out, n_out);   /* port: audio packs */
     if (log_audio)
         fprintf(stderr, "ct_sdl: frame %ld audio queued %u avg %.0f rate x%.4f in %d out %d%s\n",
                 f, level, level_avg, adjust, n_in, n_out, playing && !level ? " UNDERRUN" : "");
@@ -2442,6 +2572,7 @@ static void on_frame(long f)
     if (hash_log)   /* port */
         write_hash(f);
     int show = qol_frame(f);   /* port: QOL: fast-forward and the battery's 30 Hz skip some */
+    music_frame(f);   /* port: audio packs */
     queue_audio(f);
     {   /* port: simulated rumble on the pads in play; none while fast-forwarding */
         SDL_GameController *const pads[RUMBLE_PADS] = {
@@ -2497,6 +2628,27 @@ static void on_frame(long f)
         } else {
             hd2d_pack_map(NULL);
         }
+    }
+    if (hd2d_mode) {
+        /* port: HD text: the text boxes' lines, the console's glyphs out,
+           the overlay at the screen's scale; every frame, shown or not, as
+           a screenshot may draw it */
+        memset(&hd_text_now, 0, sizeof hd_text_now);
+        if (hdtext_ready() && sched_prov()) {
+            static ct_text txt;
+            int ww = 0, wh = 0;
+            if (win)
+                SDL_GL_GetDrawableSize(win, &ww, &wh);
+            wh = wh > shot_h ? wh : shot_h;
+            int scale = (wh + SCHED_HEIGHT - 1) / SCHED_HEIGHT;
+            const sched_ppu_state *ps = sched_ppu_state_get();
+            int bright = ps ? ps->brightness : 15;
+            if (!ct_text_capture(&txt))
+                hdtext_frame(&txt, sched_prov(), sched_prov_mem(), bright, sched_frame(),
+                             sched_layers(), scale, &hd_text_now);
+        }
+        hd2d_set_text_overlay(hd_text_now.rgba, hd_text_now.w, hd_text_now.h, hd_text_now.x,
+                              hd_text_now.y, hd_text_now.cw, hd_text_now.ch, hd_text_now.gen);
     }
     if (show)
         present_now();
@@ -2699,7 +2851,7 @@ static void usage(FILE *out)
 {
     fprintf(out, "usage: ct_sdl [--scale N] [--frames N] [--dump DIR]\n         "
             "[--needed-hw FILE] [--fast] [--require-render] [--log-input]\n         "
-            "[--interp-only] [--record FILE] [--script FILE] [--log-audio]\n         "
+            "[--interp-only] [--record FILE] [--script FILE] [--log-audio] [--music-log] [--hd-font FILE]\n         "
             "[--require-no-underrun] [--hd2d] [--no-hd2d]\n         "
             "[--preset off|subtle|hd2d|deck|hd2d3d|deck3d] [--render-scale 50-100|auto]\n         "
             "[--sharpen 0-1|auto] [--ao 0-1|auto]\n         "
@@ -2823,6 +2975,10 @@ int main(int argc, char **argv)
             log_input = 1;
         else if (!strcmp(argv[k], "--log-audio"))
             log_audio = 1;
+        else if (!strcmp(argv[k], "--music-log")) {   /* port: audio packs */
+            log_music = 1;
+            music_set_log(stdout);
+        }
         else if (!strcmp(argv[k], "--require-no-underrun"))
             require_no_underrun = 1;
         else if (!strcmp(argv[k], "--interp-only")) {
@@ -2900,6 +3056,9 @@ int main(int argc, char **argv)
             sched_set_views(2);
         } else if (!strcmp(argv[k], "--pack-dump") && k + 1 < argc) {   /* port */
             pack_dump = argv[++k];
+        } else if (!strcmp(argv[k], "--hd-font") && k + 1 < argc) {   /* port: HD text */
+            snprintf(hd_font, sizeof hd_font, "%s", argv[++k]);
+            hd_font_given = 1;
         } else if (!strcmp(argv[k], "--pack") && k + 1 < argc) {   /* port: asset packs */
             if (!packs_given)
                 n_pack_names = 0;   /* the command line replaces the saved list */
@@ -3029,8 +3188,23 @@ int main(int argc, char **argv)
             hd2d_mode = 0;
         /* port: asset packs replace art in the GL renderer: with packs and
            the plain look, draw through it with the original look. */
+        /* port: HD text needs the GL renderer too */
+        if (hd_font[0] && strcmp(hd_font, "none")) {
+            if (no_hd2d)
+                fprintf(stderr, "ct_sdl: --no-hd2d: no HD text (it needs the GL renderer)\n");
+            else if (!hd_font_load(game_id) && !hd2d_mode) {
+                hd2d_mode = 1;
+                if (!preset_given) {
+                    preset_forced = hd2d_preset();
+                    hd2d_set_preset(HD2D_OFF);
+                }
+                fprintf(stderr, "ct_sdl: HD text: drawing through the GL renderer\n");
+            }
+        }
         if (n_pack_names && no_hd2d) {
-            fprintf(stderr, "ct_sdl: --no-hd2d: asset packs not loaded (they need the GL renderer)\n");
+            fprintf(stderr, "ct_sdl: --no-hd2d: asset packs' art not loaded (it needs the GL "
+                            "renderer); their music is\n");
+            packs_setup_ex(game_id, 0);
         } else if (n_pack_names) {
             int r = packs_setup(game_id);
             if (r < 0)
@@ -3166,6 +3340,7 @@ int main(int argc, char **argv)
     if (!audio)
         fprintf(stderr, "ct_sdl: no audio: %s\n", SDL_GetError());
     rs_init(&rs, SCHED_AUDIO_HZ, RATE);
+    music_set_rate(RATE);   /* port: audio packs mix at the output rate */
     print_controllers();
     pad = open_controller();
     if (pad)
@@ -3201,7 +3376,7 @@ int main(int argc, char **argv)
     interp_reset(&cpu);
     sched_init(&cpu);
     sched_set_behind(hd2d_mode && hd2d_wants_behind());   /* port: see on_frame */
-    sched_set_prov(packs_active());   /* port: asset packs read it each frame */
+    sched_set_prov(want_prov());   /* port: asset packs and HD text read it each frame */
     if (pack_dump) {   /* port: asset pack dump (docs/ASSET-PACKS.md) */
         char *dir = pack_dir(game_id, pack_dump);
         const char *base = strrchr(pack_dump, '/') ? strrchr(pack_dump, '/') + 1 : pack_dump;
