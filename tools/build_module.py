@@ -79,8 +79,11 @@ def main(argv: list[str]) -> int:
                   capture=True).replace(';', ' ').split()   # a CMake list
 
     sources = [os.path.join(gen, f'{m}.c') for m in modules]
-    sources += [os.path.join(gen, 'ct_overlays.c'), os.path.join(gen, 'ct_funcs.c'),
-                os.path.join(game, 'hooks.c'), os.path.join(ROOT, 'runtime', 'module_entry.c')]
+    # The game's own C (its extern hooks, its scene description): every .c
+    # at the top of its directory.
+    game_c = sorted(os.path.join(game, f) for f in os.listdir(game) if f.endswith('.c'))
+    sources += [os.path.join(gen, 'ct_overlays.c'), os.path.join(gen, 'ct_funcs.c'), *game_c,
+                os.path.join(ROOT, 'runtime', 'module_entry.c')]
     cflags = ['-O2', '-fPIC', '-fvisibility=hidden', '-std=c11', '-DCT_TEST_BUILD',
               '-DCT_TABLES_DEFINE', '-I', gen, '-I', os.path.join(ROOT, 'runtime')]
     if a.native:
