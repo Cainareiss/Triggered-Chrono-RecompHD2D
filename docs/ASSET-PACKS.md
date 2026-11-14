@@ -6,10 +6,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 An asset pack replaces the game's art, one 8x8 background tile or one sprite at a time,
 with pictures of any resolution. The renderer draws them at the screen's resolution,
-not the console's 256×224.
+not the console's 256×224. A pack can also replace the game's songs with recordings of
+your own ([Music: audio packs](#music-audio-packs)).
 
-The project ships no packs and no art. You make a pack on your own computer, from your
-own ROM:
+The project ships no packs, no art and no music. You make a pack on your own computer,
+from your own ROM:
 
 1. **Dump** the tiles and sprites the game shows while you play.
 2. **Upscale** them into placeholders that are sharper than the originals.
@@ -27,10 +28,17 @@ own ROM:
   and you can share it under any terms you choose. That includes a pack whose pictures
   are all your own work, keyed to the game's tiles. A picture traced over or edited from
   a dumped one is still derived from the game's art.
+- **An audio pack made from the game's music is for your personal use only.** A
+  recording of the soundtrack, a rip, a remaster or an arrangement of it, or a
+  recording of the game playing, is the game's music, or derived from it. Never share,
+  upload or distribute such a pack, or any file in it. Music you composed and
+  recorded yourself is yours to share under the terms you choose; keyed to the game's
+  song ids, it is still only your music.
 - **The project's packages never contain a pack.** `tools/check_dist.py` fails any
-  package that holds a `pack.toml`, or a picture named by a content key under
-  `tiles/`, `sprites/` or `objects/`
-  ([PACKAGING.md](PACKAGING.md)). Packs live only in your data folder.
+  package that holds a `pack.toml`, a picture named by a content key under
+  `tiles/`, `sprites/` or `objects/`, or a sound file (`.ogg`, `.oga`, `.opus`,
+  `.flac`, `.wav`, `.mp3`, or Ogg or FLAC data under any name) in a `music/` or
+  `packs/` folder ([PACKAGING.md](PACKAGING.md)). Packs live only in your data folder.
 
 ## Where packs live
 
@@ -283,6 +291,120 @@ dialect of `hires.txt`, so `pack.toml` is the definition here.
 - **From RT64** (MIT): a database keyed by content hash, PNG for authors, and later an
   optional packed container (pre-compressed textures in one file) for loading speed.
   For now a pack is only PNG plus the manifest, loaded in full at start and on F5.
+
+## Music: audio packs
+
+A pack's `pack.toml` can map the game's songs to sound files of your own. While a
+mapped song plays, the console's music is muted and your file plays instead, looped
+and faded as the game asks. Sound effects stay the console's.
+
+**Legal:** read [the notes above](#legal-notes-read-these-first). A pack holding the
+game's music, in any form, is for your personal use only.
+
+### Making one
+
+1. **Find the song ids.** Play with `--music-log` and the engine prints every song the
+   game asks for, its fades and its stops, and whether a pack replaces it:
+
+   ```
+   ct_sdl --music-log
+   music: frame 1999: play song 0x11 (not in a pack)
+   music: frame 3546: volume to 255/255 over 231 frames
+   music: frame 3551: play song 0x12 (not in a pack)
+   music: frame 3997: volume to 0/255 over 66 frames
+   ```
+
+   `ct_boot --music-log` prints the same headless (with `--script` and a replay).
+2. **Put the files in a pack.** Ogg Vorbis (`.ogg`), FLAC (`.flac`) or WAV (`.wav`),
+   any sample rate, mono or stereo (more channels: the first two are played):
+
+   ```
+   ~/.local/share/ct-recomp/ct/packs/mymusic/
+       pack.toml
+       music/battle.ogg
+   ```
+3. **Map them in `pack.toml`:**
+
+   ```toml
+   [pack]
+   version = 1
+   name = "mymusic"
+
+   [[music]]
+   song = 0x45                 # the game's song id, as --music-log prints it
+   file = "music/battle.ogg"   # relative to the pack
+   loop = true                 # at the end, go on from loop_start (the default)
+   loop_start = 441000         # in the file's samples (frames), default 0
+   loop_end = 5292000          # default: the file's end
+   volume = 0.8                # 0-4, default 1
+   fade = "game"               # follow the game's fades (default); "none": ignore them
+   ```
+
+   Only `song` and `file` are needed. A song that should play once (a fanfare) has
+   `loop = false`.
+4. **Play with it:** `ct_sdl --pack mymusic`. Music and art packs stack like art packs
+   (the first pack that maps a song wins), and are remembered in `settings.ini` the
+   same way. F5 and the menu's **Reload packs** read the music again too. Audio packs
+   work in every look, including the original picture with `--no-hd2d` (only the art
+   needs the GL renderer).
+
+The engine-only build (`ct_sdl_engine`, the AppImage, the Flatpak) takes the same
+options; the music is followed by the game module (it needs no ROM data in the engine).
+
+### How it works
+
+1. **The game's sound commands** (`game/ct/audio.c`). The game asks its sound program
+   for everything through a block of four bytes at WRAM `$7E1E00` (a command and three
+   arguments) and a call to `$C70004` (`Audio_ProcessCommand`, `$C70140`), which sends
+   the block through the APU ports, `$2143` down to `$2140`, the command last
+   (`$C7061C`; a song's through `$C70A39`). The engine passes every CPU write to an APU
+   port to the game module (`snes_apu_port_hook`, `ct_music_hooks` in
+   `runtime/module.h`); a write to port 0 while the four ports equal `$1E00-$1E03` is a
+   command. The ones that matter here:
+
+   | Command | Arguments | What it does |
+   | --- | --- | --- |
+   | `$10`, `$11`, `$14`, `$15` | song id | Load the song and play it. The CPU then uploads the song's data to the SPC700 (up to about 50 frames) and clears `$1E00` when done; that is when the song starts, and when the replacement does. Song 0 is silence. |
+   | `$81` | time, volume | The music's volume to `volume` (0-255) over `time` steps of about 2.06 frames (32 steps were measured at 66 frames); 0: at once |
+   | `$F0` | | Stop the music |
+   | `$18`-`$2F` | effect id, pan | Sound effects (not followed) |
+
+   The same song asked for again (a new room with the same music) plays on without a
+   restart, as the console's does. A command sent again because the SPC700 was slow to
+   answer is one event.
+2. **Music and sound effects apart.** The sound program plays effects on voices it
+   takes from the music for the time: `$19` effects on voices 4-5, `$18` on voices
+   6-7. APU RAM `$86` holds those voices as a bit mask while they play. While a
+   replacement plays, the engine leaves every other voice out of what it hears
+   (`sched_set_voice_mute`: `dsp_host_mute` and `dsp_host_keep_addr` in the vendored
+   DSP): the music is silent and the effects stay, sample by sample. The console itself
+   runs as before; only the engine's copy of its output changes.
+3. **Mixing** (`frontend/packs/music.c`). The file is streamed (stb_vorbis, dr_flac,
+   dr_wav), resampled to the output rate with the engine's band-limited resampler, and
+   added to the game's sound after the game's own resampler, before the volume. Starts,
+   stops and switches ramp over 20 ms; fades move linearly in time, as the game's do.
+
+With no `[[music]]` entry loaded, none of this runs: the engine doesn't watch the ports
+and the sound is byte for byte what it was (the `music_pack` test compares the sound
+up to the replaced song; `module_parity` and the lockstep tests cover the rest).
+
+### Limits
+
+- **No echo while a song is replaced.** The console's echo (reverb) is fed by music and
+  effects together, so while the music is muted the echo return is left out as well:
+  sound effects play dry.
+- **The first frame:** the music is muted from the frame edge after the game starts a
+  song, so up to one frame (16 ms) of the console's song can be heard at a switch.
+- **Save states:** after a state is loaded the replacement stops and the console's music
+  plays until the game starts its next song (a state doesn't say which song was
+  playing).
+- **Fades** follow the game's commands with the measured step time; a fade the sound
+  program makes on its own (inside a song's own data) isn't seen.
+- Only the music the CPU asks for: songs the game plays some other way, if any, keep the
+  console's music.
+- The watcher is the game module's: `ct_sdl_engine --interp-only` (no module) plays no
+  replacements. It needs no game patch, so the interpreter follows the music where the
+  game is linked in (the static `ct_sdl --interp-only`).
 
 ## In the 3D diorama (scene3d)
 

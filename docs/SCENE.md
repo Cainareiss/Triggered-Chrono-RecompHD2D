@@ -592,6 +592,65 @@ flag. Sprites for the second view use hook 1(a).)
   leader's test. On returning control, reset the ring indices so follower replay resumes
   cleanly (Obj_RecordMovement's reset path at C09DC3 zeroes `$01AB-$01AD`).
 
+## Text boxes and sound commands (HD text, audio packs)
+
+Read with `ct_boot --log-entry` on `leene_square.txt` (the first dialogue, frames
+4699-4800) and `gato_win.txt` (songs and fades through frame 14,000), `--prov` dumps of
+frame 4800, and `ldis.py`. **Verified**: a run agrees. Used by `game/ct/text.c` and
+`game/ct/audio.c`.
+
+### T1. The text engine (verified)
+
+- `Text_EngineTick` (`$C25823`, through `$C20009`) runs with D = `$0200` and dispatches on
+  the text state `$0215` (`Text_DispatchState`, `$C2584A`) and the mode `$0230`
+  (`$C25839`). `Text_DecodeLoop` (`$C258B2`) reads the string at the long pointer
+  `$0231`: a byte `$A0-$FF` is a glyph, `$21-$9F` a dictionary substring (pointer table
+  at `$DEFA00`, played through `Text_PlaySubstring`, `$C25BF5`, which comes back into
+  the loop), below `$21` a control code (table at `$C25903`: names, numbers, line
+  breaks `$05`-`$08`, page breaks `$09`-`$0C`, waits).
+- Every glyph goes through `Text_EmitGlyph` (`$C25DC4`): code in `$0235`, the pen's x in
+  `$0234` (px from the line's left), the canvas pointer in `$0210-$0212`, the format in
+  `$0214` (low nibble 0: 2 bits per pixel, `Text_DrawGlyph2bpp`; else 4,
+  `Text_DrawGlyph4bpp`), the line's glyph count in `$0217`. The advance is the byte at
+  `$C260E6 + code - $A0`. Glyphs are 12x12: the left 8 columns at `$FF2060 + 24 * code`
+  and the right 4 at `$FF3860 + 24 * (code / 2)` (high nibble for even codes), 2 planes
+  row by row.
+- The encoding: `$A0-$B9` A-Z, `$BA-$D3` a-z, `$D4-$DD` 0-9, then
+  `! ? / “ ” : & ( ) ’ . , = - + % ♪ (space) ♡ … ∞ #` from `$DE` to `$F3`.
+
+### T2. The dialogue box (verified)
+
+- `Dialog_RenderRequest` (`$C020F2`, D = `$0100`) points the engine at the canvas
+  `$7EF000` (2 bits per pixel). The canvas is one line: 32 x 2 tiles. The column table
+  `$C25FE6` puts tile column c at byte 16c (c < 16) or 512 + 16(c - 16), the lower tile
+  row 256 bytes after the upper; glyph rows start 4 px down. `Dialog_InitWindowArea`
+  (`$C020B2`) clears it for each line.
+- The line is `$0131` (0-3; `Dialog_HandleRenderResult`, `$C02126`, steps it on a line
+  break and goes back to 0 on a new page). Line L is uploaded to BG3's characters
+  `$100 + 64L` (VRAM `$5800 + $200 L` in the field) and `Dialog_BuildTextAreaTilemap`
+  (`$C02B78`) lays the tiles out in that order. The glyphs are BG3 palette 2's color 3,
+  the shadow color 1; the window's textured fill behind them is BG1.
+- Frame 4800, the box at the bottom: lines at y = 137, 153, 169, x = 0. At 6000 the box is
+  at the top. The provenance G-buffer finds them wherever they are.
+
+### T3. Sound commands (verified)
+
+- The game writes a command and three arguments to `$7E1E00-$1E03` and calls `$C70004`
+  (`Audio_ProcessCommand`, `$C70140`, D = `$1E00`), which sends them through `$2143`,
+  `$2142`, `$2141`, `$2140` (`$C7061C`; for a song `$C70A39`, after
+  `Audio_NormalizeSongCmd`, `$C70734`, and the song's sample upload, `$C70655`) and clears
+  `$1E00` when it is done (`$C70194`). Commands: `$10 $11 $14 $15` play song `$1E01`
+  (`$10`-`$17` through the table at `$C70AD9`, `$12 $13 $16 $17` do nothing; song 0 is
+  silence); `$18`-`$2F` sound effects; `$81` volume (`$1E01` steps of about 2.06 frames,
+  `$1E02` the target 0-255); `$F0` stop. A load takes the CPU 5-60 frames (song `$30`,
+  the title: 36; `$45`, the Gato fight: 61); the song starts when it ends.
+- Songs seen on these replays: `$30` (title), `$11` (opening), `$12`, `$0F`, `$1E`,
+  `$06`, `$42`, `$45` (the fight). The same song asked for again (`$06` at 8078, 8981,
+  10002, a map change) plays on.
+- Effects take voices from the music: `$18` effects voices 6-7, `$19` voices 4-5; APU RAM
+  `$86` is their bit mask while they play (`$C0`, `$40`, `$30`, `$20` seen), and music
+  key-ons on those voices wait.
+
 ## World map
 
 The world map is a different engine from the field. It is the bank-$C2 "menu shell"

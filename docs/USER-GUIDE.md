@@ -114,6 +114,8 @@ flatpak run io.github.jerbanpls.CtRecomp --hd2d
 | `--pack NAME` | Load an asset pack (replacement art; repeat to stack packs, first wins), remembered for next time; `--pack none` loads none (see [Asset packs](#asset-packs)) |
 | `--pack-dump NAME` | While you play, save each new tile and sprite into asset pack NAME |
 | `--rumble off\|light\|medium\|strong` | Rumble strength for this run (see [Rumble](#rumble)); `--log-rumble` prints every pulse |
+| `--music-log` | Print each song the game asks for (its id, for [audio packs](#audio-packs)), and its fades and stops |
+| `--hd-font FILE` | Draw the text boxes with this font (see [HD text](#hd-text)), remembered for next time |
 
 ## First launch
 
@@ -261,20 +263,23 @@ Closing the menu with a button doesn't press it in the game.
 
 | Tab | What is in it |
 | --- | --- |
-| Look | The renderer (original or HD-2D, from the next start), the HD-2D look, the picture shape, the 3D diorama's camera tilt and zoom, its render scale (AMD FSR 1), sharpening and ambient occlusion, gyro aiming and its strength, the debug view |
+| Look | The renderer (original or HD-2D, from the next start), the HD text font and its style and size, the HD-2D look, the picture shape, the 3D diorama's camera tilt and zoom, its render scale (AMD FSR 1), sharpening and ambient occlusion, gyro aiming and its strength, the debug view |
 | Display | Fullscreen, frame pacing (timer or vsync), the menu's text size, integer scale and the CRT look (original picture), the battery mode |
 | Controls | What each back button does, the quick keys (pick a row, then press the key), the Steam Controller driver, fast-forward (on until turned off) and its speed, always run, turbo per button, pausing in the background or when a controller goes, rumble and **Test rumble** |
 | Co-op | Co-op auto / on / off, which player plays which party member, the experimental split screen |
 | Packs | The asset packs found in your packs folder: off, or on at a place in the order; reload; dump new art |
 | Save states | Load the quick slot, slots 1-4 or the resume point (with a picture of each; loading closes the menu), save to them (press twice), resume on start, take a screenshot |
-| Audio | The volume, muting while another window has the focus |
+| Audio | The volume, muting while another window has the focus, the sample interpolation (Gaussian like the console, or the crisper cubic or sinc) |
 | About | The version, the licenses of everything in it, the bring-your-own-ROM note, and Quit (press twice) |
 
 Rows that don't apply right now are grey (the HD-2D settings in the original picture,
 fullscreen in Game Mode). Its settings are in `settings.ini` too, as `renderer=hd2d` or
 `plain`, `cam_tilt=40`, `cam_zoom=100`, `render_scale=auto`, `sharpen=auto`, `ao=auto`,
 `ao_size=auto` ([HD2D.md](HD2D.md#render-scale-sharpening-and-ambient-occlusion)),
-`pacing=auto`, `menu_scale=normal`, `volume=100` and `mute_unfocused=off`; a `--hd2d`, `--no-hd2d` or `--pacing` at launch still wins.
+`pacing=auto`, `menu_scale=normal`, `volume=100`, `mute_unfocused=off`,
+`audio_interp=gaussian` (or `cubic`, `sinc`), `hd_font=FILE`, `hd_text_style=shadow` (or
+`outline`, `plain`) and `hd_text_size=100`; a `--hd2d`, `--no-hd2d` or `--pacing` at
+launch still wins.
 The mouse cursor hides after 2 seconds without moving.
 
 ### The HD-2D look
@@ -358,7 +363,53 @@ look while a pack is loaded.
 
 | Key | What it does |
 | --- | --- |
-| F5 | Reload the asset packs (after editing their pictures) |
+| F5 | Reload the asset packs (after editing their pictures or their music) |
+
+### Audio packs
+
+A pack can also replace the game's songs with sound files of your own (Ogg Vorbis, FLAC
+or WAV): add a `[[music]]` entry per song to its `pack.toml`, with the game's song id
+and the file. Play once with `--music-log` to see the ids as the songs start. While a
+replaced song plays, the console's music is muted and the sound effects stay. Songs
+loop and fade as the game asks. How to make one, and the limits (no echo on the sound
+effects while a song is replaced), are in
+[ASSET-PACKS.md](ASSET-PACKS.md#music-audio-packs).
+
+**An audio pack made from the game's music (a recording or rip of the soundtrack, or an
+arrangement of it) is for your personal use only: never share or upload it, or any file
+in it.** Music you made yourself is yours.
+
+Audio packs work with the original picture too, also with `--no-hd2d`.
+
+### HD text
+
+The dialogue boxes' text can be drawn with a font of your choice at your screen's full
+resolution, instead of the console's 8-pixel letters. The project comes with no font:
+pick any TrueType or OpenType font you have, or download a free one, for example
+[Noto Sans](https://fonts.google.com/noto/specimen/Noto+Sans),
+[Atkinson Hyperlegible](https://fonts.google.com/specimen/Atkinson+Hyperlegible),
+[Fira Sans](https://fonts.google.com/specimen/Fira+Sans) or
+[Inter](https://fonts.google.com/specimen/Inter) (all under the SIL Open Font License).
+A bold weight reads best.
+
+1. Put the `.ttf` or `.otf` file in the `ct/fonts/` folder of your data folder
+   ([Where your files live](#where-your-files-live)), for example
+   `~/.local/share/ct-recomp/ct/fonts/NotoSans-Bold.ttf`.
+2. Start once with `--hd-font NotoSans-Bold.ttf` (a name without a folder is looked for
+   in `ct/fonts/`; a path is used as it is), or write `hd_font=NotoSans-Bold.ttf` in
+   `settings.ini`. It is remembered.
+3. In the menu's **Look** tab, **HD text style** picks a drop shadow like the console's,
+   an outline or neither, and **HD text size** scales the letters (50-150%).
+
+Each word starts where the console starts it, so the lines break where the game breaks
+them. The text keeps the game's colors and fades with the screen. A character your font
+doesn't have (the game's music note or heart, say) is drawn by the console as before.
+`hd_font=none` (or deleting the line) turns HD text off.
+
+HD text needs the GL renderer: without `--hd2d` the game switches to it with the original
+look, as for asset packs; with `--no-hd2d` there is no HD text. It follows the game
+module (with `--interp-only` there is none). Menus, battle messages and the name entry
+still use the console's font: only the dialogue boxes are done so far.
 
 ## Quality of life
 
@@ -532,7 +583,8 @@ The engine keeps its files in your user data folder, `~/.local/share/ct-recomp/`
 | `ct/ct.srm.bak` | The save file as it was before the last write |
 | `hd2d/settings.ini` | Everything the menu sets: the look and picture shape, the window, co-op, the buttons and keys, the volume, the asset packs to load, the [quality-of-life settings](#settings) |
 | `ct/states/` | Save states and the resume point, each with a `.png` of the screen (see [Save states](#save-states)) |
-| `ct/packs/NAME/` | Asset pack NAME: `pack.toml` and its pictures. Made from the game's art unless you painted every picture yourself: **never share it.** |
+| `ct/packs/NAME/` | Asset pack NAME: `pack.toml` and its pictures, and its music (`[[music]]` files). Made from the game's art or music unless you made every picture and song yourself: **never share it.** |
+| `ct/fonts/` | Fonts for [HD text](#hd-text), which you put there (none come with the game) |
 | `ct/gen/`, `ct/obj/` | Temporary build files, normally deleted after the build. If a build fails they can be left behind: they hold code generated from your ROM, so don't share them. Deleting them is safe. |
 
 The ROM itself is never copied: only its location is saved.

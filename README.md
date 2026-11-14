@@ -11,7 +11,9 @@ extracted assets, keys) is ever committed to this repository.
 Flatpak, the first launch, controls, where files live and troubleshooting. On a Steam Deck or
 ROG Ally, follow [docs/HANDHELD.md](docs/HANDHELD.md): Game Mode, controller-only setup,
 the controls and the Deck preset. To replace the game's art with your own, or with
-upscaled placeholders made from your ROM, see [docs/ASSET-PACKS.md](docs/ASSET-PACKS.md).
+upscaled placeholders made from your ROM, or its music with recordings of your own, see
+[docs/ASSET-PACKS.md](docs/ASSET-PACKS.md); to draw the text boxes with a font of your
+choice, [HD text](docs/USER-GUIDE.md#hd-text). No art, music or font comes with it.
 
 CI for the port (`.github/workflows/port.yml`) runs without a ROM: an engine-only build
 and its tests, a check for generated code in the engine programs, the game-agnostic and

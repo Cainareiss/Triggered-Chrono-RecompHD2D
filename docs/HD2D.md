@@ -547,6 +547,19 @@ With `--pack`, replacement art is composited at the output resolution in the ups
 It is driven by a third G-buffer, the PPU's provenance buffer. Details, the format and
 the cost are in [ASSET-PACKS.md](ASSET-PACKS.md).
 
+## HD text
+
+With a font set (`hd_font=`, `--hd-font`; [USER-GUIDE.md](USER-GUIDE.md#hd-text)), the
+final pass (`shaders/final.frag`, also the 3D looks') draws one more picture over
+everything but the on-screen message: the text boxes' text, rasterized on the CPU with
+stb_truetype at the screen's scale (`frontend/hdtext.c`, `hd2d_set_text_overlay`),
+uploaded only when it changes, premultiplied and linearly filtered. The console's glyph
+pixels are taken out of the source picture before the upscale, so the lighting and the
+grade see an empty box. The lines are found on the screen from the provenance G-buffer,
+as asset packs' tiles are. With no font, the pass is as before (one branch not taken).
+In the 3D diorama the dialogue box's window is part of BG1, which the 3D scene replaces,
+so there, as without HD text, the text floats over the scene without its box.
+
 ## Limits and next steps
 
 - The behind buffer holds one hidden layer, not all of them. A pixel with two layers

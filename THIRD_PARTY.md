@@ -83,6 +83,15 @@ reads them to populate `funcs.toml` / `unresolved.toml`.
   uses it to read and check the models asset packs name in `[[model]]` entries
   (docs/ASSET-PACKS.md). Details and the file's hash in `third_party/cgltf/README.md`.
 
+### `third_party/dr_libs/`
+
+- **mackron/dr_libs** (David Reid), `dr_flac.h` v0.13.4 (commit
+  `806ee9ada8ca9827b22f76827f739c290f37ba48`) and `dr_wav.h` v0.14.6 (commit
+  `35b5c392cc15456736c440a68dbe073178bbffe0`): public domain (Unlicense) or MIT No
+  Attribution, the reader's choice; vendored unmodified. `frontend/packs/music.c`
+  decodes audio packs' FLAC and WAV files with them (docs/ASSET-PACKS.md). Hashes in
+  `third_party/dr_libs/README.md`.
+
 ### `third_party/fidelityfx/`
 
 - **GPUOpen-Effects/FidelityFX-FSR**, tag `v1.0.2`, commit
@@ -106,6 +115,15 @@ reads them to populate `funcs.toml` / `unresolved.toml`.
   headers say. Also `fonts/Roboto-Medium.ttf` from the release's `misc/fonts/`
   (Roboto, Christian Robertson, Apache-2.0, `LICENSES/Apache-2.0.txt`), the menu's
   font. Details and hashes in `third_party/imgui/README.md`.
+
+### `third_party/stb/`
+
+- **nothings/stb** (Sean Barrett), commit `2838bd5823c095dd1d5b5d8fac0b4fc8aa72a36d`:
+  `stb_vorbis.c` v1.22 and `stb_truetype.h` v1.26, public domain (Unlicense) or MIT, the
+  reader's choice; vendored unmodified. `frontend/packs/music.c` decodes audio packs' Ogg
+  Vorbis files with the first, `frontend/hdtext.c` draws HD text with the player's own
+  font with the second. Hashes in `third_party/stb/README.md`. (Dear ImGui's `imstb_*.h`
+  copies are separate.)
 
 ### `third_party/snes/`
 
