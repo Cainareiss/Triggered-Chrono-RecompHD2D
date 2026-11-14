@@ -436,6 +436,11 @@ static struct {
     int pack_entries;
     const uint16_t *pack_map;
     int pack_on, pack_have_behind;   /* this frame */
+    /* 3D: (VRAM address / 8, palette + 8 for sprites) -> entry + 1 */
+    hd2d_tile_lookup pack_lookup;
+    void *pack_lookup_user;
+    GLuint t_pack_lut;
+    int pack3d_on;                   /* this frame */
     /* Uniform locations, looked up once (key: program, name literal). */
     struct { const char *name; int prog; GLint loc; } uloc[256];
 } g;
@@ -445,6 +450,10 @@ int hd2d_wants_behind(void) { return presets[cur_preset].effects || g.pack_entri
 
 static GLuint make_tex(int w, int h, GLint ifmt, GLenum fmt, GLenum type, GLint filter);
 
+/* port: asset packs (hd2d.h). The 3D lookup: (VRAM address / 8, palette
+   + 8 for sprites) -> atlas entry + 1. */
+enum { PACK_LUT_W = 4096, PACK_LUT_H = 16 };
+
 /* port: asset packs (hd2d.h). */
 static void pack_textures_init(void)
 {
@@ -453,6 +462,8 @@ static void pack_textures_init(void)
     g.t_pack_map = make_tex(SCHED_WIDTH, SCHED_HEIGHT, GL_RGBA16UI, GL_RGBA_INTEGER,
                             GL_UNSIGNED_SHORT, GL_NEAREST);
     g.t_pack_rects = make_tex(1, 1, GL_RGBA16UI, GL_RGBA_INTEGER, GL_UNSIGNED_SHORT, GL_NEAREST);
+    g.t_pack_lut = make_tex(PACK_LUT_W, PACK_LUT_H, GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT,
+                            GL_NEAREST);
     p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA_INTEGER, GL_UNSIGNED_SHORT, zero);
     p_glGenTextures(1, &g.t_pack_atlas);
     p_glBindTexture(GL_TEXTURE_2D_ARRAY, g.t_pack_atlas);
@@ -509,6 +520,34 @@ void hd2d_pack_atlas(const uint8_t *rgba, int size, int pages, const int *rects,
 }
 
 void hd2d_pack_map(const uint16_t *map) { g.pack_map = map; }
+
+void hd2d_pack_tiles(hd2d_tile_lookup fn, void *user)
+{
+    g.pack_lookup = fn;
+    g.pack_lookup_user = user;
+}
+
+/* The 3D meshes' BG tiles -> atlas entries, for scene3d.frag's tileTexel.
+   Every cell a drawn tile reads is filled this frame, so stale cells are
+   never read. */
+static uint16_t pack_lut[PACK_LUT_W * PACK_LUT_H];
+static uint32_t pack_lut_gen[PACK_LUT_W * PACK_LUT_H], pack_gen;
+
+static void pack_lut_add(const s3d_mesh *m, const ct_scene *sc)
+{
+    for (int k = 0; k < m->nv; k += 4) {
+        uint32_t t = m->v[k].tile;
+        int pal = (int)(t >> S3D_PAL_SHIFT & 7), obj = (t & S3D_OBJ) != 0;
+        size_t i = (size_t)(pal + obj * 8) * PACK_LUT_W + ((t & S3D_ADDR_MASK) >> 3);
+        if (pack_lut_gen[i] == pack_gen)
+            continue;
+        pack_lut_gen[i] = pack_gen;
+        int bpp = t & S3D_2BPP ? 2 : 4;
+        pack_lut[i] = obj ? 0 : (uint16_t)g.pack_lookup(g.pack_lookup_user, t & S3D_ADDR_MASK,
+                                                       pal * (bpp == 2 ? 4 : 16), bpp, sc->vram,
+                                                       sc->cgram);
+    }
+}
 
 static GLuint make_tex(int w, int h, GLint ifmt, GLenum fmt, GLenum type, GLint filter);
 static int s3d_init(void);
@@ -783,8 +822,8 @@ void hd2d_shutdown(void)
     p_glDeleteFramebuffers(3, fbos);
     GLuint tex[7] = {g.t_color, g.t_layer, g.t_behind, g.t_blayer, g.t_lit, g.t_mat, g.t_back};
     p_glDeleteTextures(7, tex);
-    GLuint ptex[3] = {g.t_pack_atlas, g.t_pack_rects, g.t_pack_map};   /* port */
-    p_glDeleteTextures(3, ptex);
+    GLuint ptex[4] = {g.t_pack_atlas, g.t_pack_rects, g.t_pack_map, g.t_pack_lut};   /* port */
+    p_glDeleteTextures(4, ptex);
     g.pack_entries = 0;
     if (g.t_osd)
         p_glDeleteTextures(1, &g.t_osd);
@@ -1418,6 +1457,15 @@ static void s3d_update(const ct_scene *sc)
     p_glBindVertexArray(g.s3.vao[1]);
     s3d_upload(g.s3.vbo[1], g.s3.ebo[1], &g.s3.spr, GL_STREAM_DRAW);
     g.s3.spr_ni = g.s3.spr.ni;
+    /* port: asset packs: which of the map's tiles have replacements */
+    g.pack3d_on = g.pack_entries > 0 && g.pack_lookup != NULL;
+    if (g.pack3d_on) {
+        pack_gen++;
+        pack_lut_add(&g.s3.map, sc);
+        bind_tex(0, g.t_pack_lut);
+        p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, PACK_LUT_W, PACK_LUT_H, GL_RED_INTEGER,
+                          GL_UNSIGNED_SHORT, pack_lut);
+    }
     p_glBindVertexArray(g.vao);
 }
 
@@ -1535,6 +1583,15 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     bind_tex(1, g.s3.t_cgram);
     bind_tex(2, g.s3.t_shadow);
     bind_tex(3, g.emit[0].tex);
+    /* port: asset packs (tileTexel), units 10-12 */
+    p_glUniform1i(U(P, "uPack"), g.pack3d_on);
+    p_glUniform1i(U(P, "uPackLut"), 10);
+    p_glUniform1i(U(P, "uPackRects"), 11);
+    p_glUniform1i(U(P, "uPackAtlas"), 12);
+    bind_tex(10, g.t_pack_lut);
+    bind_tex(11, g.t_pack_rects);
+    p_glActiveTexture(GL_TEXTURE0 + 12);
+    p_glBindTexture(GL_TEXTURE_2D_ARRAY, g.t_pack_atlas);
     p_glUniform3f(U(P, "uLightDir"), L[0], L[1], L[2]);
     p_glUniform3f(U(P, "uKey"), 0.55f, 0.51f, 0.44f);
     p_glUniform3f(U(P, "uAmbient"), 0.47f, 0.5f, 0.58f);

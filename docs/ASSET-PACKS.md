@@ -284,27 +284,32 @@ dialect of `hires.txt`, so `pack.toml` is the definition here.
   optional packed container (pre-compressed textures in one file) for loading speed.
   For now a pack is only PNG plus the manifest, loaded in full at start and on F5.
 
-## For the 3D path (scene3d)
+## In the 3D diorama (scene3d)
 
-The 2D compositing covers every HD-2D preset that draws the console's picture. The 3D
-diorama (`hd2d3d`, `frontend/hd2d/scene3d.*`) draws tiles itself. It is not wired to
-packs yet, and in that preset the 3D picture is drawn without them. The pieces it
-needs exist:
+The 2D compositing covers every preset that draws the console's picture. The 3D
+diorama (`hd2d3d`, `frontend/hd2d/scene3d.*`) draws tiles itself, as textured quads:
 
-- `packs_key(mem, prov)` and `packs_lookup_tile(key)`: from a tile to its replacement's
-  atlas rectangle (`packs_rect`: page, x, y, w, h, and the original's size).
-  `packs_atlas` and `packs_entries` give the atlas and the table that the 2D path
-  uploads (`hd2d_pack_atlas`).
-- Every 3D surface samples through `tileTexel(uint tile, vec2 uv)` in
-  `shaders/scene3d.frag`, keyed by the packed tile value (VRAM address and palette).
-  Bits 26-31 of that value are free for a pack flag (`scene3d.h`).
-- The plan: per frame, for each distinct tile value in the scene's meshes, compute its
-  key from the scene's VRAM and CGRAM (the decode `packs_key` does, given the address,
-  palette and bit depth), and fill a small lookup texture from tile value to atlas
-  entry. `tileTexel` then samples the atlas (`uPackAtlas`, as `upscale.frag` does) where
-  there is an entry and the console's tile where there isn't.
-- `[[model]]` entries go through `s3d_set_cell_hook`: for a cell with a model, the hook
-  adds the model's triangles to the cell's mesh instead of the generated geometry.
+- **BG tiles are replaced there too.** Every 3D surface samples through
+  `tileTexel(uint tile, vec2 uv)` in `shaders/scene3d.frag`, keyed by the packed tile
+  value (VRAM address, palette, depth). Once a frame, for each distinct tile the map's
+  mesh shows, the renderer asks the frontend (`hd2d_pack_tiles`) for its atlas entry.
+  The frontend answers with `packs_key_tile` (the same key `packs_key` gives a pixel of
+  the tile, from the scene's VRAM and CGRAM) and `packs_lookup_tile`. The answers go
+  into a lookup texture, by VRAM address and palette, and `tileTexel` samples the
+  atlas where there is an entry (with the quad's own derivatives, so distant floors
+  are mipmapped) and the console's tile where there isn't.
+- **Sprites are not replaced in 3D.** Packs replace a sprite as a whole OAM entry,
+  while the 3D path splits sprites into 8×8 pieces. The map from a piece back to its
+  entry's texel is the next step.
+- **The C API for other renderers:** `packs_key` / `packs_key_tile` and
+  `packs_lookup_tile(key)` give a replacement's atlas rectangle (`packs_rect`: page, x,
+  y, w, h, and the original's size); `packs_atlas` and `packs_entries` give the atlas
+  and the entry table, which `hd2d_pack_atlas` uploads.
+- **`[[model]]` entries** are to go through `s3d_set_cell_hook`: for a cell with a
+  model, the hook adds the model's triangles to the cell's mesh instead of the
+  generated geometry. Loading and checking them is done (`packs_models`); drawing them
+  isn't yet. Bits 26-31 of the tile value, free in `scene3d.h`, can flag such
+  surfaces.
 
 ## Limits
 
@@ -321,4 +326,5 @@ needs exist:
 - The atlas holds every replacement at once. A full game's dump, upscaled 4×, could go
   past the 4,096² page and use several pages (each 64 MB). A packed, streamed container
   is the fix, later.
-- The 3D preset doesn't use packs yet (above).
+- The 3D preset replaces BG tiles only, not sprites, and doesn't draw `[[model]]`s yet
+  (above).

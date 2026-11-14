@@ -305,6 +305,17 @@ static int packs_setup(const char *game_id)
     return r;
 }
 
+/* The 3D diorama's tiles -> atlas entries (hd2d_pack_tiles). */
+static int pack_tile_lookup(void *user, unsigned chr, int pal, int bpp, const uint16_t *vram,
+                            const uint16_t *cgram)
+{
+    (void)user;
+    const packs_rect *r = packs_lookup_tile(packs_key_tile(vram, cgram, chr, pal, bpp));
+    int n;
+    const packs_rect *e = packs_entries(&n);
+    return r ? (int)(r - e) + 1 : 0;
+}
+
 /* The loaded packs' atlas to the renderer. */
 static void packs_upload(void)
 {
@@ -317,6 +328,7 @@ static void packs_upload(void)
         memcpy(rects + k * 8, v, sizeof v);
     }
     hd2d_pack_atlas(rects ? atlas : NULL, size, pages, rects, rects ? n : 0);
+    hd2d_pack_tiles(rects ? pack_tile_lookup : NULL, NULL);
     free(rects);
 }
 

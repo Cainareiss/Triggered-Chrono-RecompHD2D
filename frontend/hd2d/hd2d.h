@@ -81,6 +81,16 @@ void hd2d_pack_atlas(const uint8_t *rgba, int size, int pages, const int *rects,
    (SCHED_WIDTH x SCHED_HEIGHT x 4 uint16, packs_map_frame's layout), or
    NULL for none. Read during hd2d_render; the caller keeps it alive. */
 void hd2d_pack_map(const uint16_t *map);
+/* port: asset packs in the 3D diorama (hd2d3d). Asked once a frame for
+   each distinct BG tile the 3D meshes show: the 8x8 character at VRAM word
+   address chr in the palette whose color 0 is CGRAM index pal, at bpp 2
+   or 4, read from the scene's vram and cgram. Returns the atlas entry
+   index + 1 that replaces it, 0 for none. NULL: none. Sprites are
+   replaced as whole OAM entries (the 2D path); the 3D path draws them as
+   8x8 pieces, so it doesn't replace them. */
+typedef int (*hd2d_tile_lookup)(void *user, unsigned chr, int pal, int bpp, const uint16_t *vram,
+                                const uint16_t *cgram);
+void hd2d_pack_tiles(hd2d_tile_lookup fn, void *user);
 
 /* GPU time of the last hd2d_render in milliseconds (glFinish-bracketed:
    only measured when timing is on, as it stalls the pipeline). */

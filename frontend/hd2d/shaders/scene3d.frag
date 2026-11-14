@@ -47,8 +47,41 @@ int colorIndex(uint tile, ivec2 p)
 // depth, BG or sprite: scene3d.h's packing). An asset pack replaces this
 // function (or branches in it on its own flag) to return its own texture
 // for a (tile, palette); the console's pixels are the default.
+#ifndef SHADOW_PASS
+// Asset packs (docs/ASSET-PACKS.md): BG tiles with a replacement. The
+// lookup is by (VRAM address / 8, palette, + 8 for sprites), filled each
+// frame for the tiles the meshes show; 0: none, else the atlas entry + 1.
+uniform int uPack;
+uniform usampler2D uPackLut;
+uniform usampler2D uPackRects;   // per entry: (page, x, y, w), (h, src w, src h, 0)
+uniform highp sampler2DArray uPackAtlas;
+#endif
+
 vec4 tileTexel(uint tile, vec2 uv)
 {
+#ifndef SHADOW_PASS
+    // Derivatives here, where the control flow is still uniform.
+    vec2 duvx = dFdx(uv), duvy = dFdy(uv);
+    if (uPack != 0) {
+        int row = int((tile >> 15u) & 7u) + ((tile & (1u << 19)) != 0u ? 8 : 0);
+        uint e = texelFetch(uPackLut, ivec2(int((tile & 0x7FFFu) >> 3u), row), 0).r;
+        if (e != 0u) {
+            int i = int(e) - 1;
+            ivec2 rc = ivec2((i % 1024) * 2, i / 1024);
+            uvec4 r0 = texelFetch(uPackRects, rc, 0);
+            uvec4 r1 = texelFetch(uPackRects, rc + ivec2(1, 0), 0);
+            vec2 rect = vec2(float(r0.w), float(r1.x));
+            float asize = float(textureSize(uPackAtlas, 0).x);
+            vec2 t = clamp(uv / 8.0 * rect, vec2(0.5), rect - 0.5);
+            vec2 s = rect / 8.0 / asize;
+            vec4 rep = textureGrad(uPackAtlas, vec3((vec2(float(r0.y), float(r0.z)) + t) / asize,
+                                                    float(r0.x)), duvx * s, duvy * s);
+            if (rep.a < 0.5 && (tile & (1u << 23)) != 0u)   // the back floor: the backdrop
+                return vec4(texelFetch(uCgram, ivec2(0, 0), 0).rgb, 1.0);
+            return rep;
+        }
+    }
+#endif
     ivec2 p = clamp(ivec2(floor(uv)), ivec2(0), ivec2(7));
     int c = colorIndex(tile, p);
     bool opaque = (tile & (1u << 23)) != 0u;   // the back floor: color 0 is the backdrop

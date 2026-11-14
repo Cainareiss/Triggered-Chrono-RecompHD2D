@@ -168,6 +168,7 @@ static void test_keys(void)
     sched_prov_px a = bg_px(0, 0, 0), b = bg_px(5, 3, SCHED_PROV_HFLIP | SCHED_PROV_VFLIP);
     uint64_t ka = packs_key(&mem, &a);
     CHECK(ka != 0, "BG key");
+    CHECK(packs_key_tile(mem.vram, mem.cgram, 0x1000, 16, 4) == ka, "packs_key_tile: the same key");
     CHECK(packs_key(&mem, &b) == ka, "flips and texel are not part of the key");
     mem.cgram[0] ^= 0x1234;
     mem.cgram[16] ^= 0x1234;   /* the palette's color 0: transparent */

@@ -36,6 +36,13 @@
    sprite. 0 if the pixel has nothing to replace (backdrop, mode 7). */
 uint64_t packs_key(const sched_vmem *m, const sched_prov_px *p);
 
+/* The key of the 8x8 BG character at VRAM word address chr, drawn with
+   the palette whose color 0 is CGRAM index pal, at bpp 2, 4 or 8 bits:
+   the same as packs_key gives a pixel of it. vram is 32768 words, cgram
+   256 colors. For renderers that know tiles rather than pixels (the 3D
+   path). */
+uint64_t packs_key_tile(const uint16_t *vram, const uint16_t *cgram, unsigned chr, int pal, int bpp);
+
 /* The piece's original picture as RGBA (color 0 transparent), in stored
    orientation: *w x *h pixels, at most 64 x 64 (rgba holds 64*64*4).
    Returns 0, or -1 if p names nothing. */

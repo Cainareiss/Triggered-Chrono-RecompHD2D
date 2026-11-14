@@ -90,7 +90,7 @@ static uint64_t fnv(uint64_t h, const void *p, size_t n)
 }
 
 /* Color indices of the piece p names, stored orientation, row by row. */
-static int decode_indices(const sched_vmem *m, const sched_prov_px *p, uint8_t *idx, int *w, int *h,
+static int decode_indices(const uint16_t *vram, const sched_prov_px *p, uint8_t *idx, int *w, int *h,
                           int *bpp)
 {
     int code = p->flags & SCHED_PROV_BPP;
@@ -104,7 +104,7 @@ static int decode_indices(const sched_vmem *m, const sched_prov_px *p, uint8_t *
             for (int x = 0; x < 8; x++) {
                 int v = 0;
                 for (int pl = 0; pl < depth; pl += 2) {
-                    uint16_t word = m->vram[(p->chr + pl / 2 * 8 + y) & 0x7fff];
+                    uint16_t word = vram[(p->chr + pl / 2 * 8 + y) & 0x7fff];
                     v |= ((word >> (7 - x)) & 1) << pl | ((word >> (15 - x)) & 1) << (pl + 1);
                 }
                 idx[y * 8 + x] = (uint8_t)v;
@@ -118,7 +118,7 @@ static int decode_indices(const sched_vmem *m, const sched_prov_px *p, uint8_t *
             int n = ((((p->name >> 4) + cy) << 4) | (((p->name & 15) + cx) & 15)) & 0xff;
             unsigned chr = (p->chr + n * 16u) & 0x7fff;
             for (int y = 0; y < 8; y++) {
-                uint16_t lo = m->vram[(chr + y) & 0x7fff], hi = m->vram[(chr + 8 + y) & 0x7fff];
+                uint16_t lo = vram[(chr + y) & 0x7fff], hi = vram[(chr + 8 + y) & 0x7fff];
                 for (int x = 0; x < 8; x++) {
                     int s = 7 - x;
                     int v = ((lo >> s) & 1) | ((lo >> (8 + s)) & 1) << 1 | ((hi >> s) & 1) << 2 |
@@ -132,11 +132,11 @@ static int decode_indices(const sched_vmem *m, const sched_prov_px *p, uint8_t *
 
 static int palette_size(int bpp) { return 1 << bpp; }
 
-uint64_t packs_key(const sched_vmem *m, const sched_prov_px *p)
+static uint64_t key_from(const uint16_t *vram, const uint16_t *cgram, const sched_prov_px *p)
 {
     uint8_t idx[64 * 64];
     int w, h, bpp;
-    if (decode_indices(m, p, idx, &w, &h, &bpp))
+    if (decode_indices(vram, p, idx, &w, &h, &bpp))
         return 0;
     uint8_t head[4] = {(uint8_t)(p->flags & SCHED_PROV_OBJ ? 'S' : 'B'), (uint8_t)w, (uint8_t)h,
                        (uint8_t)bpp};
@@ -144,18 +144,34 @@ uint64_t packs_key(const sched_vmem *m, const sched_prov_px *p)
     k = fnv(k, idx, (size_t)w * h);
     int n = palette_size(bpp);
     for (int c = 1; c < n; c++) {
-        uint16_t col = m->cgram[(p->pal + c) & 0xff] & 0x7fff;
+        uint16_t col = cgram[(p->pal + c) & 0xff] & 0x7fff;
         uint8_t b[2] = {(uint8_t)col, (uint8_t)(col >> 8)};
         k = fnv(k, b, 2);
     }
     return k ? k : 1;
 }
 
+uint64_t packs_key(const sched_vmem *m, const sched_prov_px *p)
+{
+    return key_from(m->vram, m->cgram, p);
+}
+
+uint64_t packs_key_tile(const uint16_t *vram, const uint16_t *cgram, unsigned chr, int pal, int bpp)
+{
+    sched_prov_px p;
+    memset(&p, 0, sizeof p);
+    p.chr = (uint16_t)(chr & 0x7fff);
+    p.pal = (uint8_t)pal;
+    p.flags = (uint8_t)(bpp == 2 ? 1 : bpp == 4 ? 2 : 3);
+    p.size = 8;
+    return key_from(vram, cgram, &p);
+}
+
 int packs_decode(const sched_vmem *m, const sched_prov_px *p, uint8_t *rgba, int *w, int *h)
 {
     uint8_t idx[64 * 64];
     int bpp;
-    if (decode_indices(m, p, idx, w, h, &bpp))
+    if (decode_indices(m->vram, p, idx, w, h, &bpp))
         return -1;
     for (int k = 0; k < *w * *h; k++) {
         uint16_t c = m->cgram[(p->pal + idx[k]) & 0xff];
