@@ -88,9 +88,12 @@ vec3 shade(vec2 fc)
     if (!inside) {
         // Side fill: the soft copy mirrored at the picture's edge (a blurred
         // reflection, not stretched edge columns), dimmed with distance.
+        // Bars above and below (a tall window) mirror and fade the same
+        // way, in picture heights, not the edge row smeared down the bar.
         vec2 q = uv;
-        float out_ = max(-uv.x, uv.x - 1.0);
+        float out_ = max(max(-uv.x, uv.x - 1.0), max(-uv.y, uv.y - 1.0));
         q.x = uv.x < 0.0 ? -uv.x * 0.7 : uv.x > 1.0 ? 1.0 - (uv.x - 1.0) * 0.7 : uv.x;
+        q.y = uv.y < 0.0 ? -uv.y * 0.7 : uv.y > 1.0 ? 1.0 - (uv.y - 1.0) * 0.7 : uv.y;
         q = clamp(q, vec2(0.002), vec2(0.998));
         // A 9-tap disc on top of the soft copy's blur: no visible blobs.
         vec2 r = 2.5 / vec2(textureSize(uSoft, 0));

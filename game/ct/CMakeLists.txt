@@ -435,6 +435,11 @@ if(SDL2_FOUND)
         $<TARGET_FILE:ct_sdl_engine> --module $<TARGET_FILE:ct_game_module>)
     set_tests_properties(sdl_hidden_map_3d PROPERTIES SKIP_RETURN_CODE 77)
     list(APPEND ct_game_tests sdl_hidden_map_3d)
+    # port: the HD-2D side fill above and below the picture (a tall window).
+    add_test(NAME sdl_side_fill_tall COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_side_fill_tall.py
+        $<TARGET_FILE:ct_sdl_engine> --module $<TARGET_FILE:ct_game_module>)
+    set_tests_properties(sdl_side_fill_tall PROPERTIES SKIP_RETURN_CODE 77)
+    list(APPEND ct_game_tests sdl_side_fill_tall)
     # port: quality of life (frontend/qol.h): save states, the resume point
     # (SIGTERM, sleep, the prompt), screenshots, pause, fast-forward,
     # battery mode, save RAM import/export; headless, scripted.
