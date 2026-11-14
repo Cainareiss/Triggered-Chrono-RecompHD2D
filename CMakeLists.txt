@@ -401,8 +401,15 @@ if(TARGET ct_sdl_engine)
     set(CT_APP_ID io.github.jerbanpls.CtRecomp)
     install(FILES packaging/${CT_APP_ID}.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
-    install(FILES packaging/${CT_APP_ID}.svg
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+    # The icon (packaging/icons/make_icons.py writes the SVG and the PNGs).
+    install(FILES packaging/icons/ct-recomp.svg
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
+        RENAME ${CT_APP_ID}.svg)
+    foreach(sz 16 24 32 48 64 128 256 512)
+        install(FILES packaging/icons/${sz}x${sz}/ct-recomp.png
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${sz}x${sz}/apps
+            RENAME ${CT_APP_ID}.png)
+    endforeach()
     install(FILES packaging/${CT_APP_ID}.metainfo.xml
         DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
 endif()

@@ -32,6 +32,7 @@ else
     found=0
 fi
 dir=$(dirname "$img")
+art=$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo packaging/steam)/artwork
 
 q() {   # quote for Steam's fields: double quotes around paths with spaces
     printf '"%s"' "$1"
@@ -78,6 +79,18 @@ cat <<EOF
 5. Controller: right-click > Properties... > Controller > Override for CT
    Recomp: "Gamepad" (Steam Input's standard gamepad layout). A keyboard or
    desktop layout sends keys instead of buttons.
+
+6. Artwork (optional, original art made for this project, GPL-3.0-or-later).
+   Right-click the entry > Manage > Set custom artwork, or in Desktop Mode
+   open the entry's page and use the image's right-click menu. Files in
+   $art:
+     Capsule (vertical, 600x900):  $art/grid.png
+     Wide capsule (920x430):       $art/capsule_wide.png
+     Hero / background (1920x620): $art/hero.png
+     Logo (transparent, 1280x720): $art/logo.png
+     Icon (256x256):               $art/icon.png
+   Pick each file in the matching slot. For the logo, afterwards set its
+   position and size on the hero image from the same menu if you like.
 
 Game Mode tips
 --------------

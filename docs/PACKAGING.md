@@ -23,6 +23,7 @@ share/ct-recomp/                     read-only data for tools/build_module.py:
     game/<id>/*.toml  game/<id>/*.c  game/<id>/tools/*.py
 share/applications/io.github.jerbanpls.CtRecomp.desktop
 share/icons/hicolor/scalable/apps/io.github.jerbanpls.CtRecomp.svg
+share/icons/hicolor/{16,24,32,48,64,128,256,512}x*/apps/io.github.jerbanpls.CtRecomp.png
 share/metainfo/io.github.jerbanpls.CtRecomp.metainfo.xml
 share/licenses/ct-recomp/            LICENSE, LICENSES/, THIRD_PARTY.md
 ```
@@ -36,6 +37,18 @@ The package also bundles what the module build needs at run time:
 
 The data dir holds source files from this repository: symbol tables, hooks and the
 translator. None of it is derived from a ROM.
+
+## The icon
+
+The app icon is original artwork (an abstract time-ring around a small pixel
+diorama; no game imagery), GPL-3.0-or-later. `packaging/icons/make_icons.py`
+draws it: it writes `packaging/icons/ct-recomp.svg` and the PNGs
+(16 to 512 px, `packaging/icons/NxN/ct-recomp.png`), using rsvg-convert or
+ImageMagick. The outputs are committed, so a package build needs neither.
+CMake installs them to the hicolor theme under the app id
+(`io.github.jerbanpls.CtRecomp`, matching `Icon=` in the .desktop file); the
+Flatpak gets them through the same install, and the AppImage uses the SVG as
+the AppDir icon. After changing the script, rerun it and commit the output.
 
 ## The engine-only build
 
