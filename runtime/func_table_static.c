@@ -11,6 +11,7 @@
 #include "module.h"
 
 __attribute__((weak)) int ct_game_scene(ct_scene *out);   /* NULL: none linked */
+__attribute__((weak)) int ct_game_pose(int obj, ct_scene_pose *out, uint8_t *rgba, int max);
 
 __attribute__((constructor)) static void install_linked_tables(void)
 {
@@ -19,4 +20,5 @@ __attribute__((constructor)) static void install_linked_tables(void)
                          ct_overlay_func_count};
     ct_tables_install(&t);
     ct_scene_set_source(ct_game_scene);
+    ct_pose_set_source(ct_game_pose);
 }

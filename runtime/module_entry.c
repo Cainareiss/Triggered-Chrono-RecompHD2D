@@ -25,3 +25,14 @@ const ct_module_info *ct_module_get(void)
     };
     return &info;
 }
+
+/* Poses (module.h ct_module_pose_fn), if the game has them: found by name,
+   outside ct_module_info, so engines and modules without them still fit. */
+__attribute__((weak)) int ct_game_pose(int obj, ct_scene_pose *out, uint8_t *rgba, int max);
+__attribute__((visibility("default"))) int ct_module_pose(int obj, ct_scene_pose *out,
+                                                          uint8_t *rgba, int max);
+
+int ct_module_pose(int obj, ct_scene_pose *out, uint8_t *rgba, int max)
+{
+    return ct_game_pose ? ct_game_pose(obj, out, rgba, max) : -1;
+}

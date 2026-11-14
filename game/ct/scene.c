@@ -5,12 +5,15 @@
  * layers, cell properties, camera and objects, read from WRAM at the frame
  * edge for the engine's 3D renderer; the world map's is world_scene.c. Linked into the game module (the
  * ct_game_scene export) and into the static programs. Reads only. */
+#include <stdio.h>
 #include <string.h>
 
 #include "bus.h"
 #include "module.h"
+#include "sprites.h"
 
 int ct_game_scene(ct_scene *out);
+int ct_game_pose(int obj, ct_scene_pose *out, uint8_t *rgba, int max);
 int ct_world_scene(ct_scene *out);   /* world_scene.c */
 
 /* WRAM offsets (bank $7E unless noted; docs/SCENE.md A0). */
@@ -41,6 +44,9 @@ static uint16_t tiles[CT_SCENE_LAYERS][CT_SCENE_STRIDE * 2 * CT_SCENE_MAX_CELLS]
 static ct_scene_cell cells[CT_SCENE_MAX_CELLS * CT_SCENE_MAX_CELLS];
 static uint64_t last_hash;
 static uint32_t generation;
+/* The object slot of each object[] entry of the last field scene (poses). */
+static int8_t slot_of[CT_SCENE_MAX_OBJECTS];
+static int n_slots;
 
 static unsigned u16at(const uint8_t *w, unsigned a) { return w[a] | w[a + 1] << 8; }
 
@@ -101,6 +107,7 @@ int ct_game_scene(ct_scene *out)
 {
     const uint8_t *w = bus_wram();
     out->mode = CT_SCENE_OTHER;
+    n_slots = 0;
     if (memcmp(w + NMI_VECTOR, field_nmi, sizeof field_nmi))
         return ct_world_scene(out);   /* the world map, or nothing */
     unsigned mw = w[L1_W] > w[L2_W] ? w[L1_W] : w[L2_W];
@@ -165,8 +172,10 @@ int ct_game_scene(ct_scene *out)
         }
         if (!(leader & 0x80) && leader == o)
             out->player = out->n_objects;
+        slot_of[out->n_objects] = (int8_t)i;
         out->n_objects++;
     }
+    n_slots = out->n_objects;
     if (out->oam)
         for (int e = 0; e < 128; e++) {
             unsigned w1 = out->oam[2 * e + 1], tile9 = w1 & 0x1FF;
@@ -182,5 +191,31 @@ int ct_game_scene(ct_scene *out)
             if (ob->n_pieces < CT_SCENE_MAX_PIECES)
                 ob->piece[ob->n_pieces++] = (uint8_t)e;
         }
+    return 0;
+}
+
+/* Poses (module.h ct_module_pose_fn) from the sprite decoder (sprites.h):
+   the key is kind << 16 | id << 8 | frame, the same pose on any map and
+   in any slot; one sheet per sprite record (kind and id). The game
+   mirrors 8x8 tiles inside a frame, never a whole frame, so a pose is
+   never drawn flipped. */
+int ct_game_pose(int obj, ct_scene_pose *out, uint8_t *rgba, int max)
+{
+    static const char *const kinds[4] = {"pc", "npc", "enemy", "other"};
+    if (obj < 0 || obj >= n_slots)
+        return -1;
+    ct_sprite_info in;
+    int r = rgba ? ct_sprite_frame(slot_of[obj], rgba, max, &in)
+                 : ct_sprite_describe(slot_of[obj], &in);
+    if (r || in.kind == CT_SPRITE_OTHER)
+        return -1;
+    memset(out, 0, sizeof *out);
+    out->key = in.key | 1u << 24;   /* never 0 */
+    out->sheet = (uint32_t)in.kind << 8 | in.id;
+    out->w = in.w;
+    out->h = in.h;
+    out->origin_x = in.origin_x;
+    out->origin_y = in.origin_y;
+    snprintf(out->name, sizeof out->name, "%s%02x", kinds[in.kind & 3], in.id);
     return 0;
 }
