@@ -691,8 +691,15 @@ HwMath_MulBy60 C262AE. The properties come from BG2 only. A nibble:
 | --- | --- | --- |
 | 0 | walkable | yes |
 | bit 0 (1) | blocked: mountains, dense forest, the shore band | yes (runs below) |
-| bit 1 (2) | water: blocked on foot (C239C3 tests bits 0-1); every ocean tile is 2 | code + the data |
+| bit 1 (2) | water: blocked on foot (C239C3 tests bits 0-1); every ocean tile is 2, **and so are the upper parts of mountains** | code + the data |
 | bit 2 (4) | cover: walkable, the party sprite draws partly hidden (C239AE) | yes: stepped through |
+
+*Verified* by laying the classes over the `--png` picture (the 3D world map work): the
+peaks of every mountain on `$1F0` are 2, not 1, so "2" means "not on foot" (sea or high
+ground) and only the picture tells water from rock. The cover cells (4) are the bottom
+rows of towns and the castle's gate, where the walker passes behind the town's art, not
+woods. A block of metatiles south of the middle (about metatiles 39-57 x 50-63) is drawn
+as open sea but has land classes (0 and 1); the party can't reach it.
 
 **Collision rule.** When the party steps to tile (x,y), the game fetches the nibbles of
 (x-1,y-1), (x,y-1), (x-1,y), (x,y) into `node+$22..$25` and refuses the step if either of
@@ -784,6 +791,20 @@ metatile index (which picture it is) for that.
 
 ### W8. Proposed `ct_scene` extension for the world map
 
+**Since implemented** (ABI 7), in this form: `mode` `CT_SCENE_WORLD`; 8 px cells (one tile
+each) at row stride `CT_SCENE_WORLD_STRIDE` (256) for the cells and the tilemaps;
+`CT_CELL_COVER`; exits as `CT_CELL_EVENT` cells (no separate list: the renderer needs only
+where they are); `wrap`, and BG3 as an *overlay* (`layer[2]`, `overlay_w/_h` in tiles,
+`overlay_x/_y` its scroll, `overlay_blend` in sixteenths) at the end of `ct_scene`; and
+four blocked kinds a module can name (`CT_CELL_MOUNTAIN`, `_FOREST`, `_SHORE`, `_FLAT`).
+`game/ct/world_scene.c` fills it; terrain 2 maps to water and 1 to solid, and the
+renderer looks at the pixels for the rest (W3: 2 is also mountain tops), with a
+per-metatile `relief[]` correction table. The party is object 0 (its pieces: the
+entries at its sprite's place, W5); the other play-area entries are grouped into
+objects by touching pieces; the era caption (y = 192) belongs to none, and the renderer
+lays it flat. `worldmap_probe.py --text` decodes the same records independently for the
+`scene_decode` test. The renderer is HD2D.md, "The world map". The original proposal:
+
 The current struct (`runtime/module.h`, ABI 6) already has most of it: layers as expanded
 8x8 tilemaps (`tiles`, `chr_base`, `bpp`), `cells` with a class, objects as OAM entry
 lists, the camera, `map_id`/`map_generation`. What is missing is a mode, bigger and finer
@@ -820,6 +841,11 @@ for bit 1, `CT_CELL_COVER` for bit 2, `raw` = the nibble); `layer[0]` = BG1 and 
 fallback (draw the 2D picture) keeps working for every other screen.
 
 ### W9. Feasibility: a 3D world map
+
+**Done** (HD2D.md, "The world map"): a heightfield from the cells' pixels, mountains as
+domes, forests as canopies, flat water with a shader shimmer, the clouds as a plane that
+also shades the ground, wrapping by drawing the neighbouring copies, billboards on the
+pixel grid. The notes below are the spike's.
 
 **Verdict: feasible, and easier than the field.** It is plain mode 1 with no HDMA; the
 whole map is resident, flat, in two tile layers; the camera is the party's position;
