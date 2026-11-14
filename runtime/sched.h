@@ -92,6 +92,30 @@ int sched_behind_on(void);
 const uint8_t *sched_behind(void);
 const uint8_t *sched_behind_layers(void);
 
+/* port: the provenance G-buffer: per pixel, which character, palette and
+   sprite the main screen's winning pixel came from, for texture
+   replacement (asset packs). Same layout as PpuProv in
+   third_party/snes/ppu.h, which documents the fields. Off by default (it
+   costs CPU time in the PPU); sched_set_prov takes effect from the next
+   frame. sched_prov is SCHED_WIDTH x SCHED_HEIGHT entries, NULL when the
+   last frame was drawn without it; sched_prov_mem the VRAM, CGRAM and OAM
+   as they were when that frame was copied (VBlank), which the
+   characters and palettes it names are read from. */
+typedef struct {
+    uint16_t chr;
+    uint8_t pal, cidx, flags, u, v, index, name, size, layer, reserved;
+} sched_prov_px;
+enum { SCHED_PROV_BPP = 3, SCHED_PROV_HFLIP = 4, SCHED_PROV_VFLIP = 8, SCHED_PROV_OBJ = 16 };
+typedef struct {
+    uint16_t vram[0x8000];
+    uint16_t cgram[256];
+    uint16_t oam[0x110];
+} sched_vmem;
+void sched_set_prov(int on);
+int sched_prov_on(void);
+const sched_prov_px *sched_prov(void);
+const sched_vmem *sched_prov_mem(void);
+
 /* port: PPU state latched with the last frame (at VBlank), for
    renderers that treat scenes differently. */
 typedef struct {

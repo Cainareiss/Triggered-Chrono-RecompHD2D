@@ -358,6 +358,113 @@ static void test_behind_buffer(void)
     }
 }
 
+/* port: the provenance buffer (Ppu.provBuffer): each pixel names the
+   character, palette and texel it came from. Mode 1: BG1 cell 0 tile 1,
+   cell 1 the same tile flipped horizontally; a 16x16 sprite (name 2,
+   palette 1, flipped horizontally) at x 40. The texel each pixel names,
+   read back from VRAM, must be the color it drew; and the frame must be
+   the same with the buffer on and off. */
+static int prov_texel(const Ppu *p, const PpuProv *v)
+{
+    int bpp = v->flags & kPpuProvBpp;   /* 1, 2, 3: 2, 4, 8 bits */
+    int u = v->u, w = v->v;
+    unsigned chr = v->chr;
+    if (v->flags & kPpuProvObj) {   /* the sprite's character, 16x16 page wrap */
+        int n = ((((v->name >> 4) + (w >> 3)) << 4) | (((v->name & 15) + (u >> 3)) & 15)) & 0xff;
+        chr = (v->chr + n * 16) & 0x7fff;
+        u &= 7, w &= 7;
+    }
+    int planes = 1 << bpp, px = 0;
+    for (int k = 0; k < planes; k += 2) {
+        uint16_t word = p->vram[(chr + k / 2 * 8 + w) & 0x7fff];
+        px |= ((word >> (7 - u)) & 1) << k | ((word >> (15 - u)) & 1) << (k + 1);
+    }
+    return px;
+}
+
+static void test_prov_buffer(void)
+{
+    static uint8_t frame[2][256 * 4 * 4];
+    static PpuProv prov[256 * 4];
+    for (int on = 0; on < 2; on++) {
+        bus_reset();
+        Ppu *p = snes_hw_ppu();
+        write8(0x2100, 0x0F);   /* INIDISP: brightness 15 */
+        write8(0x2101, 0x02);   /* OBSEL: 8/16, names at $4000 */
+        write8(0x2105, 0x01);   /* BGMODE 1 */
+        write8(0x2107, 0x00);   /* BG1 tilemap at $0000 */
+        write8(0x210B, 0x01);   /* BG1 tiles at $1000 */
+        write8(0x212C, 0x11);   /* TM: BG1, OBJ */
+        for (int k = 0; k < 256; k++) {   /* every color distinct */
+            write8(0x2121, (uint8_t)k);
+            write8(0x2122, (uint8_t)(k * 37));
+            write8(0x2122, (uint8_t)(k >> 2));
+        }
+        memset(p->vram, 0, sizeof p->vram);
+        memset(p->oam, 0, sizeof p->oam);
+        for (int k = 1; k < 128; k++)
+            p->oam[k * 2] = 0xF000;   /* off screen */
+        p->vram[0] = 0x0400 | 1;            /* palette 1, tile 1 */
+        p->vram[1] = 0x4000 | 0x0400 | 1;   /* the same, H flip */
+        for (int r = 0; r < 8; r++) {   /* tile 1: a different pattern per row */
+            p->vram[0x1000 + 16 + r] = (uint16_t)(0x80 >> r | (0x3C << 8));
+            p->vram[0x1000 + 16 + 8 + r] = (uint16_t)(0x0F << (r & 3));
+        }
+        for (int c = 0; c < 4; c++)   /* sprite characters 2, 3, 18, 19 */
+            for (int r = 0; r < 8; r++) {
+                int chr = (c & 1) + (c >> 1) * 16 + 2;
+                p->vram[0x4000 + chr * 16 + r] = (uint16_t)((0xF0 >> c) | (r << 9));
+                p->vram[0x4000 + chr * 16 + 8 + r] = (uint16_t)(0x11 << (r & 3));
+            }
+        p->oam[0] = 40;                                          /* x 40, y 0 */
+        p->oam[1] = (uint16_t)(2 | 1 << 9 | 3 << 12 | 0x4000);   /* name 2, palette 1, prio 3, H flip */
+        p->oam[0x100] = 2;                                       /* entry 0 large: 16x16 */
+        memset(prov, 0xEE, sizeof prov);
+        PpuBeginDrawing(p, frame[on], 256 * 4, 0);
+        PpuSetProvBuffer(p, on ? prov : NULL, 256);
+        for (int line = 0; line <= 4; line++)
+            ppu_runLine(p, line);
+        ppu_drawTo(p, 256);
+        PpuSetProvBuffer(p, NULL, 0);
+        if (!on)
+            continue;
+        CHECK(!memcmp(frame[0], frame[1], sizeof frame[0]), "the frame changes with provenance on");
+        int bg = 0, obj = 0, bad = 0;
+        for (int y = 0; y < 4; y++)
+            for (int x = 0; x < 256; x++) {
+                const PpuProv *v = &prov[y * 256 + x];
+                if (!(v->flags & kPpuProvBpp))
+                    continue;
+                int px = prov_texel(p, v);
+                if (px == 0 || (v->pal + px) != v->cidx) {
+                    if (bad++ < 4)
+                        CHECK(0, "pixel %d,%d: texel %d,%d of $%04X is %d, drew color %d (palette %d)",
+                              x, y, v->u, v->v, v->chr, px, v->cidx, v->pal);
+                    continue;
+                }
+                const uint8_t *c = &frame[1][(y * 256 + x) * 4];
+                uint16_t want = p->cgram[v->cidx];
+                CHECK(c[2] >> 3 == (want & 31) && c[0] >> 3 == (want >> 10 & 31),
+                      "pixel %d,%d: color index %d is not the color drawn", x, y, v->cidx);
+                if (v->flags & kPpuProvObj)
+                    obj++;
+                else
+                    bg++;
+            }
+        CHECK(bg > 20 && obj > 20, "named %d BG and %d OBJ pixels", bg, obj);
+        const PpuProv *a = &prov[3], *b = &prov[8 + 3];
+        CHECK(a->chr == 0x1010 && (a->flags & kPpuProvBpp) == 2 && a->pal == 16 && a->index == 0 &&
+              a->u == 3 && !(a->flags & kPpuProvHFlip), "BG1 pixel 3: chr $%04X flags %02x u %d",
+              a->chr, a->flags, a->u);
+        CHECK(b->u == 4 && (b->flags & kPpuProvHFlip), "flipped cell: u %d flags %02x", b->u, b->flags);
+        const PpuProv *s = &prov[40];
+        CHECK((s->flags & kPpuProvObj) && s->index == 0 && s->size == 16 && s->name == 2 &&
+              s->chr == 0x4000 && s->u == 15 && s->pal == 0x90,
+              "sprite pixel: flags %02x index %d size %d name %d chr $%04X u %d pal %02x", s->flags,
+              s->index, s->size, s->name, s->chr, s->u, s->pal);
+    }
+}
+
 int main(void)
 {
     th_bus_init();
@@ -373,5 +480,6 @@ int main(void)
     test_bg_16x16();
     test_midline_write();
     test_behind_buffer();
+    test_prov_buffer();
     return th_report("snes_bus");
 }

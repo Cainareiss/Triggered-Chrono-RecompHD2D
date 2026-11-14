@@ -2,6 +2,7 @@
 
 #include <setjmp.h>
 #include "compat/ucontext.h"   /* port: <ucontext.h>, or ours (bionic, musl) */
+#include <stddef.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -31,6 +32,14 @@ static uint8_t fb_behind_layers[SCHED_WIDTH * SCHED_HEIGHT];
 static uint8_t present_behind_layers[SCHED_WIDTH * SCHED_HEIGHT];
 static int present_behind_valid;
 static sched_ppu_state present_state;
+/* port: provenance G-buffer (asset packs), when on */
+static int prov_on;
+static PpuProv fb_prov[SCHED_WIDTH * SCHED_HEIGHT];
+static sched_prov_px present_prov[SCHED_WIDTH * SCHED_HEIGHT];
+static sched_vmem present_vmem;
+static int present_prov_valid;
+_Static_assert(sizeof(PpuProv) == sizeof(sched_prov_px), "sched_prov_px mirrors PpuProv");
+_Static_assert(offsetof(PpuProv, layer) == offsetof(sched_prov_px, layer), "sched_prov_px layout");
 static int line;
 static unsigned hclock;         /* master clocks into the current line */
 static uint64_t line_start;     /* master clocks since sched_init at line start */
@@ -456,6 +465,7 @@ void sched_init(CPU *c)
     memset(fb_behind_layers, 0, sizeof fb_behind_layers);
     memset(present_behind_layers, 0, sizeof present_behind_layers);
     present_behind_valid = 0;
+    present_prov_valid = 0;   /* port */
     memset(&present_state, 0, sizeof present_state);
     bus_hook(0x4200, bus_open_bus, nmitimen_write);   /* write-only: open bus */
     bus_hook(0x4201, bus_open_bus, wrio_write);
@@ -500,6 +510,7 @@ static void start_line(void)
             PpuSetBehindBuffer(ppu, fb_behind, SCHED_WIDTH * 4, fb_behind_layers, SCHED_WIDTH);
         else
             PpuSetBehindBuffer(ppu, NULL, 0, NULL, 0);
+        PpuSetProvBuffer(ppu, prov_on ? fb_prov : NULL, SCHED_WIDTH);   /* port */
         dma_initHdma(dma);
     }
     if (line == SCHED_VBLANK_LINE) {
@@ -510,6 +521,13 @@ static void start_line(void)
         if (present_behind_valid) {
             memcpy(present_behind, fb_behind, sizeof present_behind);
             memcpy(present_behind_layers, fb_behind_layers, sizeof present_behind_layers);
+        }
+        present_prov_valid = ppu->provBuffer != NULL;   /* port */
+        if (present_prov_valid) {
+            memcpy(present_prov, fb_prov, sizeof present_prov);
+            memcpy(present_vmem.vram, ppu->vram, sizeof present_vmem.vram);
+            memcpy(present_vmem.cgram, ppu->cgram, sizeof present_vmem.cgram);
+            memcpy(present_vmem.oam, ppu->oam, sizeof present_vmem.oam);
         }
         present_state = (sched_ppu_state){
             .mode = ppu->mode, .bg3_priority = ppu->bg3Priority,
@@ -1583,6 +1601,11 @@ const uint8_t *sched_behind_layers(void)
     return present_behind_valid ? present_behind_layers : NULL;
 }
 const sched_ppu_state *sched_ppu_state_get(void) { return &present_state; }
+/* port: provenance G-buffer */
+void sched_set_prov(int on) { prov_on = on; }
+int sched_prov_on(void) { return prov_on; }
+const sched_prov_px *sched_prov(void) { return present_prov_valid ? present_prov : NULL; }
+const sched_vmem *sched_prov_mem(void) { return present_prov_valid ? &present_vmem : NULL; }
 long sched_frame_count(void) { return frames; }
 void sched_set_frame_hook(void (*fn)(long frame)) { frame_hook = fn; }
 uint64_t sched_clock(void) { return line_start + hclock; }

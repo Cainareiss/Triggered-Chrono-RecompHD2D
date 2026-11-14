@@ -103,6 +103,8 @@
  * --require-audio  exit 1 if every audio sample of the run is zero
  * --behind         also draw the PPU's behind G-buffer (sched_behind), as
  *                  the HD-2D renderer does, to measure what it costs
+ * --prov           also draw the PPU's provenance G-buffer (sched_prov), as
+ *                  asset packs do (port)
  *
  * On a fatal error the last 64 instruction addresses are printed.
  *
@@ -641,6 +643,8 @@ int main(int argc, char **argv)
             }
         } else if (!strcmp(argv[k], "--behind")) {
             sched_set_behind(1);   /* port */
+        } else if (!strcmp(argv[k], "--prov")) {
+            sched_set_prov(1);   /* port: asset packs */
         } else if (!strcmp(argv[k], "--interp-only")) {
             sched_set_native(0);
         } else if (!strcmp(argv[k], "--module") && k + 1 < argc) {
@@ -687,7 +691,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "usage: ct_boot [--frames N] [--dump DIR] [--shot-every N DIR] [--thumbs FILE] [--resync REF LAG OUT] [--needed-hw FILE] "
                             "[--min-nmis K] [--require-render] [--wav FILE] "
                             "[--require-audio] [--input F1-F2:BUTTONS] [--script FILE] "
-                            "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--scene FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE] [--behind]\n");
+                            "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--scene FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE] [--behind] [--prov]\n");
             return 2;
         }
     }

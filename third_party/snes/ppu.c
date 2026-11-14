@@ -22,6 +22,7 @@ static void ppu_calculateMode7Starts(Ppu* ppu, int y);
 static int ppu_getPixelForMode7(Ppu* ppu, int x, int layer, bool priority);
 static bool ppu_getWindowState(Ppu* ppu, int layer, int x);
 static bool ppu_evaluateSprites(Ppu* ppu, int line);
+static void ppu_provenance(Ppu *ppu, int x, int y, int layer, int z, uint8 layerByte);   // port
 static void PpuDrawWholeLine(Ppu *ppu, uint y);
 
 #define IS_SCREEN_ENABLED(ppu, sub, layer) (ppu->screenEnabled[sub] & (1 << layer))
@@ -41,6 +42,8 @@ Ppu* ppu_init() {
   ppu->layerPitch = 0;
   ppu->behindColor = ppu->behindLayer = NULL;   // port
   ppu->behindColorPitch = ppu->behindLayerPitch = 0;
+  ppu->provBuffer = NULL;   // port
+  ppu->provPitch = 0;
   ppu->extraLeftRight = kPpuExtraLeftRight;
   return ppu;
 }
@@ -172,6 +175,12 @@ void PpuSetBehindBuffer(Ppu *ppu, uint8_t *color, size_t color_pitch,
   ppu->behindLayer = layer;
   ppu->behindColorPitch = (uint32_t)color_pitch;
   ppu->behindLayerPitch = (uint32_t)layer_pitch;
+}
+
+// port: see Ppu.provBuffer.
+void PpuSetProvBuffer(Ppu *ppu, PpuProv *buffer, size_t pitch) {
+  ppu->provBuffer = buffer;
+  ppu->provPitch = (uint32_t)pitch;
 }
 
 // port: where line y's G-buffer row goes; a scratch row when the
@@ -945,6 +954,8 @@ static void PpuDrawBackgrounds(Ppu *ppu, int y, bool sub) {
 }
 
 static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
+  if (ppu->provBuffer)   // port: not tracked here
+    memset(ppu->provBuffer + (y - 1) * ppu->provPitch, 0, sizeof(PpuProv) * (256 + ppu->extraLeftRight * 2));
   if (ppu->forcedBlank) {
     uint8 *dst = &ppu->renderBuffer[(y - 1) * ppu->renderPitch];
     size_t n = sizeof(uint32) * (256 + ppu->extraLeftRight * 2);
@@ -1132,10 +1143,14 @@ static void ppu_handlePixel(Ppu* ppu, int x, int y) {
       r2 = r; g2 = g; b2 = b;
     }
     // port: layer G-buffer
-    PpuLayerRow(ppu, y)[x + ppu->extraLeftRight] =
-        (uint8)(mainZ << 4 | (mathEnabled ? 8 : 0) | (mainLayer & 7));
+    uint8 layerByte = (uint8)(mainZ << 4 | (mathEnabled ? 8 : 0) | (mainLayer & 7));
+    PpuLayerRow(ppu, y)[x + ppu->extraLeftRight] = layerByte;
+    if (ppu->provBuffer)   // port: provenance
+      ppu_provenance(ppu, x, y, mainLayer, mainZ, layerByte);
   } else {
     PpuLayerRow(ppu, y)[x + ppu->extraLeftRight] = 0;
+    if (ppu->provBuffer)   // port
+      memset(&ppu->provBuffer[(y - 1) * ppu->provPitch + x + ppu->extraLeftRight], 0, sizeof(PpuProv));
     if (ppu->behindColor) {   // port
       memset(ppu->behindColor + (y - 1) * ppu->behindColorPitch + (x + ppu->extraLeftRight) * 4, 0, 4);
       ppu->behindLayer[(y - 1) * ppu->behindLayerPitch + x + ppu->extraLeftRight] = 0;
@@ -1318,6 +1333,76 @@ static int ppu_getPixel(Ppu *ppu, int x, int y, bool sub, int *r, int *g, int *b
 
 }
 
+
+// port: the provenance of main-screen pixel (x, y), whose winner is
+// layer (0-3 BG, 4/6 OBJ, 5 backdrop) at z level z (ppu_zLevel), for
+// Ppu.provBuffer. A BG pixel's tile is looked up again as
+// ppu_getPixelForBgLayer does; a sprite's comes from objProv.
+static void ppu_provenance(Ppu *ppu, int x, int y, int layer, int z, uint8 layerByte) {
+  PpuProv *p = &ppu->provBuffer[(y - 1) * ppu->provPitch + x + ppu->extraLeftRight];
+  memset(p, 0, sizeof(*p));
+  p->layer = layerByte;
+  if (layer == 4 || layer == 6) {
+    uint32 o = ppu->objProv[x + kPpuExtraLeftRight];
+    uint16 c = ppu->objBuffer.data[x + kPpuExtraLeftRight] & 0xff;
+    p->u = o & 63;
+    p->v = (o >> 6) & 63;
+    p->index = (o >> 12) & 127;
+    p->flags = 2 | kPpuProvObj | ((o >> 19) & 1 ? kPpuProvHFlip : 0) | ((o >> 20) & 1 ? kPpuProvVFlip : 0);
+    p->size = 8 << ((o >> 21) & 3);
+    p->chr = (o >> 23) & 1 ? ppu->objTileAdr2 : ppu->objTileAdr1;
+    p->name = o >> 24;
+    p->cidx = (uint8)c;
+    p->pal = (uint8)(c & 0xf0);
+    return;
+  }
+  if (layer > 3 || ppu->mode == 7)
+    return;
+  bool priority = z == ppu_zLevel(ppu, layer, 1);
+  int lx = x, ly = y;
+  if (IS_MOSAIC_ENABLED(ppu, layer)) {
+    lx -= lx % ppu->mosaicSize;
+    ly -= (ly - 1) % ppu->mosaicSize;
+  }
+  int hoff = lx + ppu->bgLayer[layer].hScroll;
+  int voff = ly + ppu->bgLayer[layer].vScroll;
+  if ((ppu->mode == 2 || ppu->mode == 4 || ppu->mode == 6) && layer < 2)
+    ppu_offsetPerTile(ppu, layer, lx, ly, &hoff, &voff);
+  int px = hoff & 0x3ff, py = voff & 0x3ff;
+  BgLayer *layerp = &ppu->bgLayer[layer];
+  bool wideTiles = ppu->mode == 5 || ppu->mode == 6 || layerp->bigTiles;
+  bool highTiles = layerp->bigTiles;
+  int tileBitsX = wideTiles ? 4 : 3;
+  int tileHighBitX = wideTiles ? 0x200 : 0x100;
+  int tileBitsY = highTiles ? 4 : 3;
+  int tileHighBitY = highTiles ? 0x200 : 0x100;
+  uint16_t tilemapAdr = layerp->tilemapAdr + (((py >> tileBitsY) & 0x1f) << 5 | ((px >> tileBitsX) & 0x1f));
+  if ((px & tileHighBitX) && layerp->tilemapWider) tilemapAdr += 0x400;
+  if ((py & tileHighBitY) && layerp->tilemapHigher) tilemapAdr += layerp->tilemapWider ? 0x800 : 0x400;
+  uint16_t tile = ppu->vram[tilemapAdr & 0x7fff];
+  if (((bool)(tile & 0x2000)) != priority)
+    return;   // not this layer's pixel after all
+  int paletteNum = (tile & 0x1c00) >> 10;
+  int row = (tile & 0x8000) ? 7 - (py & 0x7) : (py & 0x7);
+  int col = (tile & 0x4000) ? (px & 0x7) : 7 - (px & 0x7);
+  int tileNum = tile & 0x3ff;
+  if (wideTiles && (((bool)(px & 8)) ^ ((bool)(tile & 0x4000)))) tileNum += 1;
+  if (highTiles && (((bool)(py & 8)) ^ ((bool)(tile & 0x8000)))) tileNum += 16;
+  int bitDepth = bitDepthsPerMode[ppu->mode][layer];
+  if (bitDepth > 4 && bitDepth != 8)
+    return;
+  if (ppu->mode == 0) paletteNum += 8 * layer;
+  int paletteSize = bitDepth == 2 ? 4 : bitDepth == 4 ? 16 : 256;
+  p->chr = (uint16)((layerp->tileAdr + (tileNum & 0x3ff) * 4 * bitDepth) & 0x7fff);
+  p->pal = (uint8)(paletteSize * paletteNum);
+  p->cidx = (uint8)ppu_getPixelForBgLayer(ppu, px, py, layer, priority);
+  p->flags = (bitDepth == 2 ? 1 : bitDepth == 4 ? 2 : 3) | (tile & 0x4000 ? kPpuProvHFlip : 0) |
+             (tile & 0x8000 ? kPpuProvVFlip : 0);
+  p->u = (uint8)(7 - col);
+  p->v = (uint8)row;
+  p->index = (uint8)layer;
+  p->size = 8;
+}
 
 // ct-recomp: the BG3 tilemap word at BG3 pixel position (x, y), for
 // offset-per-tile.
@@ -1502,7 +1587,9 @@ static bool ppu_getWindowState(Ppu* ppu, int layer, int x) {
   return test1 || test2;
 }
 
-static bool ppu_evaluateSprites(Ppu* ppu, int line) {
+// port: two versions, plain and with prov, which also notes in objProv
+// which sprite texel each objBuffer pixel is (Ppu.provBuffer).
+static PPU_ALWAYS_INLINE bool ppu_evaluateSprites_t(Ppu* ppu, int line, const bool prov) {
   // TODO: iterate over oam normally to determine in-range sprites,
   //   then iterate those in-range sprites in reverse for tile-fetching
   // TODO: rectangular sprites, wierdness with sprites at -256
@@ -1565,13 +1652,24 @@ static bool ppu_evaluateSprites(Ppu* ppu, int line) {
           uint32 bits = plane >> shift;
           int pixel = (bits >> 0) & 1 | (bits >> 7) & 2 | (bits >> 14) & 4 | (bits >> 21) & 8;
           // draw it in the buffer if there is a pixel here, and the buffer there is still empty
-          if (pixel != 0 && (dst[0] & 0xff) == 0)
+          if (pixel != 0 && (dst[0] & 0xff) == 0) {
             dst[0] = z + pixel;
+            if (prov)   // port
+              ppu->objProv[dst - ppu->objBuffer.data] =
+                  (uint32)((usedCol & ~7) + 7 - shift) | (uint32)row << 6 | (uint32)(index >> 1) << 12 |
+                  (uint32)((oam1 >> 14) & 1) << 19 | (uint32)((oam1 >> 15) & 1) << 20 |
+                  (uint32)(spriteSize == 8 ? 0 : spriteSize == 16 ? 1 : spriteSize == 32 ? 2 : 3) << 21 |
+                  (uint32)((oam1 >> 8) & 1) << 23 | (uint32)(oam1 & 0xff) << 24;
+          }
         }
       }
     }
   } while ((index = (index + 2) & 0xff) != index_end);
   return (tilesLeft != tilesLeftOrg);
+}
+
+static bool ppu_evaluateSprites(Ppu* ppu, int line) {
+  return ppu->provBuffer ? ppu_evaluateSprites_t(ppu, line, true) : ppu_evaluateSprites_t(ppu, line, false);
 }
 
 uint8_t ppu_read(Ppu* ppu, uint8_t adr) {
