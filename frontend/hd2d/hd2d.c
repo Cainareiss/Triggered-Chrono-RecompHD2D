@@ -2412,7 +2412,12 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     const ct_scene *sc = g.s3.scene;
     int want3 = s->scene3d && g.s3.ok && sc &&
                 (sc->mode == CT_SCENE_FIELD || sc->mode == CT_SCENE_WORLD) && sc->vram &&
-                !(st && st->mode == 7);
+                !(st && st->mode == 7) &&
+                /* the map's layers (BG1, BG2) on neither screen: the
+                   console shows something else over a loaded map (a
+                   black screen with text), so the 3D view would show a
+                   map nobody sees */
+                !(st && !((st->main_enabled | st->sub_enabled) & 3));
     if (!s->scene3d || (!want3 && (g.s3.pic_w != pw || g.s3.pic_h != ph)))
         g.s3.amt = 0.0f;
     else
