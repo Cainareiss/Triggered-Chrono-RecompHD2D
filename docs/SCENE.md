@@ -31,6 +31,7 @@ ROM-derived: keep it in the build dir and never commit it.
 | BG tile graphics fully in VRAM for the map? | **Yes.** Loaded at map load; animated tiles are changed in place. |
 | Object state map-wide? | **Mostly.** Positions, scripts and movement run for all 64 slots. Animation frames only advance for objects near the camera. |
 | OAM | **Culled** to the camera window (+4 tiles); one VRAM sprite slot per active object. Only the current frame is uploaded. |
+| Any object's sprite frame without OAM? | **Yes** (A1): from ROM and WRAM, for 4- and 8-piece frames (`game/ct/sprites.c`), checked pixel for pixel against the PPU. |
 | (A) 3D rebuild of the field | **Yes.** All inputs are resident. A height map has to be *inferred*, because the game has none (see A0.9). |
 | (B1) battle co-op | **Yes.** One hook on the battle's pad word, keyed by the active-menu byte. |
 | (B2) P2 steers a follower | **Partial.** Hook the follower routine. Proper wall collision needs the leader's collision code, which is tied to the camera. |
@@ -277,6 +278,227 @@ Roofs and overhangs come from BG priority-1 quarters of L1/L2. Bridges and balco
 The camera is A0.5. Everything is in WRAM/VRAM/CGRAM at the end of the frame, so
 the module can fill the scene with no game hooks except the map-change counter.
 
+## A1. Field object sprites: drawing any object's frame from ROM and WRAM
+
+The game builds an object's frame only while the object is active, that is, near the camera (A0.6).
+VRAM holds only those frames (A0.7). `game/ct/sprites.c` does the same assembly from the source data,
+for **any** object, whether or not it is in OAM. `ct_sprite_frame(obj, rgba, max, &info)` draws the
+current frame as RGBA. It also returns the frame's size, the foot point inside the image, its pieces,
+its palette and a stable key. It only reads.
+`game/ct/test/test_sprites.c` (ctests `sprites_leene` and `sprites_follower`) checks it
+against what the console drew (A1.7).
+
+### A1.1 The sprite record (bank $E4)
+
+Each loaded object comes from a sprite record. The load routines read the record and fill the
+object's arrays:
+
+| Loaded by | Record | Object type `$1100` |
+| --- | --- | --- |
+| EventCmd_LoadPc ($C04476) and EventCmd_LoadPcIfInParty ($C0421E), through Obj_LoadPcSpriteRecord ($C0448D) | `$E4F000 + 5*id` (id = PC 0-6) | 0-3 |
+| EventCmd_LoadNpc ($C04590) | `$E4F023 + 5*id`, i.e. record `id + 7` | 4 |
+| EventCmd_LoadEnemy ($C046DF) | `$E4F600 + 10*id` | 5 |
+
+The five bytes of a PC or NPC record are below. Enemy records use the same first five bytes.
+
+| Byte | Meaning | Goes to |
+| --- | --- | --- |
+| 0 | graphics index g: a 24-bit pointer at `$E42000 + 3g` | `$1200/$1280` (A1.4) |
+| 1 | assembly index a: a 24-bit pointer at `$E42300 + 3a` | `$1300/$1380`, the frame assembly table (A1.3) |
+| 2 | palette index p | `$1400` = `$18 * p`; colors 1-12 are at `$E40000 + $18p` (A1.5) |
+| 3 | animation index n: 16-bit pointers at `$E42600 + 2n` (frames) and `$E42800 + 2n` (durations) | `$1500` (frames) and `$1580` (durations). `$1480` = (next pointer - this one) / 4, the bytes per facing |
+| 4 | frame format, bits 0-1 | `$1201` |
+
+The four table pointers are the field's direct-page words `$01AF`, `$01B2`, `$01B5` and `$01B8`.
+*Verified* in a WRAM dump at frame 8700: they hold `$E42000`, `$E42300`, `$E42600` and `$E42800`.
+Among the first records, format 0 is by far the most common. Records 15, 94, 95, 99, 102, 163 and 176 use
+format 1, and a few others use format 2.
+
+### A1.2 The animation table: from animation state to frame number
+
+Sub_CB3A ($C0CB3A) is called from the frame builders and selects the frame:
+
+- frame = `$E4:[$1500 + facing * $1480 + 4 * anim + step]`, where facing is `$1600` (0 up, 1 down,
+  2 left, 3 right), anim is `$1680` and step is `$1681`.
+- So the table is four facing blocks of `$1480` bytes. Animation `anim` starts at `4 * anim` in its
+  block. **An animation can be longer than 4 steps.** The walk cycle reaches step 5.
+- A `$FF` byte ends the animation. The game goes back to step 0 and uses the byte at step 0. It sets
+  `$1681` = `$FF`, which the next tick increments to 0.
+- `$1780` is the animation mode. Mode 3 shows the fixed frame `$1301`. Mode 2 plays animation `$1781`,
+  keeping a loop count in `$7F0B01`. On `$FF`, mode 2 keeps the frame it has.
+- Obj_AnimTickAndQueue ($C0C98A) counts the timer `$1601` down. When the timer expires, the routine
+  advances the step, reloads the timer from `$E4:[$1580 + 4 * anim + step]` (0 there means "back to
+  step 0") and queues the object for a rebuild.
+- **The game rebuilds a frame only on a tick.** So a change of facing or animation shows at the next
+  tick. The test sees this once in 7 checkpoints.
+- Only active objects tick (A0.6), so an off-screen object keeps its step. Its frame still follows any
+  change of facing or animation that its script makes.
+
+`ct_sprite_current_frame` returns `$0F01`, the frame last built, for an active object. For any other
+object it returns the frame that this selection gives.
+
+### A1.3 Frame assembly: pieces, offsets, flips and priority
+
+Obj_BuildSpriteFrameStep ($C0CAD9) dispatches on the format `$1201 & 3`: format 0 to $C0CBDC, format 1
+to $C0CEF5 and format 2 to $C0D4F7. Field_ProcessAnimQueue ($C0CA76) runs the build queue and stops when the raster
+passes line `$6B`. The frame record is at `$1300:$1380 + frame * size`:
+
+| Format | Pieces (16x16) | 8x8 tile words | Offset pairs | Record size |
+| --- | --- | --- | --- | --- |
+| 0 | 4 | 16 | 4 | `$28` (40) |
+| 1 | 8 | 32 | 8 | `$50` (80) |
+| 2 | 12 | 48 | 12 | `$78` (120). Built over several frames (`$1B00` steps). **Not decoded.** |
+
+- **Tile words.** A frame of n pieces has 4n words. Each word holds a source tile number in bits 0-10,
+  counted in 32-byte tiles from the graphics source, and an **H flip in bit 14**. Sub_E534 ($C0E534) copies a
+  flipped tile through the bit-reverse table at `$C0FD00`, and Sub_E687 ($C0E687) copies the others as
+  they are. No other bits are used, and there is no V flip.
+- **Tile order.** The words are written in order to a WRAM staging buffer. The buffer is DMAed into the
+  object's VRAM slot as two rows of 2n tiles. VRAM rows are 16 tiles wide, so the second row starts at tile t+16.
+  So piece k is words 2k and 2k+1 (its top half) and words 2n+2k and 2n+2k+1 (its bottom half).
+  Its OAM tile is `$0D00 + 2k`, a 16x16 OBJ.
+- **Offsets.** After the tile words come n pairs (dx, dy) of signed bytes. $C0CCC5 copies them into an
+  OAM template at `$7F4800 + $1700`, 8 bytes per piece: x as a sign-extended word, then y, tile and
+  attribute. The OAM entry ends up at screen position (`$0A00` + dx, `$0A80` + dy). `$0A00`/`$0A80` is
+  the foot point on the screen: the map position (`$1800 >> 4`, `$1880 >> 4`) minus the camera (A0.5).
+- **Attribute.** The attribute is `$0F81` (palette slot << 1) | `$0D01` (tile bit 8) | priority.
+  - A dy byte below `$E8` takes `$0C00`, the top half's priority.
+  - A dy byte of `$E8`-`$FF` (-24 to -1, near the feet) takes `$0C01`, the bottom half's.
+  - `$0C00`/`$0C01` come from the tiles under the object (A0.3).
+  - No OAM flip bits are set.
+- **Overlap.** Entry k comes before entry k+1 in OAM, so piece 0 draws in front.
+
+### A1.4 Where the tile graphics come from
+
+`$1200/$1280` holds the 24-bit source, the pointer at `$E42000 + 3g`:
+
+- **PCs** (types 0-3): uncompressed 4bpp tiles in ROM banks `$D2-$D5`. Crono's are at `$D272C0`.
+  Sub_E687 has one copy loop each for banks `$D2`, `$D3`, `$D4` and `$D5`.
+- **NPCs and enemies**: the pointer points to compressed data.
+  - EventCmd_LoadNpc runs Gfx_DecompressVector ($C30002) into `$7F:[$71]`. This is a heap in
+    `$7F8000-$7FFFFF` that grows as the map loads objects.
+  - Field_LookupOrRegisterId0920 ($C05C90) lets objects with the same graphics index share one copy.
+  - Then `$1200` = `$7F` and `$1280` = the heap address.
+  - The data stays there while the map is loaded, so an off-screen NPC's tiles are always in WRAM.
+- **Per-frame DMA: yes.** On each rebuild, the CPU copies the frame's tiles through `$2180` into the
+  staging buffer `$7F3800 + $200*i`. That address goes in `$0D80`. Sub_E952 ($C0E952) and Sub_E97A
+  ($C0E97A) pick i, and `$0BC0` records each buffer's owner. The copy is then queued at `$0940-$09AF`,
+  and Vblank_UploadSpriteTileQueue ($C0B1B2) sends it to the object's VRAM slot. Each active object
+  has one VRAM slot (`$0D00`, `$1700`), which holds only its current frame.
+
+### A1.5 Palettes
+
+- Obj_AssignSpritePalette ($C07170) runs when an object activates.
+  - It picks one of the 8 OBJ palettes and stores slot << 1 in `$0F81`. Objects whose `$1400` match
+    share one, tracked in `$0B00/$0B80`.
+  - It copies **12 colors (24 bytes) from `$E4:[$1400]`** with MVN into colors 1-12 of that palette in
+    the CGRAM shadow at `$7E2000`. OBJ palette s is at `$7E2100 + 32s`.
+  - It writes the same colors to the same place in a second copy, at `$7E2200`.
+- *Verified* at frame 8700:
+  - every OBJ palette in CGRAM equals the shadow at `$7E2100`;
+  - Crono's colors 1-12 (`$1400` = 0) equal `$E40000-$E40017`;
+  - the colors of NPCs 12 (`$0C78`) and 16 (`$00D8`) equal their ROM entries.
+- Colors 13-15 are not loaded from the record.
+  - NPC palettes have `$7C1F` there, an unused magenta. The party's palette has other colors there.
+  - No pixel of any frame checked uses them. The test counts such pixels, and there were none.
+  - `sprites.c` takes them from the CGRAM shadow while the object holds a palette slot. Otherwise it
+    leaves them at 0.
+- Color 0 is transparent.
+
+### A1.6 The key for texture packs
+
+`info.key = kind << 16 | id << 8 | frame`. kind is 0 for a PC, 1 for an NPC and 2 for an enemy. id is
+`$1101`. The key is the sprite record plus the frame number in its assembly table. So one pose has
+one key on every map and in every slot.
+
+- A pack replaces a pose as one image of `info.w x info.h`, anchored at the foot point
+  (`info.origin_x/y`).
+- The palette source is given separately (`info.palette_src`), for packs that want recolors to get
+  their own key.
+- Examples from Leene Square: `000018` is Crono's frame `$18`, `000204` is Lucca following him, and
+  `014F01` is NPC `$4F`'s frame 1.
+
+### A1.7 Verification (test_sprites)
+
+The test plays `leene_square.txt`. At each checkpoint frame's edge it decodes every object. It then
+checks each object that the scene (`ct_scene`, game/ct/scene.c) lists with OAM entries:
+
+1. **Pieces.** The decoded image is placed at the object's screen foot point (`$0A00/$0A80`). Each
+   on-screen pixel must have the same color index as the object's own OAM entries. Those entries are
+   drawn from VRAM with the console's OBJ size, name base and flips. Pixels covered by another sprite or
+   by a BG count too.
+2. **Colors.** Each color index used must have the same color as the entry's palette in CGRAM.
+3. **Screen.** The test takes the PPU's output for the *next* frame. Where the layer buffer shows OBJ and
+   the front OAM entry belongs to this object, the pixel must have the decoded color with brightness
+   applied. The next frame is the right one because OAM and tiles at frame F's edge are uploaded in F's
+   VBlank and drawn in F+1. Pixels changed by color math are skipped, and there were none.
+4. **Frames.** From 300 frames before the first checkpoint onward, the test watches every frame.
+   Whenever the game builds a new frame for an active object, the frame that the animation state selects
+   (A1.2) must be the one built. At the checkpoints themselves, a difference is only reported, since it
+   is a change that waits for the next tick.
+5. **Off screen.** Each object off the screen must decode. When it later appears on screen with the
+   same key, its image must be identical.
+
+Results. Both ctests pass, and every count below is all equal:
+
+| Run | Checkpoints | On screen | Piece pixels | Screen pixels | Builds checked |
+| --- | --- | --- | --- | --- | --- |
+| `sprites_leene`: walking in Leene Square, then the bell plaza | 8500 8600 8650 8700 8805 9100 9200 | 4-11 per checkpoint | 15216 | 14685 | 398 |
+| `sprites_follower` (`--poke 8000:2981^82`: Lucca follows Crono) | 8600 8650 8700 | 10-11, Lucca among them | 7667 | 7132 | 261 |
+
+**Off-screen decoding.** Six NPCs were decoded off screen *before the game had ever built a frame for
+them* (`$0F01` = `$FF`): 14, 21 and 23 in Leene Square, and 16, 17 and 31 in the bell plaza. Each later
+appeared on screen with the same key and an identical image. With `--png DIR`, the test writes every
+decoded frame, on screen or off, as a PNG. These images are ROM-derived, so keep them in the build tree.
+
+### A1.8 Limits
+
+- Format 2 (12 pieces, built over several frames) is not decoded, and `ct_sprite_frame` returns -1 for
+  it. No format 2 object was on screen in the runs checked.
+- Format 1 (8 pieces, rows of 16 tiles) is read the way the code builds it: $C0CEF5 uses `$50`-byte
+  records and `$200`-byte rows. No format 1 object appears in the replays, so it has not been checked
+  against the PPU.
+- Colors 13-15 of an off-screen object are unknown and come back as 0. No frame checked uses them.
+- An off-screen object's frame is the one its frozen animation state selects. On activation the game
+  shows that same frame at its first tick, though by then it may have advanced the step once. A second
+  view that wants the object animated must advance the step itself, from the duration table (A1.2).
+- The pieces carry the top/bottom priority choice (`info.piece[k].top`). Drawing behind BG priority
+  tiles is left to the renderer.
+- Palette changes made by events, and sprites drawn by other systems (battle, the world map), are not
+  covered.
+
+### A1.9 Proposed engine-facing interface (not in module.h; no CT_MODULE_ABI change yet)
+
+The coop and scene3d branches will wire this up. It is keyed on the `ct_scene` object list, so the
+engine never sees game slots:
+
+```c
+/* One object's current animation frame, as the module draws it from
+   game data (not from OAM/VRAM): for objects off the camera, a second
+   view, and whole-pose texture replacement. */
+typedef struct {
+    uint16_t w, h;            /* image size, px */
+    int16_t  origin_x, origin_y;   /* the object's foot point inside it */
+    uint64_t key;             /* stable per pose (module-defined; this game:
+                                 kind << 16 | id << 8 | frame) */
+    uint32_t palette_key;     /* separate, for recolors (0: none) */
+    uint8_t  from_live;       /* 1: the frame the game shows now; 0: derived */
+    uint8_t  n_bands;         /* priority bands, top to bottom */
+    struct { int16_t y0, y1; uint8_t priority; } band[4];   /* OBJ priority 0-3 per row range */
+} ct_sprite_image;
+
+/* Draw object `index` of the last ct_scene as RGBA8 into rgba (max
+   pixels); 0, or -1 if the module can't draw it (then fall back to OAM). */
+typedef int (*ct_module_sprite_fn)(int index, uint8_t *rgba, int max, ct_sprite_image *out);
+```
+
+- At the next ABI bump this goes in `ct_module_info` after `scene`, as `sprite_size` and `sprite`.
+  Until then, the static programs can call `ct_sprite_frame` directly.
+- The module maps a scene index to a game slot. scene.c lists the non-empty slots in order, the same
+  walk that test_sprites does.
+- The bands carry this game's split priority: `$0C00` for pieces with dy < -24 and `$0C01` for the
+  rest. With them, a renderer can draw the upper body over a priority-2 tile and the feet under it.
+
 ## B0. Split-screen gate
 
 **Can the engine draw a second view of the same map with a different camera, from
@@ -287,7 +509,7 @@ WRAM/VRAM alone?**
 | BG1/BG2/BG3 | **Yes** | WRAM grids + metatile tables + VRAM tiles + CGRAM (A0.2, A0.4). The engine composes its own tilemap. The VRAM window is never used. |
 | Animated tiles and palettes | Yes | They are shared, and changed in VRAM/CGRAM. |
 | Object positions | **Yes** | Map-wide (A0.6). |
-| Sprite pixels for objects near camera 2 | **No** | Not in VRAM unless the object is also near camera 1. Graphics exist in ROM/`$7F8000+` (`$1200/$1280`), but the frame layout comes from the bank-$E4 animation tables and the per-frame assembly code (Obj_BuildSpriteFrameStep $C0CAD9). |
+| Sprite pixels for objects near camera 2 | **No** from VRAM; **yes** from ROM/WRAM through `game/ct/sprites.c` (A1) | Not in VRAM unless the object is also near camera 1. Graphics exist in ROM/`$7F8000+` (`$1200/$1280`), but the frame layout comes from the bank-$E4 animation tables and the per-frame assembly code (Obj_BuildSpriteFrameStep $C0CAD9). |
 | Their animation frame | **No** | Frozen while inactive. |
 | Their palette | **No** | Only active objects get a sprite palette slot in CGRAM. |
 | HDMA, window and color-math effects, L3 fog | Approximate | They are screen-relative and tied to camera 1. |
@@ -474,8 +696,8 @@ Pixels never travel through the struct. The engine already has VRAM and CGRAM.
 - A field / battle / world map / menu mode byte for `ct_scene.mode`.
 - The world map ($1F0) uses a different engine (bank $C2/$C3 code wrote `$0100`). None of
   the above has been checked there.
-- The sprite frame format in bank $E4 (needed for the rasterizer in B0 1(b)), and where
-  each object's palette comes from.
+- The sprite frame format in bank $E4 and the palette source: answered in A1. Format 2
+  (12-piece) frames are still open.
 - Whether Marle (PC 1) can be forced into the party by a poke at the fair. Her object there is
   type 3 (EventCmd_LoadPc, a scripted actor), so the follower test used Lucca instead. A replay past the
   pendant scene would give a natural two-PC party for B1 battle tests.
