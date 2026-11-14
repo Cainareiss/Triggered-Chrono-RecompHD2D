@@ -131,6 +131,10 @@ void hd2d_set_camera_offset(float dtilt, float dyaw);
    CT_HD2D_3D=tilt=..,zoom=.. in the environment still wins at start-up. */
 void hd2d_set_camera(float tilt, float zoom);
 void hd2d_camera(float *tilt, float *zoom);
+/* port: the same for the world map (settings.ini worldmap_tilt /
+   worldmap_zoom; CT_HD2D_3D=wtilt=..,wzoom=..), the same defaults. */
+void hd2d_set_world_camera(float tilt, float zoom);
+void hd2d_world_camera(float *tilt, float *zoom);
 
 /* GPU time of the last hd2d_render in milliseconds (glFinish-bracketed:
    only measured when timing is on, as it stalls the pipeline). */

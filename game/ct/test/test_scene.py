@@ -6,8 +6,10 @@ must match an independent decoding of the same WRAM and OAM
 (tools/scene_probe.py --text, from docs/SCENE.md): map, camera, every
 layer's tilemap, every cell's class and flags, and the objects with the OAM
 entries that draw them. Checked in Leene Square (frame 8700, static build)
-and the bell plaza (9200, the engine with the module loaded), and that a
-battle (gato_win, 10800) is not a field scene.
+and the bell plaza (9200, the engine with the module loaded), that a
+battle (gato_win, 10800) is not a field scene, and the world map
+(world_map_save, 7600, the module: worldmap_probe.py --text, the same
+records at the world map's sizes plus the cloud overlay).
 
 usage: test_scene.py STATIC_BOOT ENGINE_BOOT MODULE REPLAY_DIR PROBE
 """
@@ -55,6 +57,9 @@ def check(probe: str, scene: str, wram: str, vram: str, want_mode: int, tag: str
     if want_mode == 1 and (len(drawn) < 4 or 'player -1' in got):
         print(f'test_scene: {tag}: {len(drawn)} objects with pieces, {got[3]}')
         return 1
+    if want_mode == 2 and (not drawn or not drawn[0].startswith('object 0 ')):
+        print(f'test_scene: {tag}: the party has no pieces')
+        return 1
     print(f'test_scene: {tag}: {len(got)} lines match ({len(objs)} objects, {len(drawn)} drawn)')
     return 0
 
@@ -65,12 +70,16 @@ def main(argv: list[str]) -> int:
         return 2
     static_boot, engine_boot, module, replay, probe = argv[1:]
     leene, gato = os.path.join(replay, 'leene_square.txt'), os.path.join(replay, 'gato_win.txt')
+    world = os.path.join(replay, 'world_map_save.txt')
+    wprobe = os.path.join(os.path.dirname(probe), 'worldmap_probe.py')
     # Into the working directory (the build tree): ROM-derived files stay there.
     with tempfile.TemporaryDirectory(dir=os.getcwd()) as d:
         bad = check(probe, *capture([static_boot], leene, 8700, d, 'leene'), 1, 'leene 8700')
         bad |= check(probe, *capture([engine_boot, '--module', module], leene, 9200, d, 'plaza'),
                      1, 'plaza 9200 (module)')
         bad |= check(probe, *capture([static_boot], gato, 10800, d, 'battle'), 0, 'battle 10800')
+        bad |= check(wprobe, *capture([engine_boot, '--module', module], world, 7600, d, 'world'),
+                     2, 'world 7600 (module)')
     return bad
 
 

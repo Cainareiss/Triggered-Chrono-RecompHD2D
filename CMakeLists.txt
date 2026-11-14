@@ -233,7 +233,8 @@ if(SDL2_FOUND)
         COMMENT "hd2d shaders"
         VERBATIM)
     endif()
-    add_library(ct_hd2d STATIC frontend/hd2d/hd2d.c frontend/hd2d/scene3d.c ${CT_HD2D_GEN})
+    add_library(ct_hd2d STATIC frontend/hd2d/hd2d.c frontend/hd2d/scene3d.c
+        frontend/hd2d/scene3d_world.c ${CT_HD2D_GEN})
     target_include_directories(ct_hd2d PUBLIC frontend PRIVATE ${CMAKE_BINARY_DIR}/hd2d_gen)
     target_link_libraries(ct_hd2d PUBLIC SDL2::SDL2 ct_runtime ct_input m)   # port: ct_input: osd_text.h
     target_compile_options(ct_hd2d PRIVATE ${CT_WARN} -Wno-overlength-strings)

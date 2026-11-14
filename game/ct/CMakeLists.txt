@@ -68,7 +68,7 @@ endif()
 # scene.c: the scene description (runtime/module.h), an object so the
 # weak reference in func_table_static.c finds it.
 add_library(ct_gen_tables OBJECT ${CT_OUT}/ct_funcs.c ${CMAKE_SOURCE_DIR}/runtime/func_table_static.c
-    scene.c)
+    scene.c world_scene.c)
 target_compile_definitions(ct_gen_tables PRIVATE CT_TABLES_DEFINE)
 target_include_directories(ct_gen_tables PUBLIC ${CT_OUT})
 target_link_libraries(ct_gen_tables PUBLIC ct_runtime)

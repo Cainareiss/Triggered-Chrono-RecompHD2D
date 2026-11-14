@@ -15,8 +15,11 @@ terrain classes with the exits marked; --regions writes the region nibbles.
 The PNGs are made from the running game's data: keep them in the build
 dir, never commit them.
 
+With --text it writes the scene as ct_boot --scene does (the module's
+world_scene.c, decoded independently), for test_scene.py.
+
 usage: worldmap_probe.py WRAM [--vram FILE] [--png OUT] [--terrain OUT]
-                         [--regions OUT] [--chr WORD]
+                         [--regions OUT] [--chr WORD] [--text OUT]
 """
 from __future__ import annotations
 
@@ -183,6 +186,117 @@ def print_scene(w, oam):
                   f'pal {(a >> 1) & 7} prio {(a >> 4) & 3}  -> world ({(sx + cx) % 1536},{(y + cy) % 1024})')
 
 
+# The module's corrections to the renderer's pixel guess (world_scene.c
+# relief[]): (map id or 0 for all, layer 0 = BG1 / 1 = BG2, metatile index)
+# -> ct_scene_cell class. Keep the two in sync (the scene_decode test).
+CELL_FLAT = 9
+RELIEF = {(0x1F0, 0, i): CELL_FLAT for i in (161, 162, 163, 177, 178, 193, 194, 195, 196)}
+RELIEF.update({(0x1F0, 1, i): CELL_FLAT for i in (176, 177, 178, 179, 180, 193, 194, 195, 196,
+                                                  209, 210, 211)})
+CELL_FLOOR, CELL_SOLID, CELL_WATER = 1, 2, 4
+CELL_OVERHEAD, CELL_EVENT, CELL_COVER = 1, 2, 4
+CAPTION_Y = 184
+
+
+def relief(loc, layer, idx):
+    return RELIEF.get((loc, layer, idx)) or RELIEF.get((0, layer, idx), 0)
+
+
+def scene_text(w, vram, oam):
+    """The scene as ct_boot --scene writes it for the world map (runtime/
+    module.h CT_SCENE_WORLD, game/ct/world_scene.c), decoded here on its
+    own from a WRAM dump, VRAM and OAM, for test_scene.py. 'gen' is the
+    module's counter: written as '?'."""
+    if not is_world_map(w):
+        return None
+    loc = u16(w, LOC) & 0x1FF
+    cx, cy = camera(w)
+    px, py = u16(w, PX_X), u16(w, PX_Y)
+    vw = lambda a: vram[2 * (a & 0x7FFF)] | vram[2 * (a & 0x7FFF) + 1] << 8
+    lines = ['mode 2', f'map 192 128 cell 8 id {loc} gen ?', f'camera {cx} {cy}', 'player 0',
+             f'overlay wrap 1 blend 8 size 64 32 scroll {u16(w, SHADOW + 6) & 511} '
+             f'{u16(w, SHADOW + 12) & 255}']
+    words = {0: [[0] * 192 for _ in range(128)], 1: [[0] * 192 for _ in range(128)]}
+    for my in range(MAP_H):
+        for mx in range(MAP_W):
+            fg, bg = w[MAP_FG + my * MAP_W + mx], w[MAP_BG + my * MAP_W + mx]
+            for q in range(4):
+                x, y = 2 * mx + (q & 1), 2 * my + (q >> 1)
+                words[0][y][x] = u16(w, DEFS_FG + fg * 8 + 2 * q) if fg else 0
+                words[1][y][x] = u16(w, DEFS_BG + bg * 8 + 2 * q)
+    for layer in range(3):
+        lines.append(f"layer {layer} present 1 bpp {4 if layer < 2 else 2} "
+                     f"chr {0x2000 if layer < 2 else 0x7000:04X} pal 0")
+        if layer < 2:
+            rows = words[layer]
+        else:   # BG3: 64 x 32, two 32 x 32 screens
+            rows = [[vw(0x7800 + (x >> 5) * 1024 + y * 32 + (x & 31)) for x in range(64)]
+                    for y in range(32)]
+        for y, row in enumerate(rows):
+            lines.append(f'tiles {layer} {y} ' + ' '.join('%04X' % e for e in row))
+    events = set()
+    for e in exits(w):
+        if e['x'] < MAP_W and e['y'] < MAP_H:
+            events.add((e['x'], e['y']))
+    for y in range(128):
+        row = []
+        for x in range(192):
+            mx, my = x >> 1, y >> 1
+            n = terrain(w, x, y)
+            fg, bg = w[MAP_FG + my * MAP_W + mx], w[MAP_BG + my * MAP_W + mx]
+            if n & 2:
+                cls = CELL_WATER
+            elif n & 1:
+                cls = (relief(loc, 0, fg) if fg else 0) or relief(loc, 1, bg) or CELL_SOLID
+            else:
+                cls = CELL_FLOOR
+            flags = (CELL_COVER if n & 4 else 0) | \
+                (CELL_OVERHEAD if (words[0][y][x] | words[1][y][x]) & 0x2000 else 0) | \
+                (CELL_EVENT if (mx, my) in events else 0)
+            row.append(f'{cls}.{flags}.0.{n:02X}')
+        lines.append(f'cells {y} ' + ' '.join(row))
+    # Objects: the party's pieces at its sprite's place, then groups of
+    # touching pieces in the play area.
+    ent = []
+    for e in range(128):
+        x, y, a = oam[4 * e], oam[4 * e + 1], oam[512 + e // 4] >> (2 * (e % 4)) & 1
+        x |= a << 8
+        if x >= 256:
+            x -= 512
+        ent.append((x, y, y < 224 and x > -16))
+    vis = [v for _, _, v in ent]
+    facing = w[0x0D70 + 0x28]
+    party = []
+    for e in range(128):
+        x, y, _ = ent[e]
+        if vis[e] and x == 120 and y in (95, 79) and len(party) < 16:
+            party.append(e)
+            vis[e] = False
+    objs = [(px % 1536, py % 1024, facing if facing <= 3 else -1, party)]
+    for e in range(128):
+        if not vis[e] or ent[e][1] >= CAPTION_Y:
+            continue
+        group, vis[e] = [e], False
+        grew = True
+        while grew:
+            grew = False
+            for k in range(128):
+                if not vis[k] or ent[k][1] >= CAPTION_Y or len(group) >= 16:
+                    continue
+                if any(ent[k][0] <= ent[p][0] + 16 and ent[k][0] + 16 >= ent[p][0] and
+                       ent[k][1] <= ent[p][1] + 16 and ent[k][1] + 16 >= ent[p][1] for p in group):
+                    group.append(k)
+                    vis[k] = False
+                    grew = True
+        x0 = min(ent[p][0] for p in group)
+        x1 = max(ent[p][0] + 16 for p in group)
+        y1 = max(ent[p][1] + 16 for p in group)
+        objs.append(((cx + (x0 + x1) // 2) % 1536, (cy + y1) % 1024, -1, group))
+    for k, (x, y, f, pieces) in enumerate(objs):
+        lines.append(' '.join([f'object {k} {x} {y} 0 {f}'] + [str(e) for e in pieces]))
+    return lines
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('wram')
@@ -191,9 +305,17 @@ def main(argv):
     ap.add_argument('--terrain')
     ap.add_argument('--regions')
     ap.add_argument('--chr', default='2000', help='BG1/BG2 character base, VRAM word (hex; $210B = $22)')
+    ap.add_argument('--text', help='write the scene as ct_boot --scene does (needs --vram)')
     a = ap.parse_args(argv)
     w = open(a.wram, 'rb').read()
     v = open(a.vram, 'rb').read() if a.vram else None
+    if a.text:
+        if not v:
+            ap.error('--text needs --vram')
+        lines = scene_text(w, v[:0x10000], v[0x10200:0x10420])
+        with open(a.text, 'w') as f:
+            f.write('\n'.join(lines or ['mode 0']) + '\n')
+        return 0
     print_scene(w, v[0x10200:0x10420] if v else None)
     if a.terrain:
         render_terrain(w, a.terrain)

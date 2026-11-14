@@ -3,7 +3,7 @@
  *
  * The field scene (runtime/module.h, docs/SCENE.md): the map, its tile
  * layers, cell properties, camera and objects, read from WRAM at the frame
- * edge for the engine's 3D renderer. Linked into the game module (the
+ * edge for the engine's 3D renderer; the world map's is world_scene.c. Linked into the game module (the
  * ct_game_scene export) and into the static programs. Reads only. */
 #include <string.h>
 
@@ -11,6 +11,7 @@
 #include "module.h"
 
 int ct_game_scene(ct_scene *out);
+int ct_world_scene(ct_scene *out);   /* world_scene.c */
 
 /* WRAM offsets (bank $7E unless noted; docs/SCENE.md A0). */
 enum {
@@ -101,7 +102,7 @@ int ct_game_scene(ct_scene *out)
     const uint8_t *w = bus_wram();
     out->mode = CT_SCENE_OTHER;
     if (memcmp(w + NMI_VECTOR, field_nmi, sizeof field_nmi))
-        return -1;
+        return ct_world_scene(out);   /* the world map, or nothing */
     unsigned mw = w[L1_W] > w[L2_W] ? w[L1_W] : w[L2_W];
     unsigned mh = w[L1_H] > w[L2_H] ? w[L1_H] : w[L2_H];
     if (!mw || !mh || mw > CT_SCENE_MAX_CELLS || mh > CT_SCENE_MAX_CELLS)

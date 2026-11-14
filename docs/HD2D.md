@@ -152,9 +152,10 @@ Menus that cover more than 15–30% of the screen with UI ease the scene effects
 The `hd2d3d` preset rebuilds map views as real geometry, in the manner of the HD-2D
 remakes: floors, walls that rise, roofs on top of them, characters standing up as
 billboards, a perspective camera tilted back from straight down, a key light with a
-shadow map, and the depth of field driven by real depth. Everything else (battles,
-menus, the world map, mode 7, title and transition screens) is the `hd2d` picture,
-pixel for pixel, with a short crossfade (8 frames) between the two.
+shadow map, and the depth of field driven by real depth. The world map becomes a
+diorama landscape ("The world map" below). Everything else (battles, menus, mode 7,
+title and transition screens) is the `hd2d` picture, pixel for pixel, with a short
+crossfade (8 frames) between the two.
 
 **It still draws nothing of its own.** The geometry comes from the game's map as the
 running game holds it in WRAM, and every surface is textured with the console's own
@@ -171,11 +172,12 @@ sprites; event), the objects with their foot point and the OAM entries that draw
 the player's object, the camera in map pixels, a map generation counter and a mode
 (map view or other). The engine adds the console's state (`ct_scene_capture`: VRAM,
 CGRAM, OAM, the OBJ size and base, brightness). A module with no scene export, or a
-mode other than `CT_SCENE_FIELD`, gets the 2D picture.
+mode other than `CT_SCENE_FIELD` or `CT_SCENE_WORLD`, gets the 2D picture.
 
 For this game, `game/ct/scene.c` fills it from the addresses in [SCENE.md](SCENE.md). A
-frame is a map view while the field loop's NMI handler is installed (`$0500`); battles,
-menus, the world map and the title install their own. The generation counter changes when
+frame is a map view while the field loop's NMI handler is installed (`$0500`), and the
+world map while the overworld's is (`game/ct/world_scene.c`); battles, menus and the
+title install their own. The generation counter changes when
 the map grids, property bytes or metatile tables hash differently, which also catches
 tiles changed in place. The `scene_decode` test checks the description against an
 independent decoding of the same WRAM and OAM (`scene_probe.py --text`).
@@ -233,7 +235,8 @@ The camera can be changed with `CT_HD2D_3D`, a comma-separated list:
 `tilt=40` (degrees from straight down), `fov=30` (vertical field of view), `zoom=0.75`
 (1: the console's 256 px across at the focus), `hmax=3` (wall cap in cells),
 `stretch=1.2` (billboard height scale; default from the tilt) and `aoradius=12` (the
-ambient occlusion's reach, in map pixels).
+ambient occlusion's reach, in map pixels), and for the world map `wtilt=40`,
+`wzoom=0.75` and `marks=1` (entrance marks).
 
 ### Drawing
 
@@ -349,6 +352,105 @@ render size. The Steam Deck still starts in `deck`; choose `deck3d` with R3 or i
 menu. Its cost is in [Performance](#performance): on the Ally, a little under what
 `hd2d3d` cost before these options.
 
+### The world map
+
+The overworld comes as `CT_SCENE_WORLD` (`runtime/module.h`): a map of 8 px cells (192 x
+128 here, one tile each) that wraps at both edges, its two BG layers as tilemap words, a
+walk class per cell (floor, water, blocked; the cover flag; exits as event cells), the
+camera, the party and the other sprites as objects, and a third layer, the clouds, as an
+*overlay* with its own scroll and blend. `frontend/hd2d/scene3d_world.c` makes a landscape
+of it, and the same passes as the field draw it.
+
+**Relief.** The walk class says floor, water or blocked, and "blocked" lumps mountains,
+forest, the shore band and buildings together (some games also mark mountain tops as
+water: unwalkable). So each cell's kind comes from its pixels, BG1 over BG2 as the
+console composites them, unless the module named it (`CT_CELL_MOUNTAIN`, `_FOREST`,
+`_SHORE`, `_FLAT`):
+
+| Kind | Rule | Height |
+| --- | --- | --- |
+| water | a water cell whose pixels are mostly blue (blue above red, at least green); or any cell almost all blue | -5 px, flat |
+| forest | blocked, mean color green-dominant | a canopy: 4 px at its edge, 8 inside, ±2 by the cell's brightness (tree tops light, gaps dark) |
+| shore | blocked, within 2 cells of water, not a dark red-brown | -1.5 px |
+| mountain | blocked, mean color red-dominant (browns, rock), in a patch at least 5 cells across | a dome over the footprint, up to 48 px six cells in, ±5 by the cell's brightness against the mountain's mean (lit ridges up) |
+| flat | blocked, anything else (buildings, walls, bridges, thin brown patches) | 0 |
+| floor | walkable | 0 |
+
+A tile corner takes the mean of its four cells, or the water level if any of them is
+water, so the water stays flat and the land slopes into it over one cell: beaches and
+cliffs come out of that. Normals come from the corner heights (central differences), go
+to the shader as a small texture, and light the slopes; the shadow map is of everything
+above 0.75 px (canopies, mountains, sprites).
+
+Where the guess is wrong, the module corrects it by metatile: `relief[]` in
+`game/ct/world_scene.c` maps (world map id, layer, metatile index) to a kind, like a
+3dSen profile; `worldmap_probe.py` keeps a copy for the `scene_decode` test. It holds
+Guardia Castle on `$1F0` (grey-brown stone that read as mountain, green-lit walls as
+forest), which now lies flat.
+
+**Mesh.** One quad per tile and layer, on the four corner heights, so a tile drapes over
+the slope instead of stretching; BG1's quad uses the same corners and wins the depth test
+by being drawn second (`GL_LEQUAL` on the world map: a lift would let slivers of BG2
+show on the slopes). Water quads get a shimmer in the shader: a slow swell of ±3.5% and
+glints that twinkle on 3x3-pixel cells, both on the console's pixel grid; no texture of
+our own. The mesh is one copy of the map, built when the map changes (27,533 quads for
+1000 A.D., about 10 ms on the Ally); a wrapping map is drawn up to nine times, offset by
+the map's size, for the copies the view's ground footprint reaches.
+
+**Clouds.** The overlay is drawn as a plane 110 px above the ground, fixed in the world
+and moved by its scroll, blended at the console's half-add (`overlay_blend / 16`, times
+0.8). It thins to a quarter over the player (where the line of sight crosses it). It also
+shades the ground: each surface pixel looks the cloud layer up where the sun's ray to it
+crosses the plane (four taps, for a soft edge), so the shadows drift with the clouds.
+
+**Sprites.** Billboards that face the camera, standing on the ground at the object's foot
+point (the height under it), and snapped to the target's pixel grid: the foot lands on a
+whole pixel, and one sprite pixel is a whole number of target pixels, the ground's own
+scale at that depth rounded (docs/PRIOR-ART.md, A2: no mixed pixel densities). The
+pieces keep their console layout around the foot. OAM entries no object owns (the era
+caption) lie flat over the picture where the console drew them, and skip the effects as
+UI does.
+
+**Camera.** The field's tilt and zoom by default; `worldmap_tilt` and `worldmap_zoom` (the
+Look tab, settings.ini; `CT_HD2D_3D=wtilt=..,wzoom=..`) give the world map its own, e.g.
+a higher one (tilt 25, zoom 60%). It looks at the party, a little north of its feet, and
+never stops at an edge. BG3 isn't UI on the world map (it is the clouds), so the UI layer
+is off there.
+
+**Entrance marks**, off by default (`CT_HD2D_3D=marks=1`): a small pulsing diamond in
+the middle of each entrance (a group of touching exit cells), drawn by the shader alone.
+
+**Render scale, FSR and occlusion** apply as in the field: the surfaces are drawn at the
+render scale, EASU brings them up to the picture's size, and the ambient occlusion runs
+on their depth. The ground gives ssao.frag the nearest of its five normals (up unless a
+slope is steeper than about 45°), which darkens valleys between peaks and the feet of
+mountains and forests; water gets none (it would darken under every shore), and the
+cloud plane leaves the occlusion's input as the ground under it wrote it. The sprites are
+snapped to the render target's pixels, so below 100% FSR's upscale spreads one sprite
+pixel over a non-integer number of output pixels, as it does for the ground.
+
+**The pause menu and transitions** change the NMI vector, so the scene is `OTHER` and the
+picture crossfades to the 2D path, as in the field.
+
+Where this is wrong:
+
+- The kinds are a guess from mean colors. Brown roofs and walls in a patch five cells
+  wide become small hills; green-lit stone becomes forest; a sandy cliff away from water
+  becomes a mountain. Each needs a `relief[]` entry. Only `$1F0` (1000 A.D.) was tuned;
+  the other eras' maps share the engine but not necessarily the tiles.
+- The heights don't come from the art. A mountain is a dome over its footprint, not
+  the peak where the picture draws it, and the picture is painted for a three-quarter
+  view, so its own shading doubles the 3D light a little.
+- Towns, castles and bridges lie flat: nothing stands up as a wall. Cover cells (here the
+  bottom edge of towns, where the walker draws half hidden) are plain floor.
+- Sprites are flat cut-outs, and a billboard near the top of the picture leans with the
+  view. The ferry and other play-area sprites are grouped by touching pieces.
+- Text boxes on the world map, if any, are not shown in 3D (the UI layer is off).
+- The cell hook (`s3d_set_cell_hook`) applies to the field only; packs still replace
+  textures through `tileTexel()`, the clouds included.
+- The cloud plane is one quad over the view's footprint; at very low tilts its far edge
+  can show.
+
 ## Performance
 
 Measured on a ROG Ally (Ryzen Z1 Extreme, Radeon 780M, Mesa radeonsi) at 1706×1120
@@ -417,6 +519,21 @@ to 2.7 GHz, with similar memory bandwidth) wasn't measured; from those ratios `d
 at 800p should take roughly 2–3 ms there, against about 1 ms for `deck`. That fits in a
 60 Hz frame, so `deck3d` is offered, but the Deck still starts in `deck`, the lighter
 choice for its battery.
+
+The world map in `hd2d3d`, same Ally at `--scale 5` (a 1493×1120 picture), over frames
+7400-8700 of a walk across the 1000 A.D. map (unpaced, load average 7-8), median GPU time
+per frame:
+
+| | GPU | surfaces | occlusion (input, AO, blur) | EASU | final |
+| --- | --- | --- | --- | --- | --- |
+| 100%, occlusion (the default) | 2.89 ms | 1.06 | 0.29 | - | 0.51 |
+| 67% + FSR, occlusion | 2.51 ms | 0.59 | 0.14 | 0.35 | 0.45 |
+
+The rest: shadow map 0.03 ms, depth of field 0.35, its blur amount 0.29-0.31, bloom
+0.24-0.30. Before the render scale and occlusion existed, the world map took 2.4 ms. The world mesh is built when
+the map changes: about 10 ms, some fifteen times while a map loads (its tables arrive
+over several frames, behind the fade-in), then not again. The CPU side per frame
+(sprites, the overlay's tilemap, uploads) is about 0.14 ms.
 
 The behind buffer costs CPU time in the PPU. Headless (`ct_boot`, 9,200 frames of the
 Leene Square replay), the game runs at about 388 frames per second without it and
