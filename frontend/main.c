@@ -1616,25 +1616,6 @@ static void register_settings(void)
         .count = 2, .get = get_renderer, .set = set_renderer, .flags = SETTING_RESTART,
         .help = "Original: the console's picture, scaled. HD-2D: the OpenGL renderer and its "
                 "looks below. --hd2d and --no-hd2d still win."});
-    /* port: HD text (hdtext.h) */
-    settings_register(&(setting){.label = "HD text font", .category = "Look", .type = SETTING_INFO,
-                                 .text = hd_font_text,
-                                 .help = "Text boxes drawn with your own font at the screen's "
-                                         "resolution: hd_font=FILE in settings.ini (fonts/ in "
-                                         "the data folder), or --hd-font. Takes effect on the "
-                                         "next start."});
-    static const char *const hd_style_labels[] = {"Shadow", "Outline", "Plain"};
-    static const char *const hd_style_values[] = {"shadow", "outline", "plain"};
-    settings_register(&(setting){
-        .key = "hd_text_style", .label = "HD text style", .category = "Look",
-        .type = SETTING_ENUM, .options = hd_style_labels, .values = hd_style_values, .count = 3,
-        .get = get_hd_style, .set = set_hd_style, .enabled = hd_text_on,
-        .help = "A drop shadow like the console's, an outline all round, or none."});
-    settings_register(&(setting){.key = "hd_text_size", .label = "HD text size",
-                                 .category = "Look", .type = SETTING_INT, .min = 50, .max = 150,
-                                 .step = 5, .format = "%d%%", .get = get_hd_size,
-                                 .set = set_hd_size, .enabled = hd_text_on,
-                                 .help = "The font's size against the console's."});
     settings_register(&(setting){
         .key = "preset", .label = "Look", .category = "Look", .type = SETTING_ENUM,
         .options = preset_labels, .values = preset_values, .count = HD2D_PRESETS, .get = get_preset,
@@ -1707,6 +1688,25 @@ static void register_settings(void)
                                  .step = 25, .format = "%d%%", .ini_div = 100,
                                  .get = get_gyro_strength, .set = set_gyro_strength,
                                  .enabled = on_gyro, .help = "Camera degrees per degree turned."});
+    /* port: HD text (hdtext.h) */
+    settings_register(&(setting){.label = "HD text font", .category = "Look", .type = SETTING_INFO,
+                                 .text = hd_font_text,
+                                 .help = "Text boxes drawn with your own font at the screen's "
+                                         "resolution: hd_font=FILE in settings.ini (fonts/ in "
+                                         "the data folder), or --hd-font. Takes effect on the "
+                                         "next start."});
+    static const char *const hd_style_labels[] = {"Shadow", "Outline", "Plain"};
+    static const char *const hd_style_values[] = {"shadow", "outline", "plain"};
+    settings_register(&(setting){
+        .key = "hd_text_style", .label = "HD text style", .category = "Look",
+        .type = SETTING_ENUM, .options = hd_style_labels, .values = hd_style_values, .count = 3,
+        .get = get_hd_style, .set = set_hd_style, .enabled = hd_text_on,
+        .help = "A drop shadow like the console's, an outline all round, or none."});
+    settings_register(&(setting){.key = "hd_text_size", .label = "HD text size",
+                                 .category = "Look", .type = SETTING_INT, .min = 50, .max = 150,
+                                 .step = 5, .format = "%d%%", .get = get_hd_size,
+                                 .set = set_hd_size, .enabled = hd_text_on,
+                                 .help = "The font's size against the console's."});
     settings_register(&(setting){.label = "Debug view", .category = "Look", .type = SETTING_ENUM,
                                  .options = debug_labels, .count = HD2D_DEBUGS, .get = get_debug,
                                  .set = set_debug, .enabled = on_hd2d, .flags = SETTING_NO_SAVE,
@@ -2628,8 +2628,11 @@ static void on_frame(long f)
         } else {
             hd2d_pack_map(NULL);
         }
+    }
+    if (hd2d_mode) {
         /* port: HD text: the text boxes' lines, the console's glyphs out,
-           the overlay at the screen's scale */
+           the overlay at the screen's scale; every frame, shown or not, as
+           a screenshot may draw it */
         memset(&hd_text_now, 0, sizeof hd_text_now);
         if (hdtext_ready() && sched_prov()) {
             static ct_text txt;
