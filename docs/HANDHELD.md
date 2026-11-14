@@ -131,7 +131,7 @@ the 7-inch screen: large text, the Deck's or the Ally's button pictures at the b
 The tabs: **Look** (renderer, HD-2D look, aspect, the 3D camera's tilt and zoom, gyro),
 **Display** (fullscreen, frame pacing, text size, integer scale, CRT, battery mode),
 **Controls** (what each back button does, the quick keys, fast-forward, always run,
-turbo, pausing), **Co-op** (on / auto / off, who plays which party member), **Packs**,
+turbo, pausing, rumble and its test), **Co-op** (on / auto / off, who plays which party member), **Packs**,
 **Save states** (load and save the slots, with a picture of each; resume; screenshot),
 **Audio** (volume, mute in the background) and **About** (version, licenses, Quit).
 Every change is saved at once. The game waits between two frames while the menu is open,
@@ -228,7 +228,8 @@ device "ASUS ROG Ally", target `deck-uhid`):
   (InputPlumber's `ProductId`: Steam Deck 1205, generic 12f0, MSI Claw 12fa, Legion Go 2
   12fb, Zotac Zone 12fc, **ROG Ally 12fd** (all Ally models), Legion Go 12fe, Legion Go S
   12ff). Its lizard (keyboard / mouse) mode is off; InputPlumber's own keyboard and mouse
-  targets do that work. Nothing needs to be written to it.
+  targets do that work. Nothing needs to be written to it to read it (rumble, below, is
+  the one thing the game writes).
 - The Ally's buttons arrive as the Deck's: A / B / X / Y, View, Menu, the sticks and
   triggers; the **left back button (M1) is L4** and the **right one (M2) is R4** (so quick
   save and quick load by default); Command Center (short press) is the Steam button and
@@ -252,16 +253,53 @@ Why SDL doesn't take it:
 
 **What the game does.** `frontend/hid_deck.c` (Linux) looks in `/sys/class/hidraw` for a
 device with Valve's vendor ID, a vendor-defined report descriptor, and Deck state reports
-when read; opens it **read-only**; and shows it to the rest of the game as an SDL virtual
-game controller with the device's name, vendor and product. Everything else works as with
-any pad: the SNES mapping above, the back buttons, the Deck's button pictures, co-op, the
-menu. The report parsing is ported from SDL's Deck driver (zlib; see THIRD_PARTY.md). It
-never writes to the device. The log says:
+when read; opens it (**read-only**, or read-write while rumble is on: below); and shows it
+to the rest of the game as an SDL virtual game controller with the device's name, vendor
+and product. Everything else works as with any pad: the SNES mapping above, the back
+buttons, the Deck's button pictures, co-op, the menu, rumble. The report parsing is ported
+from SDL's Deck driver (zlib; see THIRD_PARTY.md). The log says:
 
 ```
-ct_sdl: hid_deck: using "ROG Ally Controller" (/dev/hidraw10, 28de:12fd): Steam Deck reports, read-only, as a virtual game controller
+ct_sdl: hid_deck: using "ROG Ally Controller" (/dev/hidraw10, 28de:12fd): Steam Deck reports, read-write for rumble, as a virtual game controller
 ct_sdl: using "ROG Ally Controller" on pad 1
 ```
+
+**Rumble through InputPlumber.** The console had no rumble; the game makes it from what
+happens (USER-GUIDE.md, "Rumble"). On this device the virtual controller's rumble becomes
+the Deck's **simple rumble command**, exactly as SDL's own Deck driver sends it
+(`HIDAPI_DriverSteamDeck_RumbleJoystick`): a 64-byte feature report, `ID_TRIGGER_RUMBLE_CMD`
+(`$EB`), the heavy (left) and light (right) motor speeds, gains 2 and 0. It goes out as
+`HIDIOCSFEATURE` on the hidraw node from a thread of its own, since the call waits for
+InputPlumber's answer. Nothing else is ever written: no lizard-mode or settings report, no
+InputPlumber setting, no D-Bus call. The node is opened read-write only while rumble is on
+(`rumble=off` keeps it read-only, as before); if write access is refused the game reads
+it as before and says `rumble: can't write to ...`.
+
+What InputPlumber 0.84.0 does with it (its source, `src/input/target/steam_deck_uhid.rs`
+and `src/input/source/hidraw/rog_ally.rs`): uhid hands it a `SetReport`; the `deck-uhid`
+target unpacks report `$EB` as `PackedTriggerVibration` (`cmd_id`, `report_size`,
+intensity, left and right speed, left and right gain), answers the `SetReport`, and sends an
+`OutputEvent::TriggerVibration` to the composite device, whose output capability is
+`ForceFeedback`. The ROG Ally source takes that event and sets its two motors on the Ally's
+0-100 scale (`speed x 10^(gain / 10) / 65535`), with no timeout of its own: they run until
+the next command, so the game always ends a pulse with a zero. Output reports
+(`write()`) are ignored by that target; only the feature report counts. The composite
+device's force feedback is on (D-Bus `org.shadowblip.Output.ForceFeedback.Enabled`, read
+only: true) and its source lists `ForceFeedback`.
+
+Checked on this Ally (RC71L, Bazzite, InputPlumber 0.84.0, outside Steam): a single
+120 ms pulse at 3/16 strength, then zero, written by hand to `/dev/hidraw10`: both
+`HIDIOCSFEATURE` calls returned 65 (InputPlumber answered) in 4 ms and 2 ms; then the game
+itself (`--rumble-test 180 --log-rumble`) logs
+`ct_sdl: hid_deck: rumble: the device took the rumble command (0 ms)`. Whether the motors
+spin is for a person holding it to say: run the controller test below, whose last step
+asks. Under Steam Input the game sees Steam's virtual pad instead and rumbles through
+`SDL_GameControllerRumble`, which Steam passes on to the same motors.
+
+A note on the libraries: Bazzite's libSDL2 is sdl2-compat over SDL 3, which hands a
+virtual controller's rumble callback to SDL 3 unchanged, where its `int` is read as a
+`bool` (1 success, 0 failure, the reverse of SDL 2). The game asks which convention it runs
+under when it attaches the device, so SDL's own stop at the end of a rumble arrives.
 
 InputPlumber makes the device anew when Steam starts or stops and around suspend; the game
 drops the old one when reads fail and looks again every 2 seconds. `settings.ini`
@@ -472,8 +510,11 @@ A checklist of every control appears in the top-right corner while the game runs
 muted (add `--no-mute` for sound). Press each control once, in any order: it turns
 green, the next one is highlighted, and each step is also printed to the terminal
 (`pad test: ok ...`). The back buttons do a real quick save and quick load, so add
-`--states-dir /tmp/padtest` to keep your own slots untouched. When all 18 work the game
-says so and quits a few seconds later. `--mute` alone silences any run without
+`--states-dir /tmp/padtest` to keep your own slots untouched. The last step is
+**rumble**: once the 18 controls are ticked, the controller pulses every 2 seconds (at
+your rumble strength, or Light when rumble is off) until you answer: **A** if you felt it,
+**B** if not; the answer is printed (`pad test: rumble: felt it (A: yes)`). Then the game
+says every control works and quits a few seconds later. `--mute` alone silences any run without
 changing your volume setting.
 
 ## Not yet tested on real hardware

@@ -997,6 +997,52 @@ How this game fills it:
 
 Pixels never travel through the struct. The engine already has VRAM and CGRAM.
 
+## Rumble
+
+What `game/ct/rumble.c` reads for simulated rumble (runtime/rumble.h; USER-GUIDE.md,
+"Rumble"). Found with `ct_boot --watch`, `--log-entry` and `--wav` on the gato_win replay;
+`ct_boot --log-rumble` lists what comes of it (the `rumble_replay` test).
+
+- **Battler records: `$7E5E30` + `$80` x slot**, slots 0-2 the party, then the enemies
+  (11 in all: Battle_ApplyPendingResults loops to X = `$580`). Current HP `+$00`, max HP
+  `+$02`, MP `+$04`, max MP `+$06`, status `+$1A` (bit 7: down). *Verified:* Crono's
+  `$5E30` = `$46`/`$46` (70) when the battle starts (frame 10659, $FDAE80); Gato's record
+  is the seventh, `$6130` = `$4C` (76). Outside battles the area is reused.
+- **Pending results: `$B328` + 4 x slot** ({amount, flags} words; two more lists at `$B354`
+  and `$B380`), applied by **Battle_ApplyPendingResults ($C1EC7F)**: each amount is
+  subtracted from HP (from MP when the flags have `$4000`), HP is clamped to max HP, and a
+  battler at 0 gets status bit 7 (an enemy also $FDABA2). Heals are negative amounts
+  (Battle_NegateDamageIfHeal $C1EBF8). *Verified:* every HP change of the fight is a store
+  at $C1ECA0: Crono `$46` -> `$3D` (frame 10983, 9 damage), Gato `$4C` -> `$3B` (11115),
+  ... Gato `$09` -> `$E7FF` -> 0 (13200, $C1ED0F). The patch takes the HP of all 11 at the
+  function's entry; the frame hook compares at the frame edge.
+- **Critical hit: `$AE9B` bit 7**, set by the player's hit roll ($C1ED89: random 0-99
+  against the attacker's `$5E72`, then the damage times `$1E`), cleared after the hit is
+  shown (`$C18D1C`). *Verified:* set at 11544 and 13025; Gato then takes `$22` instead of
+  `$11` / `$10` (11729, 13200).
+- **The action: `$B18C`**, the tech index (tech data at `$CC1BEB` + 11 x index, read by
+  Battle_ExecPlayerTechAction $C1D523, which runs for plain attacks too). A plain attack
+  is `$75` + the character (Crono `$75`, Marle `$76`, in coop_battle); Gato's attack sets
+  it to 1. The usual tech layout (each character's eight techs from 1, in character
+  order; doubles and triples above) is taken from the tech lists, not seen in a replay:
+  no replay has a tech. The party is `$2980-$2982` (characters, `$80` none), in battle
+  slot order (*verified* in coop_battle: `00 01 80`). `$B1F4`/`$B1F5` change with the
+  actor but are not a plain slot number (Crono `00 00`, Marle `80 00`, Gato `00 03`).
+- **Screen shake event: command `$F4`, EventCmd_ShakeScreen ($C03D84)**: its operand goes
+  to direct page `$BC` (0 also clears `$1D4E`/`$1D4F`). Not in a replay yet.
+- **Sound: command `$EA`, EventCmd_PlaySound ($C03C11)**, operand to `$1E01` with command
+  `$18` to the sound program. *Verified:* sound `$3F` at frame 3545 of the intro is
+  Leene's Bell (the recording: inharmonic partials at 1171, 1373 and 2058 Hz ringing out
+  over 2.5 s); the field's other `$18` commands come from elsewhere (menus $C2xxxx,
+  battle $C1xxxx).
+- **Time gate: Warp_SceneInit ($FDDB97)**, the set-up of the gate's tunnel, reached from
+  the three entries the main loop jumps to for `$DF` = `$80`-`$82` (`$C03FE4`). Not in a
+  replay yet.
+- **Where the game is: the NMI handler at `$0500`** (a JML): `$C0EA63` the field,
+  `$D1E77C` a battle (`$D1F4C0` its results screen), `$C2015E` the world map and the
+  intro's aerial view, `$C2840E` the menus and name entry, `$C3xxxx` the title. The hook
+  lets the detectors (shake, flash) work in the field and in battles only.
+
 ## Open questions
 
 - The exact solidity shapes for classes 2-$15, and what the special classes $16+ do
