@@ -1687,9 +1687,8 @@ static void register_settings(void)
         .help = "Also pulse on explosions and thuds heard in the sound (low booms)."});
     settings_register(&(setting){
         .label = "Test rumble", .category = "Controls", .type = SETTING_ACTION,
-        .run = run_rumble_test,
-        .help = "A short pulse on every controller in play, at the strength set (Light when "
-                "off)."});
+        .run = run_rumble_test, .enabled = rumble_is_on,
+        .help = "A short pulse on every controller in play, at the strength set."});
 
     /* Co-op */
     settings_register(&(setting){
