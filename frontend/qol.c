@@ -823,15 +823,16 @@ int qol_option(int argc, char **argv, int *k)
 void qol_usage(FILE *out)
 {
     fputs("Quality of life (docs/USER-GUIDE.md):\n"
-          "  F6 / Shift+F6     quick save / save to the selected slot\n"
-          "  F7 / Shift+F7     quick load / load the selected slot    F8  select slot 1-4\n"
-          "  Tab (held), `     fast-forward (held / on-off)           F10 turbo for held buttons\n"
-          "  F12, Print Screen screenshot                             F9  CRT look (original picture)\n"
-          "  Caps Lock         always run on / off                    Pause, P  pause\n"
-          "  --states-dir DIR  save states there (default: the save folder's states/)\n"
-          "  --load-state FILE start from a save state   --no-resume  no resume prompt\n"
-          "  --qol-set KEY=VALUE  a QOL setting for this run (settings.ini's names)\n"
-          "  --import-srm FILE / --export-srm FILE  copy an 8 KiB save RAM file in / out\n",
+          "  F6 / F9 (L4 / R4)   quick save / quick load; with Shift: the selected slot\n"
+          "  F7                  select slot 1-4      F8, Print Screen  screenshot\n"
+          "  Tab held (L5), `    fast-forward (held / on-off)\n"
+          "  Ctrl+T              turbo for the buttons held   Ctrl+R  CRT look (original picture)\n"
+          "  Caps Lock           always run on / off          Pause, P  pause\n"
+          "  --states-dir DIR    save states there (default: the save folder's states/)\n"
+          "  --load-state FILE   start from a save state      --no-resume  no resume question\n"
+          "  --qol-set KEY=VALUE a quality-of-life setting for this run (settings.ini names)\n"
+          "  --qol-action F:NAME testing: an action after frame F (qol.c run_action)\n"
+          "  --import-srm FILE / --export-srm FILE  an 8 KiB save RAM file in / out, then stop\n",
           out);
 }
 

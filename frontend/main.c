@@ -87,6 +87,11 @@
  *       messages, in both pictures, show the buttons of the device last
  *       used (glyphs.h, osd_text.h); settings.ini gyro=on aims the 3D
  *       diorama's camera with pad 1's gyro.
+ *   quality of life (frontend/qol.h, docs/USER-GUIDE.md): save states
+ *       (quick and 4 slots), resume where you left off (on quit, SIGTERM
+ *       and sleep), fast-forward, turbo, auto-pause, battery mode,
+ *       screenshots, always run, the plain picture's integer scale and
+ *       CRT look; --import-srm / --export-srm. qol_usage lists the keys.
  *   --coop | --no-coop
  *       two players (docs/USER-GUIDE.md, co-op): a second controller plays
  *       SNES pad 2, and the game module's co-op patches share the game

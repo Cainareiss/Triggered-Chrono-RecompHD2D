@@ -199,8 +199,8 @@ position too: its bottom button (Nintendo's B) is SNES B.
 | F10 | R5 | Menu (for now: a message listing these) |
 | F8 | | Screenshot |
 
-These are hooks for features still being written: until then they say "*not available
-yet*" on screen. A Steam Controller's grips are R4 and L4 (paddle1 and paddle2), an Xbox
+What they do is described in [Quality of life](#quality-of-life); the menu is still a
+message listing the buttons. A Steam Controller's grips are R4 and L4 (paddle1 and paddle2), an Xbox
 Elite pad's paddles P1-P4 likewise. `settings.ini` changes them: `bind_paddle1=` ...
 `bind_paddle4=`, `bind_misc1=`, `bind_touchpad=` take an action (`none`, `quicksave`,
 `quickload`, `ffwd`, `menu`, `screenshot`), and `key_quicksave=F6` and the like take a
@@ -293,6 +293,160 @@ look while a pack is loaded.
 | --- | --- |
 | F5 | Reload the asset packs (after editing their pictures) |
 
+## Quality of life
+
+### Save states
+
+A save state is the whole console at one moment, separate from the game's own save slots.
+
+| Key | Deck / Ally | What it does |
+| --- | --- | --- |
+| F6 | L4 | Quick save |
+| F9 | R4 | Quick load |
+| Shift+F6 / Shift+F9 | | Save to / load the selected slot (1-4) |
+| F7 | | Select the next slot; the message says whether it is empty |
+
+Quick save, quick load, fast-forward and the screenshot are the frontend's actions: their
+keys and back buttons can be changed in `settings.ini` (see [Quick keys and back
+buttons](#quick-keys-and-back-buttons)). Shift with whatever key quick save or quick load
+is on works with the selected slot. The other keys here are fixed for now, and never
+take a key an action has.
+
+States are kept in `ct/states/` in your user data folder (see [Where your files
+live](#where-your-files-live)): `quick.state`, `slot1.state` to `slot4.state` and
+`auto.state` (the resume point), each with a `.png` picture of the screen at that moment.
+They are your files, like your saves: they are never part of the project and never
+shared. A state is about 600 KB.
+
+- A state is taken at the end of a frame. Very rarely the sound chip is in the middle of an
+  instruction there, and the save happens a frame or two later.
+- Loading a state does not change your in-game saves. The cartridge's save memory stays as
+  it is on disk, so loading an old state never undoes a save you made in the game.
+- A state only loads in the same engine version and with the same ROM. Another one is
+  refused with a message; nothing changes.
+- While `--record` is recording, loading is refused: the recording couldn't replay it.
+
+### Resume where you left off
+
+When you quit (Ctrl+Q, View+Menu, closing the window, or Steam's Exit Game, which stops
+the program with SIGTERM), the engine saves a resume point. It also saves one when the
+system goes to sleep. The next start shows **Resume? [A] yes [B] no** (with your
+controller's buttons): **A** (or Enter)
+carries on from there, **B** (or Esc) starts the game from the beginning and keeps the
+old resume point as `auto-previous.state`, in case you pressed it by mistake.
+
+Nothing is saved if less than a second was played, so quitting at the question keeps the
+resume point you had. `--no-resume` skips the question for one start, `resume=off` in
+`settings.ini` turns the feature off. `--no-save` also turns it off.
+
+Sleep is noticed through logind (the `PrepareForSleep` signal on the system D-Bus). The
+engine holds a "delay" lock so the system waits for the resume point to be written, at
+most a few seconds. The sound stops before sleep and starts again cleanly afterwards,
+and the frame timer starts over, so the game doesn't race to catch up. Without D-Bus
+(some sandboxes) only the wake-up is noticed, and the resume point is saved on quit.
+
+### Fast-forward and turbo
+
+| Key | Deck / Ally | What it does |
+| --- | --- | --- |
+| Tab (hold) | L5 (hold) | Fast-forward while held |
+| ` (grave) | | Fast-forward on / off |
+| Ctrl+T | | Turbo on / off for the buttons you are holding (none held: all off) |
+
+Fast-forward runs the game at `ffwd_speed` times the normal speed (2, 3 or 4; default 3)
+and shows one frame in that many. The sound is muted while it runs: sped-up music is not
+pleasant, and pitch-correcting it would cost time on a handheld. It comes back at the
+normal speed.
+
+Turbo presses a button 15 times a second while you hold it (two frames down, two up). It
+works for A, B, X, Y, L and R, on any pad, and is saved as `turbo=` in `settings.ini`.
+It is off by default.
+
+### Pause
+
+The game pauses, with **Paused** on screen, when:
+- a controller is disconnected (`pause_on_disconnect`, on by default): press a button on
+  any controller, or a key, to go on;
+- the window loses focus (`pause_on_focus_loss`, `auto` by default: on, but off in
+  Steam's Game Mode, where gamescope moves the focus around on its own); it goes on when
+  the window has the focus again;
+- you press **Pause** or **P**.
+
+Sound stops while paused, and the frame timer starts over after.
+
+### Battery
+
+`battery_mode` in `settings.ini` (default `off`) uses less power on battery. The engine
+checks `/sys/class/power_supply` every few seconds: on battery means a battery is
+discharging and no charger (mains, USB or USB-C) is connected.
+
+| `battery_mode` | On battery |
+| --- | --- |
+| `off` | Nothing changes |
+| `light` | The HD-2D look switches to the lighter **deck** preset |
+| `saver` | As `light`, and the picture is drawn at 30 Hz. The game still runs at 60, so its speed and timing don't change |
+
+Back on the charger, your own look comes back. The look saved in `settings.ini` is always
+yours, not the battery's.
+
+### Screenshots
+
+**F8** (or Print Screen; no back button by default) saves exactly what is on screen, at the window's full size (the
+HD-2D picture when it is on), as a PNG in `$XDG_PICTURES_DIR/ct-recomp/`, usually
+`~/Pictures/ct-recomp/`. A message gives the file name. In Game Mode, Steam's own
+screenshot (Steam + R1) works too.
+
+### Always run
+
+**Caps Lock** (or `always_run=on`) makes the party run in the field without holding the
+run button; holding it walks. It changes how the game's walking code reads the button,
+not the button itself, so menus and anything else that checks it behave as usual. It
+needs the built game code: in the interpreter (`--interp-only`) it does nothing.
+
+### The original picture: integer scale and CRT
+
+Without HD-2D, the picture is scaled by the largest whole number that fits the window,
+with black bars around it, so every console pixel is the same size. `integer_scale=off`
+fills the window's height (or width) instead, keeping the shape.
+
+**Ctrl+R** (or `crt=on`) adds a CRT look to that picture: dark gaps between the lines, a
+faint red-green-blue stripe mask and a soft glow around bright parts. It is drawn with the
+renderer's blending, so it costs next to nothing and works with any graphics driver; the
+glow needs a GPU renderer and is left out on the software one. It doesn't apply to the
+HD-2D picture.
+
+### Saves from other emulators
+
+```
+ct-recomp --import-srm "Chrono Trigger.srm"
+ct-recomp --export-srm ~/ct-backup.srm
+```
+
+The file must be the plain 8,192-byte save memory that SNES emulators (snes9x, bsnes,
+Mesen, RetroArch's cores) write as `.srm`. Anything else is refused. An import keeps the
+save it replaces as `ct.srm.before-import-DATE-TIME` and writes the new one the same safe
+way as the game's saves. Both stop after the copy, without starting the game. They work
+on the `--save` file when you give one.
+
+### Settings
+
+All in `settings.ini`, with their defaults:
+
+| Setting | Default | |
+| --- | --- | --- |
+| `ffwd_speed` | `3` | 2, 3 or 4 |
+| `turbo` | (none) | buttons with turbo, e.g. `a,b` |
+| `pause_on_focus_loss` | `auto` | `on`, `off`; `auto` is off in Game Mode |
+| `pause_on_disconnect` | `on` | |
+| `resume` | `on` | the resume point and the question |
+| `battery_mode` | `off` | `light`, `saver` |
+| `crt` | `off` | the original picture only |
+| `integer_scale` | `on` | the original picture only |
+| `always_run` | `off` | |
+
+`--qol-set KEY=VALUE` sets one for a single run; `--states-dir DIR` keeps the states
+somewhere else; `--load-state FILE` starts from a state.
+
 ## Where your files live
 
 The engine keeps its files in your user data folder, `~/.local/share/ct-recomp/` (or
@@ -306,7 +460,8 @@ The engine keeps its files in your user data folder, `~/.local/share/ct-recomp/`
 | `ct/rom_path` | Where your ROM is, so you don't have to pick it again |
 | `ct/ct.srm` | Your in-game saves (see [Your saves](#your-saves)) |
 | `ct/ct.srm.bak` | The save file as it was before the last write |
-| `hd2d/settings.ini` | The HD-2D look and picture shape, the window, co-op, and the asset packs to load |
+| `hd2d/settings.ini` | The HD-2D look and picture shape, the window, co-op, the asset packs to load, the keys and back buttons, the [quality-of-life settings](#settings) |
+| `ct/states/` | Save states and the resume point, each with a `.png` of the screen (see [Save states](#save-states)) |
 | `ct/packs/NAME/` | Asset pack NAME: `pack.toml` and its pictures. Made from the game's art unless you painted every picture yourself: **never share it.** |
 | `ct/gen/`, `ct/obj/` | Temporary build files, normally deleted after the build. If a build fails they can be left behind: they hold code generated from your ROM, so don't share them. Deleting them is safe. |
 
@@ -326,8 +481,10 @@ and copy `ct.srm.bak` over `ct.srm`.
 A `ct.srm` that isn't exactly 8,192 bytes is never used or overwritten: the engine
 renames it to `ct.srm.bad`, prints a warning, and starts with empty save memory.
 
-To keep the saves somewhere else, start with `--save /path/to/file.srm`. Save states and
-importing saves from other emulators are planned (see [ROADMAP.md](../ROADMAP.md)).
+To keep the saves somewhere else, start with `--save /path/to/file.srm`. Save states are
+separate from these saves (see [Save states](#save-states)), and saves from other
+emulators can be brought in with `--import-srm` (see [Saves from other
+emulators](#saves-from-other-emulators)).
 
 ## Troubleshooting
 
