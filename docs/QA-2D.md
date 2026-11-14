@@ -31,11 +31,15 @@ are relative to `build-qa/qa/`. They were made by a script, `run.sh`, that runs
   `sheet_hd2d_1038.png`): no misplaced or stretched picture, no seams. The side fill at the
   sides is soft and dim, and fades are the same as in `off`, apart from bugs 3 and 4.
 - `hd2d` at 2560x1080 (`wide_s.png`): the side fill is soft and dimmed, with no seams.
+- `subtle` and `deck` at 1280x800, every 150 frames (`sheet_subtle_1280.png`,
+  `sheet_deck_1280.png`): the deck look's black bars at 16:10, as designed. Bug 3 shows in both.
+- The pixel aspect (8:7) at 1024x768 with HD text, every 50 frames from 3000 to 5000 and frames
+  4400-4407 one after another (`sheet_pix_1024.png`): no flicker. The HD text sits in its
+  boxes, and the fades match.
 - The settings menu over the picture at 1038x556, restored from `settings.ini`, through both
   the GL and SDL_Renderer paths (`menu_both.png`): laid out, readable, not clipped.
 
 ## Not covered in this pass
 
-`subtle`, `deck`, the pixel aspect, integer scale and CRT (the original picture), asset packs
-in 2D, the `--pad-test` checklist, 1280x800 and 1024x768, and runs of consecutive frames for
-flicker. These were not shot, for lack of time.
+Integer scale and CRT (the original picture), asset packs in 2D, the `--pad-test` checklist,
+and 1920x1080. These were not shot, for lack of time.
