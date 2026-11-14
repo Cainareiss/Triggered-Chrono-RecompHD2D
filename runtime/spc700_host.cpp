@@ -12,6 +12,7 @@
  * each cycle's access (the CPU-port latch in snes_adapter.c). */
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include "compat/ucontext.h"   /* port: <ucontext.h>, or ours (bionic, musl) */
 
 #include "nall_shim.hpp"
@@ -86,21 +87,41 @@ struct Host : ares::SPC700 {
     ucontext_t core_ctx, caller_ctx;
     void *stack = nullptr;
     bool started = false;
-    /* port: save states: no cycle of the current instruction has run yet
-       (it is suspended before its opcode fetch) */
-    bool boundary = true;
-    uint16_t insn_pc = 0;   /* PC at that instruction's start (fetch has moved it) */
-    bool entered = false;   /* the coroutine has run (it is suspended in a fetch) */
+    /* port: save states. The core is usually suspended inside an
+       instruction (its C++ frames on the coroutine's stack, which a state
+       can't hold). So the current instruction is recorded as it runs: the
+       registers at its start, the cycles it has run and the values its
+       reads returned. A load restarts the core from those registers and
+       replays the recorded cycles without touching the APU, whose state
+       the state holds as of now: no tick, no access, reads answered from
+       the record. An instruction depends on nothing else, so the core ends
+       up suspended exactly where the saved one was. */
+    enum { REC_MAX = 32 };          /* the longest instruction is 12 cycles */
+    ares::SPC700::Registers start;  /* at the current instruction's start */
+    unsigned rec_cycles = 0;        /* its cycles run so far (saturating) */
+    unsigned rec_reads = 0;         /* its reads so far */
+    uint8_t rec[REC_MAX] = {};      /* the values they returned */
+    unsigned replay = 0;            /* load: recorded cycles still to replay */
+    unsigned replay_read = 0;       /* the next recorded read */
+    bool entered = false;           /* the coroutine has run (it is suspended in an access) */
 
     void yield() { swapcontext(&core_ctx, &caller_ctx); }
-    void begin() {
+    /* Each access is one cycle: begin, tick, the access, end. A replayed
+       one (begin is true) only reads the record. */
+    bool begin() {
+        if (replay) {
+            replay--;
+            return true;
+        }
         while (cycle >= target)
             yield();
+        return false;
     }
     void tick() {
         apu_tick(apu);
         cycle++;
-        boundary = false;
+        if (rec_cycles <= REC_MAX)
+            rec_cycles++;
     }
     void end() {
         if (spc_host_cycle_end)
@@ -108,19 +129,26 @@ struct Host : ares::SPC700 {
     }
 
     auto idle() -> void override {
-        begin();
+        if (begin())
+            return;
         tick();
         end();
     }
     auto read(ares::n16 address) -> ares::n8 override {
-        begin();
+        if (begin())
+            return replay_read < REC_MAX ? rec[replay_read++] : 0;
         tick();
         uint8_t v = apu_cpuRead(apu, address);
+        if (rec_reads < REC_MAX)
+            rec[rec_reads] = v;
+        if (rec_reads <= REC_MAX)
+            rec_reads++;
         end();
         return v;
     }
     auto write(ares::n16 address, ares::n8 data) -> void override {
-        begin();
+        if (begin())
+            return;
         tick();
         apu_cpuWrite(apu, address, data);
         if (spc_host_write_hook)
@@ -136,8 +164,10 @@ void core_main()
 {
     host.entered = true;   /* port: save states */
     for (;;) {
-        host.boundary = true;   /* port: save states */
-        host.insn_pc = (uint16_t)host.r.pc.w;
+        if (!host.replay) {   /* port: save states (a replay keeps its record) */
+            host.start = host.r;
+            host.rec_cycles = host.rec_reads = 0;
+        }
         host.instruction();
     }
 }
@@ -155,9 +185,10 @@ void core_start()
     host.core_ctx.uc_link = nullptr;
     makecontext(&host.core_ctx, core_main, 0);
     host.started = true;
-    host.boundary = true;
     host.entered = false;
-    host.insn_pc = (uint16_t)host.r.pc.w;
+    host.start = host.r;
+    host.rec_cycles = host.rec_reads = 0;
+    host.replay = host.replay_read = 0;
 }
 
 }  // namespace
@@ -198,28 +229,45 @@ extern "C" void spc_host_regs(uint8_t out[8])
     out[7] = (uint8_t)(host.r.wait | host.r.stop << 1);
 }
 
-/* port: save states (savestate.h). Only at an instruction boundary
-   (spc_host_at_boundary): the core's registers, its cycle count and run
-   target; a load starts a new core coroutine there. The APU it drives
-   (RAM, DSP, timers) is the adapter's (snes_hw_state). A core in SLEEP or
-   STOP never reaches a boundary again; the game this was written for
-   never uses either. */
-extern "C" int spc_host_at_boundary(void) { return host.boundary; }
+/* port: save states (savestate.h): the core's registers at the start of
+   its current instruction, its cycle count and run target, and the record
+   of that instruction so far (Host); a load starts a new core coroutine
+   from those registers and replays the record. The APU it drives (RAM,
+   DSP, timers) is the adapter's (snes_hw_state). A core in SLEEP or STOP
+   (an instruction that never ends) can't be saved; the game this was
+   written for never uses either. */
+extern "C" int spc_host_can_save(void)
+{
+    return host.rec_cycles <= Host::REC_MAX && host.rec_reads <= Host::REC_MAX;
+}
 
 extern "C" void spc_host_state(ss_io *s)
 {
-    /* At a boundary the core is suspended in its opcode fetch, whose PC++
-       has already happened: the instruction's own PC is saved. */
-    uint8_t r[10] = {(uint8_t)host.insn_pc, (uint8_t)(host.insn_pc >> 8),
-                    (uint8_t)host.r.ya.byte.l, (uint8_t)host.r.ya.byte.h, (uint8_t)host.r.x,
-                    (uint8_t)host.r.s, (uint8_t)(uint32_t)host.r.p, (uint8_t)host.r.wait,
-                    (uint8_t)host.r.stop, (uint8_t)host.entered};
+    const ares::SPC700::Registers &st = host.start;
+    uint8_t r[10] = {(uint8_t)st.pc.w, (uint8_t)(st.pc.w >> 8), (uint8_t)st.ya.byte.l,
+                     (uint8_t)st.ya.byte.h, (uint8_t)st.x, (uint8_t)st.s, (uint8_t)(uint32_t)st.p,
+                     (uint8_t)st.wait, (uint8_t)st.stop, (uint8_t)host.entered};
     uint64_t cycle = host.cycle, target = host.target;
     ss_begin(s, "SPC7");
     ss_bytes(s, r, sizeof r);
     SS(s, cycle);
     SS(s, target);
     ss_end(s);
+    /* The instruction under way (format 2 on; a format 1 state was always
+       taken at an instruction boundary, where none of it has run). */
+    uint8_t n[2] = {(uint8_t)host.rec_cycles, (uint8_t)host.rec_reads};
+    uint8_t rec[Host::REC_MAX];
+    memcpy(rec, host.rec, sizeof rec);
+    if (s->version >= 2) {
+        ss_begin(s, "SPCI");
+        ss_bytes(s, n, sizeof n);
+        ss_bytes(s, rec, sizeof rec);
+        ss_end(s);
+    } else {
+        n[0] = n[1] = 0;
+    }
+    if (s->loading && !s->err && (n[0] > Host::REC_MAX || n[1] > n[0]))
+        s->err = "the sound CPU's instruction record is damaged";
     if (!SS_APPLY(s))
         return;
     host.r.pc.w = (uint16_t)(r[0] | r[1] << 8);
@@ -233,8 +281,14 @@ extern "C" void spc_host_state(ss_io *s)
     host.cycle = cycle;
     core_start();
     if (r[9]) {
-        /* Suspended in its opcode fetch, as the saved core was (its PC
-           already past the opcode): run it to there, no cycle further. */
+        /* Suspended in an access, as the saved core was: from the
+           instruction's start, replay its recorded cycles (no APU work, no
+           cycle counted), then stop in the next access, no cycle further. */
+        memcpy(host.rec, rec, sizeof rec);
+        host.rec_cycles = n[0];
+        host.rec_reads = n[1];
+        host.replay = n[0];
+        host.replay_read = 0;
         host.target = cycle;
         swapcontext(&host.caller_ctx, &host.core_ctx);
     }

@@ -25,17 +25,19 @@
  * live are dropped, which is safe because generated code keeps all CPU
  * state in the CPU struct at instruction boundaries (the overlay fallback
  * relies on the same), and every compiled function is dispatched natively
- * again at its next entry. The SPC700 core is a coroutine too and is
- * saved only when it sits at an instruction boundary (savestate_ready):
- * a save asked for elsewhere waits for the next frame edge where it does,
- * usually one to three frames.
+ * again at its next entry. The SPC700 core is a coroutine too, and is
+ * usually suspended inside an instruction at a frame edge: the state
+ * holds the instruction's start and what of it has run (spc700_host.cpp),
+ * and a load replays that part. So every frame edge can take a state
+ * (format 1 took one only where the SPC700 sat at an instruction
+ * boundary, about one edge in four).
  *
  * Format: an 8-byte magic, then little-endian fields: format version,
  * CT_MODULE_ABI, the ROM's SHA-1 (20 bytes), the frame count, then tagged
  * sections (4-byte tag, 4-byte length, payload) in a fixed order. A load
- * refuses another format version, module ABI or ROM, and any section whose
- * length differs from this build's (the vendored structs are stored as
- * they are in memory, minus their pointers). */
+ * refuses another format version (but reads format 1), module ABI or ROM,
+ * and any section whose length differs from this build's (the vendored
+ * structs are stored as they are in memory, minus their pointers). */
 #ifndef CT_SAVESTATE_H
 #define CT_SAVESTATE_H
 
@@ -47,12 +49,14 @@ extern "C" {
 #endif
 
 #define SAVESTATE_MAGIC "CTSTATE\x1a"
-#define SAVESTATE_VERSION 1
+/* 2: the SPC700's instruction under way (section SPCI); a load also
+   takes format 1, whose states have none. */
+#define SAVESTATE_VERSION 2
 
 /* Can a state be saved now? 0 if so; else 1 with *why (may be NULL) set:
-   inside a frame, or the SPC700 between instruction boundaries (try again
-   after the next sched_run_frame). Loading is possible whenever the CPU is
-   not running (between sched_run_frame calls, or before the first). */
+   inside a frame, or the SPC700 in SLEEP or STOP (try again after the next
+   sched_run_frame). Loading is possible whenever the CPU is not running
+   (between sched_run_frame calls, or before the first). */
 int savestate_ready(const char **why);
 
 /* The state as a malloc'd blob (*len bytes), or NULL with *why. */
@@ -83,6 +87,7 @@ typedef struct ss_io {
     size_t in_len, pos;
     size_t mark;            /* the open section's length field */
     const char *err;        /* first error; nothing more is read once set */
+    uint32_t version;       /* the format being written or read */
 } ss_io;
 
 void ss_bytes(ss_io *s, void *p, size_t n);
@@ -101,8 +106,9 @@ void interp_state(ss_io *s);      /* interp.c */
 void sched_state(ss_io *s);       /* sched.c */
 /* sched.c: 0 if the CPU can be saved now, else 1 with *why. */
 int sched_state_ready(const char **why);
-/* spc700_host.cpp: the core is at an instruction boundary. */
-int spc_host_at_boundary(void);
+/* spc700_host.cpp: the core's state can be saved (it is not in an
+   instruction that never ends: SLEEP, STOP). */
+int spc_host_can_save(void);
 
 #ifdef __cplusplus
 }

@@ -1757,8 +1757,8 @@ int sched_state_ready(const char **why)
     const char *w = NULL;
     if (in_cpu)
         w = "the CPU is running (save between frames)";
-    else if (!spc_host_at_boundary())
-        w = "the sound CPU is between instructions (the next frame edge may do)";
+    else if (!spc_host_can_save())
+        w = "the sound CPU is in SLEEP or STOP";
     if (why)
         *why = w;
     return w != NULL;

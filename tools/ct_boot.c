@@ -120,7 +120,7 @@
  *                  asset packs do (port)
  * --save-state F:PATH  port: write a save state (runtime/savestate.h) at
  *                  the first frame edge from F on where one can be taken
- *                  (the SPC700 at an instruction boundary), and print
+ *                  (any, unless the SPC700 is in SLEEP or STOP), and print
  *                  "ct_boot: state saved at frame N to PATH"
  * --load-state PATH  port: start from a save state instead of from reset;
  *                  --frames still counts from reset

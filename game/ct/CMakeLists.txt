@@ -303,7 +303,14 @@ add_test(NAME savestate_replay COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/te
 add_test(NAME savestate_replay_interp COMMAND ${Python3_EXECUTABLE}
     ${GAME_DIR}/test/test_savestate.py $<TARGET_FILE:ct_boot>
     ${GAME_DIR}/test/replay/leene_square.txt 3000 3600 5 --interp-only)
-list(APPEND ct_game_tests savestate_replay savestate_replay_interp)
+# The world map (1000 A.D., entered at frame 7252): saved at frame 7600
+# exactly (format 1 states waited for an edge with the SPC700 at an
+# instruction boundary, one in four; 7600 was not one), and a round trip at
+# every frame edge, each with the SPC700 wherever it is in its instruction.
+add_test(NAME savestate_world_map COMMAND ${Python3_EXECUTABLE}
+    ${GAME_DIR}/test/test_savestate.py $<TARGET_FILE:ct_boot>
+    ${GAME_DIR}/test/replay/world_map_save.txt 7600 7720 1 --every-edge)
+list(APPEND ct_game_tests savestate_replay savestate_replay_interp savestate_world_map)
 
 # port: always run (game/ct/always_run.c, sched_pref): walking up to the bell
 # without the run button, the leader's Y velocity ($7E1D2D) is -$10; with

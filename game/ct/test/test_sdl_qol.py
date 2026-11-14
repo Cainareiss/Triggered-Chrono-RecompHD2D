@@ -8,7 +8,9 @@ Quick save, quick load, the screenshot and fast-forward go through the
 frontend actions (actions.h), as their keys and back buttons do.
 
 - states: a quick save from ct_sdl runs on in ct_boot exactly as ct_boot's
-  own run of the same replay; slots and thumbnails; a quick load.
+  own run of the same replay; slots and thumbnails; a quick load. On the
+  world map (frame 7700), the quick save is taken at the frame it was
+  asked at (any frame edge can take one) and runs on as ct_boot does.
 - resume: SIGTERM saves the resume point; the next start asks, and yes
   loads it; no keeps it aside as auto-previous; a (simulated) sleep saves
   it too.
@@ -86,6 +88,22 @@ def main(argv: list[str]) -> int:
         rc, log = sdl(ct_sdl, base + ['--fast', '--frames', '700', '--qol-action',
                                       '660:press:quickload'], env)
         check(rc == 0 and 'Quick slot: loaded' in log, 'quick load', log)
+        # the world map (location $1F0 from frame 7252 on this replay)
+        rc, log = sdl(ct_sdl, base + ['--fast', '--frames', '7710', '--script', script,
+                                      '--qol-action', '7700:press:quicksave'], env, timeout=300)
+        check(rc == 0 and 'quick.state (frame 7700)' in log,
+              'a quick save on the world map, at the frame asked', log)
+        if 'quick.state (frame 7700)' in log:
+            plain, loaded = os.path.join(d, 'wplain'), os.path.join(d, 'wloaded')
+            subprocess.run([ct_boot, '--script', script, '--frames', '7760', '--hash-log', plain],
+                           capture_output=True, check=True)
+            subprocess.run([ct_boot, '--script', script, '--frames', '7760', '--load-state', quick,
+                            '--hash-log', loaded], capture_output=True, check=True)
+            with open(plain) as a, open(loaded) as b:
+                tail = [x for x in a if int(x.split()[0]) > 7700]
+                got = b.readlines()
+            check(tail == got and len(got) == 60,
+                  f'the world map state runs on as ct_boot ({len(got)} frames)')
 
         # -- resume --
         p = subprocess.Popen([ct_sdl] + base, env=env, stdout=subprocess.PIPE,

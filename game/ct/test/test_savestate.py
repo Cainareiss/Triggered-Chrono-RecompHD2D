@@ -8,9 +8,10 @@ per-frame hashes (CPU, WRAM, SRAM, VRAM, CGRAM, OAM, the frame picture,
 APU) in both runs, and saving must not change the run that saved. Then
 --state-roundtrip K: a state saved and loaded straight back every K
 frames (a new CPU coroutine each time, native frames dropped) must leave
-the whole run unchanged.
+the whole run unchanged. With --every-edge, every frame edge must take a
+state: the save at frame N itself, and T / K round trips.
 
-usage: test_savestate.py CT_BOOT SCRIPT N T K [ct_boot options, e.g. --interp-only]
+usage: test_savestate.py CT_BOOT SCRIPT N T K [--every-edge] [ct_boot options, e.g. --interp-only]
 """
 import os
 import subprocess
@@ -46,6 +47,8 @@ def main(argv: list[str]) -> int:
         return 2
     boot, script, n, t, k = argv[1:6]
     extra = argv[6:]
+    every = '--every-edge' in extra
+    extra = [x for x in extra if x != '--every-edge']
     common = [boot, '--script', script, '--frames', t] + extra
     with tempfile.TemporaryDirectory() as d:
         state = os.path.join(d, 's.state')
@@ -69,6 +72,13 @@ def main(argv: list[str]) -> int:
         d = first_diff(exp, got)
         if d:
             print(f'savestate: {what}\n{d}')
+            bad = 1
+    if every:
+        want = int(t) // int(k)
+        got = int(trips[0].split('ct_boot: ')[-1].split()[0]) if trips else -1
+        if frame != int(n) or got != want:
+            print(f'savestate: not every frame edge took a state: saved at frame {frame} '
+                  f'(asked {n}), {got} round trips of {want}')
             bad = 1
     if not bad:
         print(f'savestate: saved at frame {frame}, {len(l)} frames after it identical; '
