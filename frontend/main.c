@@ -2329,7 +2329,11 @@ static int open_window(const char *title, int scale, int fullscreen)
             {SDL_GL_CONTEXT_PROFILE_CORE, 3, 3, 0},
             {SDL_GL_CONTEXT_PROFILE_ES, 3, 0, 1},
         };
-        for (size_t k = 0; k < sizeof want_gl / sizeof *want_gl && !glctx; k++) {
+        /* port: CT_HD2D_GLES=1 asks for OpenGL ES 3.0 only (tests the ES path
+           on a desktop driver). */
+        const char *es_only = getenv("CT_HD2D_GLES");
+        for (size_t k = es_only && *es_only == '1' ? 1 : 0;
+             k < sizeof want_gl / sizeof *want_gl && !glctx; k++) {
             SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, want_gl[k].profile);
             SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, want_gl[k].major);
             SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, want_gl[k].minor);

@@ -465,6 +465,9 @@ static void pack_textures_init(void)
     g.t_pack_rects = make_tex(1, 1, GL_RGBA16UI, GL_RGBA_INTEGER, GL_UNSIGNED_SHORT, GL_NEAREST);
     g.t_pack_lut = make_tex(PACK_LUT_W, PACK_LUT_H, GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT,
                             GL_NEAREST);
+    /* (the entries' texture, not the lookup made last: OpenGL ES refuses
+       an RGBA_INTEGER upload to an R16UI texture) */
+    p_glBindTexture(GL_TEXTURE_2D, g.t_pack_rects);
     p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA_INTEGER, GL_UNSIGNED_SHORT, zero);
     p_glGenTextures(1, &g.t_pack_atlas);
     p_glBindTexture(GL_TEXTURE_2D_ARRAY, g.t_pack_atlas);
