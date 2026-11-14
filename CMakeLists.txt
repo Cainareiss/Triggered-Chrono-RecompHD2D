@@ -180,10 +180,12 @@ if(SDL2_FOUND)
     add_library(ct_input STATIC frontend/input.c frontend/touch.c frontend/touch_gl.c
         frontend/device.c   # port: device.c: Steam Game Mode, Steam Deck (HANDHELD.md)
         frontend/hid_deck.c # port: Deck-format hidraw pads SDL misses (InputPlumber)
+        frontend/rumble_out.c # port: simulated rumble on the controllers
         # port: frontend actions, their bindings, button glyphs in messages
         frontend/actions.c frontend/bindings.c frontend/glyphs.c frontend/osd_text.c
         frontend/settings.c)   # port: the settings registry (settings.h)
     target_include_directories(ct_input PUBLIC frontend)
+    target_include_directories(ct_input PRIVATE runtime)   # port: rumble.h (rumble_out.c)
     target_link_libraries(ct_input PUBLIC SDL2::SDL2 m)
     target_compile_options(ct_input PRIVATE ${CT_WARN})
     # port: the button glyphs (third_party/glyphs, Kenney Input Prompts,
@@ -437,7 +439,7 @@ if(SDL2_FOUND)
     # port: the Deck-format hidraw reader (frontend/hid_deck.h): reports
     # made from the documented layout, through a fake sysfs and a FIFO
     add_executable(test_hid_deck test/test_hid_deck.c)
-    target_link_libraries(test_hid_deck ct_input)
+    target_link_libraries(test_hid_deck ct_input ct_runtime)   # port: ct_runtime: rumble.h
     target_compile_options(test_hid_deck PRIVATE ${CT_WARN})
     add_test(NAME hid_deck COMMAND test_hid_deck ${CMAKE_BINARY_DIR}/test_hid_deck_tmp)
     # port: back buttons -> frontend actions, glyphs, gyro, through SDL

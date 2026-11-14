@@ -125,6 +125,14 @@
  *       --hd2d it is used with the off preset.
  *   --mute | --no-mute
  *       silence the game for this run only (the volume setting is kept).
+ *   --rumble off|light|medium|strong, --log-rumble
+ *       simulated rumble (rumble_out.h, docs/USER-GUIDE.md): controller
+ *       pulses made from the game's events (a party member hit, an enemy
+ *       down, an earthquake: the game module's) and from the screen
+ *       shaking or flashing. settings.ini rumble= (default light);
+ *       rumble_sounds=on adds low booms in the sound. --log-rumble prints
+ *       every event and motor change; --rumble-test F plays the test pulse
+ *       (the menu's Test rumble) at frame F.
  *   --pad-test
  *       the controller test (padtest.h, docs/HANDHELD.md): a checklist of
  *       every control in the corner, ticked as each is used; quits once all
@@ -191,6 +199,8 @@
 #include "menu.h"       /* port: the in-game settings menu */
 #include "settings.h"   /* port: the settings registry the menu shows */
 #include "padtest.h"    /* port: the controller test (--pad-test) */
+#include "rumble.h"     /* port: simulated rumble: the events */
+#include "rumble_out.h" /* port: simulated rumble: the controllers */
 
 #ifndef CT_VERSION
 #define CT_VERSION "dev"
@@ -1242,6 +1252,37 @@ static const char *const hid_deck_labels[] = {"Auto", "On", "Off"};
 static const char *const hid_deck_values[] = {"auto", "on", "off"};
 static int get_hid_deck(void *u) { (void)u; return hid_deck_mode(); }
 static void set_hid_deck(void *u, int v) { (void)u; hid_deck_set_mode(v); }
+/* port: simulated rumble */
+static const char *const rumble_labels[RUMBLE_LEVELS] = {"Off", "Light", "Medium", "Strong"};
+static const char *const rumble_values[RUMBLE_LEVELS] = {"off", "light", "medium", "strong"};
+static int rumble_sounds;
+static long rumble_test_at = -1;   /* --rumble-test F */
+static void rumble_apply(void)
+{
+    /* the InputPlumber pad is opened read-write only when it may rumble */
+    hid_deck_set_rumble(rumble_out_level() != RUMBLE_OFF || padtest_active());
+    rumble_set_detectors(1, rumble_sounds);
+}
+static int get_rumble(void *u) { (void)u; return rumble_out_level(); }
+static void set_rumble(void *u, int v)
+{
+    (void)u;
+    rumble_out_set_level(v);
+    rumble_apply();
+}
+static int get_rumble_sounds(void *u) { (void)u; return rumble_sounds; }
+static void set_rumble_sounds(void *u, int v)
+{
+    (void)u;
+    rumble_sounds = v != 0;
+    rumble_apply();
+}
+static int rumble_is_on(void *u) { (void)u; return rumble_out_level() != RUMBLE_OFF; }
+static void run_rumble_test(void *u)
+{
+    (void)u;
+    rumble_out_test(SDL_GetTicks());
+}
 static const char *menu_combo_text(void *u, char *buf, size_t n)
 {
     (void)u;
@@ -1633,6 +1674,22 @@ static void register_settings(void)
         .get = get_hid_deck, .set = set_hid_deck,
         .help = "Bazzite's InputPlumber shows an Ally's or Legion Go's controls as a Steam Deck "
                 "pad only Steam reads. Auto: read it while no other controller is there."});
+    settings_register(&(setting){
+        .key = "rumble", .label = "Rumble", .category = "Controls", .type = SETTING_ENUM,
+        .options = rumble_labels, .values = rumble_values, .count = RUMBLE_LEVELS,
+        .get = get_rumble, .set = set_rumble,
+        .help = "Pulses from the game: hits, criticals, enemies going down, earthquakes, the "
+                "screen shaking or flashing. Co-op: each player feels their own party member's."});
+    settings_register(&(setting){
+        .key = "rumble_sounds", .label = "Rumble from low sounds", .category = "Controls",
+        .type = SETTING_BOOL, .get = get_rumble_sounds, .set = set_rumble_sounds,
+        .enabled = rumble_is_on,
+        .help = "Also pulse on explosions and thuds heard in the sound (low booms)."});
+    settings_register(&(setting){
+        .label = "Test rumble", .category = "Controls", .type = SETTING_ACTION,
+        .run = run_rumble_test,
+        .help = "A short pulse on every controller in play, at the strength set (Light when "
+                "off)."});
 
     /* Co-op */
     settings_register(&(setting){
@@ -1892,6 +1949,7 @@ static void poll_input(long f)
             pads_changed();
         } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
             pads_changed();   /* port: before the pads move up */
+            rumble_out_stop_all();   /* port: every pad still; the next frame reassigns them */
             if (gyro_pad && !SDL_GameControllerGetAttached(gyro_pad))
                 gyro_pad = NULL;
             SDL_GameController **all[3] = {&pad, &pad2, &pad3};
@@ -1981,6 +2039,7 @@ static void queue_audio(long f)
 {
     static int16_t in[4096 * 2], out[8192 * 2];
     int n_in = sched_audio_take(in, 4096);
+    rumble_frame(f, in, n_in, SCHED_AUDIO_HZ);   /* port: simulated rumble: the frame's events */
     if (!audio || qol_audio_muted())
         return;   /* port: QOL fast-forward drops the sound */
     unsigned level = SDL_GetQueuedAudioSize(audio) / 4;
@@ -2342,6 +2401,7 @@ static void menu_run(long f)
         unsigned ms = fast ? 16u : (unsigned)((now - last) * 1000 / perf_freq);
         last = now;
         menu_tick(ms);
+        rumble_out_idle(SDL_GetTicks());   /* port: no game rumble in the menu (its test only) */
         long before = sched_frame_count();
         qol_after_frame();   /* QOL: a save, load or screenshot asked for in the menu */
         loaded |= sched_frame_count() != before;
@@ -2384,6 +2444,17 @@ static void on_frame(long f)
         write_hash(f);
     int show = qol_frame(f);   /* port: QOL: fast-forward and the battery's 30 Hz skip some */
     queue_audio(f);
+    {   /* port: simulated rumble on the pads in play; none while fast-forwarding */
+        SDL_GameController *const pads[RUMBLE_PADS] = {
+            pad, coop_players > 1 ? pad2 : NULL, coop_players > 2 ? pad3 : NULL, NULL};
+        rumble_out_set_pads(pads);
+        rumble_out_frame(SDL_GetTicks(), qol_speed() > 1 || qol_paused() || menu_is_open());
+        if (f == rumble_test_at) {
+            fprintf(stderr, "ct_sdl: frame %ld: rumble test pulse (pad 1: %s)\n", f,
+                    pad ? SDL_GameControllerName(pad) : "none");
+            rumble_out_test(SDL_GetTicks());
+        }
+    }
     if (pace_vsync && playing && audio && !fast) {
         /* port: a frame that missed its refresh is lost under vsync, and the
            sound queue drains by a frame each time: when it runs low, stop
@@ -2641,7 +2712,7 @@ static void usage(FILE *out)
             "[--coop] [--no-coop] [--coop-split]"
             " "
             "[--pack-dump NAME] [--pack NAME|none]...\n         "
-            "[--mute] [--no-mute] [--pad-test]\n         "
+            "[--mute] [--no-mute] [--pad-test] [--rumble off|light|medium|strong] [--log-rumble] [--rumble-test F]\n         "
             "[--menu-test FILE] [--hash-log FILE]"
 #ifdef CT_FIRSTRUN
             " [--data-dir DIR] [--game ID] [--shot status:PATH] [--build-only]"
@@ -2799,6 +2870,21 @@ int main(int argc, char **argv)
             mute_run = -1;
         } else if (!strcmp(argv[k], "--pad-test")) {   /* port: the controller test */
             padtest_start();
+        } else if (!strcmp(argv[k], "--rumble") && k + 1 < argc) {   /* port */
+            int l = -1;
+            for (int v = 0; v < RUMBLE_LEVELS; v++)
+                if (!strcmp(argv[k + 1], rumble_values[v]))
+                    l = v;
+            if (l < 0) {
+                fprintf(stderr, "ct_sdl: --rumble off|light|medium|strong\n");
+                return 2;
+            }
+            k++;
+            set_rumble(NULL, l);
+        } else if (!strcmp(argv[k], "--log-rumble")) {
+            rumble_out_set_log(1);
+        } else if (!strcmp(argv[k], "--rumble-test") && k + 1 < argc) {
+            rumble_test_at = atol(argv[++k]);
         } else if (!strcmp(argv[k], "--dump-sram") && k + 1 < argc) {
             saves_dump_at_exit(argv[++k]);
         } else if (!strcmp(argv[k], "--poke-sram") && k + 1 < argc) {
@@ -2918,6 +3004,7 @@ int main(int argc, char **argv)
     }
     /* port: the controller test is silent unless --no-mute */
     mute_run = mute_run > 0 || (mute_run == 0 && padtest_active());
+    rumble_apply();   /* port: the pad test rumbles even with rumble off */
     if (import_srm || export_srm) {   /* port: QOL: a save RAM file in or out, then stop */
         if (import_srm && export_srm) {
             fprintf(stderr, "ct_sdl: --import-srm or --export-srm, not both\n");
@@ -3163,6 +3250,7 @@ int main(int argc, char **argv)
             continue;
         }
         if (qol_paused()) {
+            rumble_out_idle(SDL_GetTicks());   /* port: paused: still */
             qol_idle();
             continue;
         }
@@ -3193,6 +3281,8 @@ int main(int argc, char **argv)
         if (wst_dirty())
             settings_save();
     }
+    rumble_out_stop_all();   /* port: simulated rumble: every motor off */
+    hid_deck_close();        /* (the InputPlumber pad's motors too) */
     if (pad)
         SDL_GameControllerClose(pad);
     if (pad2)

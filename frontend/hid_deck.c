@@ -29,10 +29,15 @@
  *      misrepresented as being the original software.
  *   3. This notice may not be removed or altered from any source distribution.
  *
- * Altered: rewritten as a byte-offset parser over a plain buffer, without
- * SDL's hidapi layer, the lizard-mode feature reports, rumble or the
- * motion sensors. The scanning, the virtual controller and everything
- * else here are ours (GPL-3.0-or-later). */
+ * The rumble command (hid_deck_rumble_report) is ported from the same
+ * driver's HIDAPI_DriverSteamDeck_RumbleJoystick and the MsgSimpleRumbleCmd
+ * and FeatureReportMsg layouts of controller_structs.h.
+ *
+ * Altered: rewritten as a byte-offset parser over a plain buffer, and a
+ * rumble command builder, without SDL's hidapi layer, the lizard-mode
+ * feature reports or the motion sensors. The scanning, the virtual
+ * controller, the rumble thread and everything else here are ours
+ * (GPL-3.0-or-later). */
 #include "hid_deck.h"
 
 #include <stdarg.h>
@@ -124,6 +129,30 @@ int hid_deck_parse(const uint8_t *r, int len, hid_deck_state *s)
     return 1;
 }
 
+/* controller_constants.h: ID_TRIGGER_RUMBLE_CMD. controller_structs.h:
+   FeatureReportMsg {FeatureReportHeader {uint8 type, uint8 length},
+   payload}; MsgSimpleRumbleCmd {uint8 unRumbleType, uint16 unIntensity,
+   uint16 unLeftMotorSpeed, uint16 unRightMotorSpeed, int8 nLeftGain,
+   int8 nRightGain}, packed. HAPTIC_INTENSITY_SYSTEM is 0. As SDL's
+   driver fills it: type 0, intensity system, left gain 2, right gain 0,
+   the length left 0, after a report number byte 0. */
+#define ID_TRIGGER_RUMBLE_CMD 0xEB
+
+void hid_deck_rumble_report(uint8_t b[HID_DECK_RUMBLE_LEN], uint16_t low, uint16_t high)
+{
+    memset(b, 0, HID_DECK_RUMBLE_LEN);
+    uint8_t *msg = b + 1;
+    msg[0] = ID_TRIGGER_RUMBLE_CMD;   /* header.type; header.length 0 */
+    msg[2] = 0;                       /* unRumbleType */
+    msg[3] = msg[4] = 0;              /* unIntensity: HAPTIC_INTENSITY_SYSTEM */
+    msg[5] = (uint8_t)low;            /* unLeftMotorSpeed */
+    msg[6] = (uint8_t)(low >> 8);
+    msg[7] = (uint8_t)high;           /* unRightMotorSpeed */
+    msg[8] = (uint8_t)(high >> 8);
+    msg[9] = 2;                       /* nLeftGain */
+    msg[10] = 0;                      /* nRightGain */
+}
+
 /* ---- the rest is ours ---- */
 
 int hid_deck_descriptor_ok(const uint8_t *d, int n)
@@ -187,8 +216,10 @@ void hid_deck_set_log(int on)
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/hidraw.h>
 #include <poll.h>
 #include <stdlib.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 #define RESCAN_MS 2000
@@ -218,6 +249,7 @@ static struct {
 } dev = {.fd = -1, .id = -1};
 
 static uint32_t next_scan;
+static int rumble_on;   /* hid_deck_set_rumble */
 static struct { char node[32]; uint32_t until; } rejected[8];
 static char warned[8][32];
 
@@ -232,6 +264,144 @@ static void say(const char *fmt, ...)
     va_end(ap);
 }
 
+/* ---- rumble: a thread sends the latest motor setting ----
+   The feature report waits for the device's answer (InputPlumber's, through
+   uhid), so it never runs on the frame's thread. Only the newest setting
+   is sent: one that comes while another is on its way replaces any still
+   waiting. */
+static struct {
+    SDL_Thread *thread;
+    SDL_mutex *lock;
+    SDL_cond *cond;
+    int fd;                 /* its own descriptor, open for writing */
+    int quit, pending, sent, failed;
+    uint16_t low, high;
+    long writes;            /* reports tried, for tests */
+} wr = {.fd = -1};
+
+static int SDLCALL writer(void *unused)
+{
+    (void)unused;
+    SDL_LockMutex(wr.lock);
+    for (;;) {
+        while (!wr.pending && !wr.quit)
+            SDL_CondWait(wr.cond, wr.lock);
+        if (!wr.pending)
+            break;
+        uint16_t lo = wr.low, hi = wr.high;
+        int fd = wr.fd;
+        wr.pending = 0;
+        SDL_UnlockMutex(wr.lock);
+        uint8_t b[HID_DECK_RUMBLE_LEN];
+        hid_deck_rumble_report(b, lo, hi);
+        uint32_t t0 = SDL_GetTicks();
+        int r = ioctl(fd, HIDIOCSFEATURE(sizeof b), b);
+        int err = errno;
+        SDL_LockMutex(wr.lock);
+        wr.writes++;
+        if (r < 0 && !wr.failed && !wr.quit) {   /* (at the end: the device may be gone) */
+            wr.failed = 1;
+            say("rumble: the device refused the rumble command (%s); no rumble from it",
+                strerror(err));
+        } else if (r >= 0 && !wr.sent++) {
+            say("rumble: the device took the rumble command (%u ms)", SDL_GetTicks() - t0);
+        }
+    }
+    SDL_UnlockMutex(wr.lock);
+    return 0;
+}
+
+static void writer_post(uint16_t lo, uint16_t hi)
+{
+    SDL_LockMutex(wr.lock);
+    wr.low = lo;
+    wr.high = hi;
+    wr.pending = 1;
+    SDL_CondSignal(wr.cond);
+    SDL_UnlockMutex(wr.lock);
+}
+
+/* fd: the device open read-write (duplicated), or -1 to open it for writing. */
+static void writer_start(int fd)
+{
+    if (wr.thread)
+        return;
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s", dev_dir, dev.node);
+    int w = fd >= 0 ? fcntl(fd, F_DUPFD_CLOEXEC, 0) : open(path, O_WRONLY | O_CLOEXEC);
+    if (w < 0) {
+        say("rumble: can't write to %s (%s): no rumble from it", path, strerror(errno));
+        return;
+    }
+    if (!wr.lock) {
+        wr.lock = SDL_CreateMutex();
+        wr.cond = SDL_CreateCond();
+    }
+    wr.fd = w;
+    wr.quit = wr.pending = wr.sent = wr.failed = 0;
+    wr.low = wr.high = 0;
+    if (!wr.lock || !wr.cond || !(wr.thread = SDL_CreateThread(writer, "hid_deck rumble", NULL))) {
+        say("rumble: no thread (%s): no rumble from it", SDL_GetError());
+        close(w);
+        wr.fd = -1;
+    }
+}
+
+/* The motors off (when they ran), then the thread ends. */
+static void writer_stop(void)
+{
+    if (!wr.thread)
+        return;
+    SDL_LockMutex(wr.lock);
+    if (wr.sent && (wr.low || wr.high || wr.pending)) {
+        wr.low = wr.high = 0;
+        wr.pending = 1;
+    }
+    wr.quit = 1;
+    SDL_CondSignal(wr.cond);
+    SDL_UnlockMutex(wr.lock);
+    SDL_WaitThread(wr.thread, NULL);
+    wr.thread = NULL;
+    close(wr.fd);
+    wr.fd = -1;
+}
+
+/* What the Rumble callback returns for success and failure. SDL 2 wants
+   0 and -1; sdl2-compat (SDL 2 over SDL 3, Fedora's and Bazzite's
+   libSDL2 2.32.5x and up) hands the callback to SDL 3 as is, which takes
+   the int as a bool: there 1 is success, 0 failure. attach() asks. */
+static int cb_ok = 0, cb_fail = -1, cb_probe;
+
+/* SDL_VirtualJoystickDesc.Rumble: SDL_GameControllerRumble on our pad
+   (and SDL's own zero when its duration ends). */
+static int SDLCALL deck_rumble(void *unused, Uint16 lo, Uint16 hi)
+{
+    (void)unused;
+    if (cb_probe)
+        return 0;
+    if (!wr.thread) {
+        SDL_Unsupported();
+        return cb_fail;
+    }
+    writer_post(lo, hi);
+    return cb_ok;
+}
+
+/* Which of the two the SDL we run on means: our callback answers 0. */
+static void probe_callback(SDL_Joystick *j)
+{
+    cb_probe = 1;
+    if (SDL_JoystickRumble(j, 1, 1, 0) == 0) {
+        cb_ok = 0;   /* SDL 2: 0 is success */
+        cb_fail = -1;
+        SDL_JoystickRumble(j, 0, 0, 0);
+    } else {
+        cb_ok = 1;   /* sdl2-compat: a bool */
+        cb_fail = 0;
+    }
+    cb_probe = 0;
+}
+
 int hid_deck_instance(void)
 {
     return dev.joy ? (int)dev.id : -1;
@@ -244,6 +414,7 @@ const char *hid_deck_describe(void)
 
 static void drop(const char *why)
 {
+    writer_stop();
     if (dev.joy) {
         say("dropping %s: %s", dev.desc, why);
         SDL_JoystickClose(dev.joy);
@@ -264,6 +435,27 @@ static void drop(const char *why)
 void hid_deck_close(void)
 {
     drop("closing");
+}
+
+long hid_deck_rumble_writes(void)
+{
+    if (!wr.lock)
+        return 0;
+    SDL_LockMutex(wr.lock);
+    long n = wr.writes;
+    SDL_UnlockMutex(wr.lock);
+    return n;
+}
+
+void hid_deck_set_rumble(int on)
+{
+    rumble_on = on != 0;
+    if (!dev.joy)
+        return;
+    if (rumble_on)
+        writer_start((fcntl(dev.fd, F_GETFL) & O_ACCMODE) == O_RDWR ? dev.fd : -1);
+    else
+        writer_stop();
 }
 
 /* SDL has a game controller that isn't ours (Steam's virtual pad, a USB
@@ -379,6 +571,7 @@ static int attach(int fd, const char *node, const char *name, uint16_t vid, uint
     d.vendor_id = vid;
     d.product_id = pid;
     d.name = dev.name;
+    d.Rumble = deck_rumble;   /* port: unsupported unless rumble is on */
     int idx = SDL_JoystickAttachVirtualEx(&d);
     SDL_Joystick *j = idx >= 0 ? SDL_JoystickOpen(idx) : NULL;
     if (!j) {
@@ -388,6 +581,7 @@ static int attach(int fd, const char *node, const char *name, uint16_t vid, uint
         close(fd);
         return 0;
     }
+    probe_callback(j);
     dev.fd = fd;
     dev.joy = j;
     dev.id = SDL_JoystickInstanceID(j);
@@ -399,8 +593,12 @@ static int attach(int fd, const char *node, const char *name, uint16_t vid, uint
     dev.last = *s;
     dev.have_last = 0;
     dev.last_report = dev.last_check = SDL_GetTicks();
-    say("using %s: Steam Deck reports, read-only, as a virtual game controller%s", dev.desc,
+    int rw = (fcntl(fd, F_GETFL) & O_ACCMODE) == O_RDWR;
+    say("using %s: Steam Deck reports, %s, as a virtual game controller%s", dev.desc,
+        rw ? "read-write for rumble" : "read-only",
         SDL_IsGameController(idx) ? "" : " (but SDL doesn't take it as a game controller)");
+    if (rumble_on)
+        writer_start(rw ? fd : -1);
     return 1;
 }
 
@@ -432,7 +630,10 @@ static int scan(uint32_t now)
             continue;
         }
         snprintf(path, sizeof path, "%s/%s", dev_dir, e->d_name);
-        int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        /* port: read-write only for rumble; read-only when that is refused */
+        int fd = rumble_on ? open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC) : -1;
+        if (fd < 0)
+            fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
         if (fd < 0) {
             warn_once(e->d_name, "can't read %s (%s): see docs/HANDHELD.md, Bazzite / InputPlumber",
                       path, strerror(errno));
@@ -581,6 +782,16 @@ const char *hid_deck_describe(void)
 
 void hid_deck_close(void)
 {
+}
+
+void hid_deck_set_rumble(int on)
+{
+    (void)on;
+}
+
+long hid_deck_rumble_writes(void)
+{
+    return 0;
 }
 
 #endif
