@@ -744,6 +744,13 @@ static int load_dirs(void)
         load_one(L.dirs[k], &list, &n, &cap, &have);
     }
     kmap_free(&have);
+    for (int k = 0; k < L.nmodels; k++) {   /* [[model]]: check each file */
+        char err[512];
+        if (packs_model_parse(L.models[k].file, &L.models[k], err, sizeof err)) {
+            fprintf(stderr, "packs: model: %s\n", err);
+            L.models[k].meshes = L.models[k].primitives = 0;
+        }
+    }
     int rc = build_atlas(list, n);
     for (int k = 0; k < n; k++)
         free(list[k].img);

@@ -47,6 +47,13 @@ reads them to populate `funcs.toml` / `unresolved.toml`.
   the zelda3 APU's memory map, DSP and timers. Details in
   `third_party/ares/README.md`.
 
+### `third_party/cgltf/`
+
+- **jkuhlmann/cgltf**, `cgltf.h` at tag `v1.14` (MIT, Johannes Kuhlmann) -- a
+  single-header glTF 2.0 parser, vendored unmodified. `frontend/packs/packs_model.c`
+  uses it to read and check the models asset packs name in `[[model]]` entries
+  (docs/ASSET-PACKS.md). Details and the file's hash in `third_party/cgltf/README.md`.
+
 ### `third_party/snes/`
 
 - **snesrev/zelda3**, `snes/` subtree, commit `fbbb3f967a51fafe642e6140d0753979e73b4090`
@@ -79,6 +86,11 @@ reads them to populate `funcs.toml` / `unresolved.toml`.
     15-bit).
   - Brightness: each 5-bit channel is scaled by brightness / 15 before it
     is expanded to 8 bits (Mesen 2); upstream scaled the expanded value.
+  - Provenance G-buffer (port, GPL-3.0-or-later, for asset packs):
+    `PpuSetProvBuffer` records per pixel which character, palette and
+    sprite texel the main screen's winner came from (`PpuProv`);
+    sprite evaluation is compiled in two versions so the path with it off
+    is unchanged.
   - Lines are drawn as they go: `ppu_runLine` sets a line up and
     `ppu_drawTo` draws it up to a pixel, so a register write partway
     through a line (the adapter draws up to the write's dot first) changes
