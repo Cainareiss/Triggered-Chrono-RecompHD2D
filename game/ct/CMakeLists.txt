@@ -53,8 +53,9 @@ add_custom_command(
     VERBATIM)
 
 # Recompiled functions plus this game's extern hooks.
-add_library(ct_gen STATIC ${CT_GEN_SOURCES} hooks.c)
-target_include_directories(ct_gen PUBLIC ${CT_OUT})
+# sprites.c: field object sprites drawn from ROM and WRAM (docs/SCENE.md A1).
+add_library(ct_gen STATIC ${CT_GEN_SOURCES} hooks.c sprites.c)
+target_include_directories(ct_gen PUBLIC ${CT_OUT} ${GAME_DIR})
 target_link_libraries(ct_gen PUBLIC ct_runtime ct_sched)
 target_compile_options(ct_gen PRIVATE ${CT_WARN} -Wno-unused-label)
 target_compile_definitions(ct_gen PRIVATE CT_TEST_BUILD CT_TABLES_DEFINE)
@@ -98,7 +99,7 @@ endif()
 # port: the same game code as a loadable module (runtime/module.h), and
 # engine-only programs that load it with --module. The engine programs
 # contain no game code: built from the runtime and the empty tables only.
-add_library(ct_game_module MODULE ${CT_GEN_SOURCES} hooks.c scene.c ${CT_OUT}/ct_funcs.c
+add_library(ct_game_module MODULE ${CT_GEN_SOURCES} hooks.c scene.c sprites.c ${CT_OUT}/ct_funcs.c
     ${CMAKE_SOURCE_DIR}/runtime/module_entry.c)
 target_include_directories(ct_game_module PRIVATE ${CT_OUT} ${CMAKE_SOURCE_DIR}/runtime)
 target_compile_definitions(ct_game_module PRIVATE CT_TEST_BUILD CT_TABLES_DEFINE)
@@ -127,6 +128,16 @@ add_test(NAME scene_decode COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_s
     $<TARGET_FILE:ct_boot> $<TARGET_FILE:ct_boot_engine> $<TARGET_FILE:ct_game_module>
     ${GAME_DIR}/test/replay ${GAME_DIR}/tools/scene_probe.py)
 list(APPEND ct_game_tests scene_decode)
+
+# The sprite decoder (sprites.c) against the console's OAM, VRAM, CGRAM and
+# drawn frame: Leene Square while walking (8500-8700), the bell plaza
+# (9100, 9200), and with a follower (party slot 2 poked at frame 8000).
+ct_game_exe(test_sprites test/test_sprites.c)
+add_test(NAME sprites_leene COMMAND test_sprites ${GAME_DIR}/test/replay/leene_square.txt
+    8500 8600 8650 8700 8805 9100 9200)
+add_test(NAME sprites_follower COMMAND test_sprites ${GAME_DIR}/test/replay/leene_square.txt
+    --poke 8000:2981^82 8600 8650 8700)
+list(APPEND ct_game_tests sprites_leene sprites_follower)
 
 # port: the package scan (tools/check_dist.py) passes the engine-only
 # programs and fails the module, the static programs, and ROM pieces.
