@@ -482,6 +482,43 @@ static void dump_scene(void)
                 fprintf(f, " %d", o->piece[p]);
             fputc('\n', f);
         }
+    } else if (ok && s.mode == CT_SCENE_WORLD) {
+        /* The same records, at the world map's strides (cell = tile), and
+           the overlay: wrap, blend, size and scroll, then its tiles. */
+        fprintf(f, "map %u %u cell %u id %u gen %u\n", s.map_w, s.map_h, s.cell_px, s.map_id,
+                s.map_generation);
+        fprintf(f, "camera %d %d\nplayer %d\n", (int)s.camera_x, (int)s.camera_y,
+                s.player == 0xFF ? -1 : s.player);
+        fprintf(f, "overlay wrap %u blend %u size %u %u scroll %d %d\n", s.wrap, s.overlay_blend,
+                s.overlay_w, s.overlay_h, (int)s.overlay_x, (int)s.overlay_y);
+        for (int l = 0; l < CT_SCENE_LAYERS; l++) {
+            const ct_scene_layer *L = &s.layer[l];
+            fprintf(f, "layer %d present %u bpp %u chr %04X pal %u\n", l, L->present, L->bpp,
+                    L->chr_base, L->pal_base);
+            int w = l < 2 ? s.map_w : s.overlay_w, h = l < 2 ? s.map_h : s.overlay_h;
+            for (int y = 0; L->tiles && y < h; y++) {
+                fprintf(f, "tiles %d %d", l, y);
+                for (int x = 0; x < w; x++)
+                    fprintf(f, " %04X", L->tiles[y * CT_SCENE_WORLD_STRIDE + x]);
+                fputc('\n', f);
+            }
+        }
+        for (int y = 0; y < s.map_h; y++) {
+            fprintf(f, "cells %d", y);
+            for (int x = 0; x < s.map_w; x++) {
+                const ct_scene_cell *c = &s.cells[y * CT_SCENE_WORLD_STRIDE + x];
+                fprintf(f, " %u.%u.%u.%02X", c->cls, c->flags, c->plane, c->raw);
+            }
+            fputc('\n', f);
+        }
+        for (int k = 0; k < s.n_objects; k++) {
+            const ct_scene_object *o = &s.object[k];
+            fprintf(f, "object %d %d %d %d %d", k, (int)o->x, (int)o->y, o->z,
+                    o->facing == 0xFF ? -1 : o->facing);
+            for (int p = 0; p < o->n_pieces; p++)
+                fprintf(f, " %d", o->piece[p]);
+            fputc('\n', f);
+        }
     }
     fclose(f);
 }

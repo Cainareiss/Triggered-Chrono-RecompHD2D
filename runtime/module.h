@@ -26,8 +26,9 @@
    game patches (funcs.toml `patch`) and the players API they call
    (sched.h); 6 is the preferences API patches call (sched_pref: a module
    with the always-run patches needs it from the engine), and save
-   states record it (savestate.h). */
-#define CT_MODULE_ABI 6
+   states record it (savestate.h); 7 is the world map scene
+   (CT_SCENE_WORLD and ct_scene's overlay fields). */
+#define CT_MODULE_ABI 7
 
 /* ---- the scene: what the game is showing, for renderers (docs/SCENE.md) ----
    A module may describe its current view as a map of cells, tile layers
@@ -39,12 +40,18 @@
 #define CT_SCENE_LAYERS      3
 #define CT_SCENE_MAX_CELLS   64                        /* map side, in cells */
 #define CT_SCENE_STRIDE      (2 * CT_SCENE_MAX_CELLS)  /* tilemap row, in 8x8 tiles */
+/* CT_SCENE_WORLD: cells of 8 px (one tile each), map side at most this,
+   which is also the row stride of its cells and tilemaps. */
+#define CT_SCENE_WORLD_STRIDE 256
 #define CT_SCENE_MAX_OBJECTS 64
 #define CT_SCENE_MAX_PIECES  16
 
 enum {                       /* ct_scene.mode */
     CT_SCENE_OTHER = 0,      /* not a map view (battle, menu, world map, title...): draw it flat */
     CT_SCENE_FIELD = 1,      /* a map view, as the cells, layers and objects describe it */
+    CT_SCENE_WORLD = 2,      /* an overworld: a big map of 8 px cells, maybe wrapping, seen
+                                from above; layers 0 and 1 are its tiles, layer 2 an overlay
+                                (clouds) with its own scroll (overlay_*) */
 };
 
 enum {                       /* ct_scene_cell.cls: what the cell is to walk on */
@@ -54,10 +61,17 @@ enum {                       /* ct_scene_cell.cls: what the cell is to walk on *
     CT_CELL_WALLISH,         /* partly blocked (corners, diagonal edges) */
     CT_CELL_WATER,
     CT_CELL_STAIRS,          /* stairs and ramps between levels */
+    /* Blocked, and what stands there (CT_SCENE_WORLD; a module that can't
+       tell leaves CT_CELL_SOLID and the renderer guesses from the pixels). */
+    CT_CELL_MOUNTAIN,
+    CT_CELL_FOREST,
+    CT_CELL_SHORE,           /* the band between land and water, cliffs */
+    CT_CELL_FLAT,            /* blocked, but lies flat (fences, signs, a town's floor) */
 };
 enum {                       /* ct_scene_cell.flags */
     CT_CELL_OVERHEAD = 1 << 0,   /* some of its tiles draw over sprites (roofs, canopies) */
     CT_CELL_EVENT    = 1 << 1,   /* an exit, or stepping on it starts an event */
+    CT_CELL_COVER    = 1 << 2,   /* walkable; the walker draws partly hidden (tall grass, woods) */
 };
 typedef struct {
     uint8_t cls;             /* CT_CELL_* class */
@@ -73,7 +87,10 @@ typedef struct {
     uint16_t pal_base;       /* CGRAM index of palette 0 */
     /* (2 map_w) x (2 map_h) BG tilemap words, row stride CT_SCENE_STRIDE:
        tile 0-9, palette 10-12, priority 13 (over sprites), h flip 14,
-       v flip 15. The module's memory, valid until its next fill. */
+       v flip 15. The module's memory, valid until its next fill.
+       CT_SCENE_WORLD: map_w x map_h words (cell = tile), row stride
+       CT_SCENE_WORLD_STRIDE; the overlay (layer 2): overlay_w x
+       overlay_h, the same stride. */
     const uint16_t *tiles;
 } ct_scene_layer;
 
@@ -87,16 +104,17 @@ typedef struct {
 
 typedef struct {
     /* Filled by the module. With mode OTHER nothing else need be. */
-    uint8_t mode;            /* CT_SCENE_FIELD or CT_SCENE_OTHER */
+    uint8_t mode;            /* CT_SCENE_FIELD, CT_SCENE_WORLD or CT_SCENE_OTHER */
     uint8_t player;          /* index in object[] of the character the player moves, 0xFF none */
     uint8_t cell_px;         /* cell size in px (16: 2x2 tiles) */
     uint8_t n_objects;
-    uint16_t map_w, map_h;   /* in cells, at most CT_SCENE_MAX_CELLS */
+    uint16_t map_w, map_h;   /* in cells, at most CT_SCENE_MAX_CELLS (world: _WORLD_STRIDE) */
     uint32_t map_id;         /* the game's own id for the map */
     uint32_t map_generation; /* changes whenever the map's cells or tiles do */
     int32_t camera_x, camera_y;           /* map px at the screen's top-left */
     ct_scene_layer layer[CT_SCENE_LAYERS];   /* front to back: 0 draws over 1 */
-    const ct_scene_cell *cells;           /* map_w x map_h, row stride CT_SCENE_MAX_CELLS */
+    const ct_scene_cell *cells;           /* map_w x map_h, row stride CT_SCENE_MAX_CELLS
+                                             (world: CT_SCENE_WORLD_STRIDE) */
     ct_scene_object object[CT_SCENE_MAX_OBJECTS];
     /* Filled by the engine (ct_scene_capture): the console's state at the
        frame edge, which the module's description refers to. */
@@ -107,6 +125,12 @@ typedef struct {
     uint16_t obj_chr[2];     /* VRAM word address of OBJ tiles 0 and 256 */
     uint8_t obj_size[2];     /* small and large OBJ size, px */
     uint8_t brightness;      /* 0-15; 0 also in forced blank */
+    /* Filled by the module, CT_SCENE_WORLD only (ABI 7). */
+    uint8_t wrap;            /* the map wraps at both edges */
+    uint8_t overlay_blend;   /* layer 2 is added at this many sixteenths over the rest
+                                (8: half-add); 0: no overlay */
+    uint16_t overlay_w, overlay_h;     /* layer 2's tilemap, in tiles; it repeats */
+    int32_t overlay_x, overlay_y;      /* its scroll: overlay px at the screen's top-left */
 } ct_scene;
 
 /* Module export (optional): describe this frame's scene. Returns 0 with
