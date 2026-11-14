@@ -15,10 +15,43 @@ Frames are `ct_boot` frames (1-based) with the named replay script.
   runs slower here than on bsnes (the movie's attacks land on Roly Riders it has not
   reached yet) and no input shift brings it back (`resync: no shift gets past frame
   32729`). Earlier, the Leene Square telepod cutscene (frames 13,550-13,750) also
-  takes about 40 frames more than on bsnes. Both are emulation timing (lag frames),
-  not stops: native and interpreter agree. Not yet compared against Mesen 2 on the
-  same input (`tools/ref_compare.py`): running the downloaded Mesen binary was not
-  permitted in that session.
+  takes about 40 frames more than on bsnes. Neither is a stop: native and interpreter
+  agree. Not yet compared against Mesen 2 on the same input (`tools/ref_compare.py`):
+  running the downloaded Mesen binary was not permitted in that session.
+  What a later session measured (no fix yet):
+  - The reference is not modern bsnes. The movie's `SyncSettings.json` names BizHawk's
+    `LibsnesCore` (bsnes v0.87, compatibility profile) with `RandomizedInitialState`
+    (WRAM and ARAM filled from an LFSR, seed 0). Filling ours the same way changes
+    nothing through frame 13,800.
+  - The telepod delay is one sound load. At frame 13,665 the scene's script (`EA 18`,
+    play song $18) makes the CPU upload samples. Frames 13,673-13,683 are spent in the
+    sound program's own ARAM compaction (a 17-cycle-per-byte copy loop at ARAM $122C,
+    about 10 KB). Frames 13,684-13,713 then move about 23 KB through the 3-byte
+    handshake at $C706F9, about 260 handshakes a frame. The field doesn't advance in
+    those 49 frames. Lucca starts walking 11 frames after the load in both runs: frame
+    13,725 here, 13,685 in the video. So the reference did not pay this load there. Its
+    audio, compared at the DSP's real 32,040 Hz, cuts the old song at the menu exit
+    (frame 13,466) and has the new song in by 13,698. Here no APU port is written
+    between 13,459 and 13,513, and the old song plays until the script's volume fade
+    (`EB 30`, 13,513). Something before 13,466 left the sound state different. It is not
+    the event scripts' scanline budget at `$C05A46`: every object slice finishes by
+    line 37.
+  - Checked against bsnes v0.87 and v115 and found to agree: the cycle templates of
+    the hot field, battle and upload loops, clock by clock; memory speeds; general
+    DMA (sync, overhead, 8 per byte, re-alignment); per-line HDMA costs; the DRAM
+    refresh; V-IRQ position; the APU port semantics (a CPU write is seen by an SPC700
+    read whose sample comes after it; an SPC700 write is seen by a CPU read sampled
+    after its cycle ends). Each upload handshake costs about 1,300-1,374 master
+    clocks. About 1,180 of that is the SPC700 loop itself. A refresh inside the
+    CPU's 536-clock path makes it miss one 7-cycle poll. Reproducing v0.87's
+    auto-joypad window instead (16 x 256 clocks from line 225's first multiple of
+    256) desyncs the movie at frame 7,267, so ours fits the reference there.
+  - Roly Rider battle (`--resync` script plus the remaining inputs shifted +47): in
+    step through about 31,612. From 31,618 a target cursor sits on Crono where the
+    video's is still on Lucca, and the video's enemy attack name appears 8 frames
+    sooner. The battle isn't short of CPU time. Its main loop finishes each frame's
+    work by about line 55-75 and then waits at `$CD3E44`, so lag frames don't explain
+    it.
 
 ## Fixed
 
