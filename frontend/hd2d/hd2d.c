@@ -125,6 +125,12 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_LINEAR_MIPMAP_LINEAR     0x2703
 #define GL_TEXTURE_MAX_LEVEL        0x813D
 #define GL_MAX_TEXTURE_SIZE         0x0D33
+/* the 3D world map */
+#define GL_REPEAT                   0x2901
+#define GL_ZERO                     0
+#define GL_ONE                      1
+#define GL_SRC_ALPHA                0x0302
+#define GL_ONE_MINUS_SRC_ALPHA      0x0303
 
 #define GL_FUNCS(X)                                                                           \
     X(const GLubyte *, glGetString, (GLenum name))                                            \
@@ -199,7 +205,8 @@ typedef ptrdiff_t GLsizeiptr;
                               GLsizei w, GLsizei h, GLsizei d, GLenum fmt, GLenum type,       \
                               const void *data))                                              \
     X(void, glGenerateMipmap, (GLenum target))                                                \
-    X(void, glGetIntegerv, (GLenum pname, GLint *v))
+    X(void, glGetIntegerv, (GLenum pname, GLint *v))                                          \
+    X(void, glBlendFuncSeparate, (GLenum sc, GLenum dc, GLenum sa, GLenum da))
 
 #define X(ret, name, args) typedef ret (*PFN_##name) args; static PFN_##name p_##name;
 GL_FUNCS(X)
@@ -425,7 +432,9 @@ enum { P_EMIT, P_LIGHT, P_COC, P_DOFBLUR, P_BRIGHT, P_GAUSS, P_FINAL, P_COUNT,
           and the picture's passes again with scene3d_pic.frag for upscale.frag */
        P3_SCENE = P_COUNT, P3_SHADOW, P3_UI, P3_COC, P3_BRIGHT, P3_FINAL,
        /* its ambient occlusion and blur, and FSR 1's EASU */
-       P3_AOPREP, P3_AO, P3_AOBLUR, P3_EASU, P_ALL };
+       P3_AOPREP, P3_AO, P3_AOBLUR, P3_EASU,
+       /* the world map's surfaces and shadow map (WORLD_MAP) */
+       P3_WSCENE, P3_WSHADOW, P_ALL };
 
 typedef struct {
     GLuint tex, fbo;
@@ -461,6 +470,7 @@ static struct {
         GLuint vao[2], vbo[2], ebo[2];   /* 0: the map, 1: this frame's sprites */
         int map_ni, map_ni_floor, spr_ni;
         uint32_t map_gen;           /* scene generation the map mesh is from */
+        int map_mode;               /* and its mode (field, world) */
         uint32_t empty_hash;        /* and which BG tiles were empty then */
         int have_map;
         s3d_mesh map, spr;
@@ -479,6 +489,11 @@ static struct {
         float tilt, fov, zoom, stretch;   /* camera: degrees from straight down, vertical fov,
                                              zoom; sprites' height scale */
         int hmax;
+        /* The world map (CT_SCENE_WORLD, scene3d_world.c): the ground's
+           normals, the overlay's tilemap; its own camera; entrance marks. */
+        GLuint t_world_nrm, t_overlay;
+        float wtilt, wzoom;
+        int marks;
     } s3;
     /* port: asset packs: the atlas (array texture), its entries (two
        RGBA16UI texels each, 1024 entries a row), the per-pixel map. */
@@ -586,20 +601,34 @@ void hd2d_pack_tiles(hd2d_tile_lookup fn, void *user)
 static uint16_t pack_lut[PACK_LUT_W * PACK_LUT_H];
 static uint32_t pack_lut_gen[PACK_LUT_W * PACK_LUT_H], pack_gen;
 
+static void pack_lut_tile(uint32_t t, const ct_scene *sc)
+{
+    int pal = (int)(t >> S3D_PAL_SHIFT & 7), obj = (t & S3D_OBJ) != 0;
+    size_t i = (size_t)(pal + obj * 8) * PACK_LUT_W + ((t & S3D_ADDR_MASK) >> 3);
+    if (pack_lut_gen[i] == pack_gen)
+        return;
+    pack_lut_gen[i] = pack_gen;
+    int bpp = t & S3D_2BPP ? 2 : 4;
+    pack_lut[i] = obj ? 0 : (uint16_t)g.pack_lookup(g.pack_lookup_user, t & S3D_ADDR_MASK,
+                                                   pal * (bpp == 2 ? 4 : 16), bpp, sc->vram,
+                                                   sc->cgram);
+}
+
 static void pack_lut_add(const s3d_mesh *m, const ct_scene *sc)
 {
-    for (int k = 0; k < m->nv; k += 4) {
-        uint32_t t = m->v[k].tile;
-        int pal = (int)(t >> S3D_PAL_SHIFT & 7), obj = (t & S3D_OBJ) != 0;
-        size_t i = (size_t)(pal + obj * 8) * PACK_LUT_W + ((t & S3D_ADDR_MASK) >> 3);
-        if (pack_lut_gen[i] == pack_gen)
-            continue;
-        pack_lut_gen[i] = pack_gen;
-        int bpp = t & S3D_2BPP ? 2 : 4;
-        pack_lut[i] = obj ? 0 : (uint16_t)g.pack_lookup(g.pack_lookup_user, t & S3D_ADDR_MASK,
-                                                       pal * (bpp == 2 ? 4 : 16), bpp, sc->vram,
-                                                       sc->cgram);
-    }
+    for (int k = 0; k < m->nv; k += 4)
+        pack_lut_tile(m->v[k].tile, sc);
+    /* The world map's overlay (clouds), which the shader looks up itself. */
+    const ct_scene_layer *L = &sc->layer[2];
+    if (sc->mode == CT_SCENE_WORLD && L->present && L->tiles)
+        for (int y = 0; y < sc->overlay_h && y < 128; y++)
+            for (int x = 0; x < sc->overlay_w && x < CT_SCENE_WORLD_STRIDE; x++) {
+                uint16_t e = L->tiles[y * CT_SCENE_WORLD_STRIDE + x];
+                pack_lut_tile(((L->chr_base + (e & 0x3FFu) * (L->bpp == 2 ? 8u : 16u)) &
+                               S3D_ADDR_MASK) | (uint32_t)((e >> 10) & 7) << S3D_PAL_SHIFT |
+                                  (L->bpp == 2 ? S3D_2BPP : 0),
+                              sc);
+            }
 }
 
 static GLuint make_tex(int w, int h, GLint ifmt, GLenum fmt, GLenum type, GLint filter);
@@ -624,6 +653,23 @@ void hd2d_camera(float *tilt, float *zoom)
 {
     *tilt = user_tilt;
     *zoom = user_zoom;
+}
+
+/* port: the world map's camera (hd2d_set_world_camera), as above. */
+static float user_wtilt = 40.0f, user_wzoom = 0.75f;
+
+void hd2d_set_world_camera(float tilt, float zoom)
+{
+    user_wtilt = tilt < 0 ? 0 : tilt > 80 ? 80 : tilt;
+    user_wzoom = zoom < 0.25f ? 0.25f : zoom > 4 ? 4 : zoom;
+    g.s3.wtilt = user_wtilt;
+    g.s3.wzoom = user_wzoom;
+}
+
+void hd2d_world_camera(float *tilt, float *zoom)
+{
+    *tilt = user_wtilt;
+    *zoom = user_wzoom;
 }
 
 void hd2d_set_camera_offset(float dtilt, float dyaw)
@@ -1300,7 +1346,11 @@ static void s3d_params_init(void)
     g.s3.hmax = 3;       /* wall height cap, cells */
     g.s3.stretch = -1.0f;   /* sprites: < 0 picks the scale that keeps their proportions */
     g.s3.ao_radius = S3D_AO_RADIUS;
-    /* CT_HD2D_3D=tilt=40,fov=30,zoom=0.75,hmax=3,stretch=1.2,aoradius=12 overrides them. */
+    g.s3.wtilt = user_wtilt;   /* the world map's camera (port: hd2d_set_world_camera) */
+    g.s3.wzoom = user_wzoom;
+    g.s3.marks = 0;      /* world map entrance marks */
+    /* CT_HD2D_3D=tilt=40,fov=30,zoom=0.75,hmax=3,stretch=1.2,aoradius=12 overrides them,
+       and wtilt=,wzoom=,marks=1 for the world map. */
     const char *e = getenv("CT_HD2D_3D");
     for (const char *p = e; p && *p;) {
         char key[16];
@@ -1313,6 +1363,9 @@ static void s3d_params_init(void)
             else if (!strcmp(key, "hmax")) g.s3.hmax = (int)v;
             else if (!strcmp(key, "stretch")) g.s3.stretch = v < 0.5f ? 0.5f : v > 2 ? 2 : v;
             else if (!strcmp(key, "aoradius")) g.s3.ao_radius = v < 2 ? 2 : v > 48 ? 48 : v;
+            else if (!strcmp(key, "wtilt")) g.s3.wtilt = v < 0 ? 0 : v > 80 ? 80 : v;
+            else if (!strcmp(key, "wzoom")) g.s3.wzoom = v < 0.25f ? 0.25f : v > 4 ? 4 : v;
+            else if (!strcmp(key, "marks")) g.s3.marks = v != 0;
             p += n;
         } else {
             p++;
@@ -1347,10 +1400,17 @@ static int s3d_init(void)
         {P3_AO, NULL, NULL, hd2d_src_ssao_frag, "ssao.frag"},
         {P3_AOBLUR, NULL, NULL, hd2d_src_aoblur_frag, "aoblur.frag"},
         {P3_EASU, NULL, hd2d_src_ffx_fsr1_cas_glsl, hd2d_src_fsr_easu_frag, "fsr_easu.frag"},
+        {P3_WSCENE, NULL, "#define WORLD_MAP\n", hd2d_src_scene3d_frag, "scene3d.frag (world)"},
+        {P3_WSHADOW, NULL, "#define WORLD_MAP\n#define SHADOW_PASS\n", hd2d_src_scene3d_frag,
+         "scene3d.frag (world shadow)"},
     };
+    /* The world map's vertex shader: scene3d.vert with WORLD_MAP. */
+    static char wvert[8192];
+    snprintf(wvert, sizeof wvert, "#define WORLD_MAP\n%s", hd2d_src_scene3d_vert);
     for (size_t k = 0; k < sizeof ps / sizeof *ps; k++) {
-        g.prog[ps[k].prog] = link_vs(ps[k].vert ? ps[k].vert : hd2d_src_fullscreen_vert,
-                                     ps[k].lib, ps[k].frag, ps[k].name);
+        const char *vert = ps[k].prog == P3_WSCENE || ps[k].prog == P3_WSHADOW ? wvert : ps[k].vert;
+        g.prog[ps[k].prog] = link_vs(vert ? vert : hd2d_src_fullscreen_vert, ps[k].lib,
+                                     ps[k].frag, ps[k].name);
         if (!g.prog[ps[k].prog]) {
             free(pic);
             return -1;
@@ -1359,6 +1419,16 @@ static int s3d_init(void)
     free(pic);
     g.s3.t_vram = make_tex(256, 128, GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT, GL_NEAREST);
     g.s3.t_cgram = make_tex(256, 1, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_NEAREST);
+    /* The world map's (units 6 and 7, bound for every 3D draw). */
+    g.s3.t_world_nrm = make_tex(1, 1, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_LINEAR);
+    p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    g.s3.t_overlay = make_tex(CT_SCENE_WORLD_STRIDE, 128, GL_R16UI, GL_RED_INTEGER,
+                              GL_UNSIGNED_SHORT, GL_NEAREST);
+    p_glUseProgram(g.prog[P3_WSCENE]);
+    p_glUniform1i(U(P3_WSCENE, "uWorldNrm"), 6);
+    p_glUniform1i(U(P3_WSCENE, "uOverlayMap"), 7);
+    p_glUseProgram(0);
     p_glGenVertexArrays(2, g.s3.vao);
     p_glGenBuffers(2, g.s3.vbo);
     p_glGenBuffers(2, g.s3.ebo);
@@ -1414,8 +1484,8 @@ static void s3d_free_targets(void)
 static void s3d_shutdown(void)
 {
     s3d_free_targets();
-    GLuint t[3] = {g.s3.t_vram, g.s3.t_cgram, g.s3.t_shadow};
-    p_glDeleteTextures(3, t);
+    GLuint t[5] = {g.s3.t_vram, g.s3.t_cgram, g.s3.t_shadow, g.s3.t_world_nrm, g.s3.t_overlay};
+    p_glDeleteTextures(5, t);
     if (g.s3.fbo_shadow)
         p_glDeleteFramebuffers(1, &g.s3.fbo_shadow);
     p_glDeleteBuffers(2, g.s3.vbo);
@@ -1579,21 +1649,37 @@ static void s3d_update(const ct_scene *sc)
     p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, pal);
 
     uint32_t eh = s3d_empty_hash(sc);
-    if (!g.s3.have_map || sc->map_generation != g.s3.map_gen || eh != g.s3.empty_hash) {
-        if (s3d_build_map(sc, &p, &g.s3.map) < 0)
+    if (!g.s3.have_map || sc->map_generation != g.s3.map_gen || eh != g.s3.empty_hash ||
+        sc->mode != g.s3.map_mode) {
+        if ((sc->mode == CT_SCENE_WORLD ? s3d_build_world(sc, &g.s3.map)
+                                        : s3d_build_map(sc, &p, &g.s3.map)) < 0)
             fprintf(stderr, "hd2d: out of memory for the 3D map\n");
+        if (sc->mode == CT_SCENE_WORLD) {   /* the ground's normals */
+            int nw, nh;
+            const uint8_t *n = s3d_world_normals(&nw, &nh);
+            bind_tex(0, g.s3.t_world_nrm);
+            p_glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, nw, nh, 0, GL_RGBA, GL_UNSIGNED_BYTE, n);
+        }
         p_glBindVertexArray(g.s3.vao[0]);
         s3d_upload(g.s3.vbo[0], g.s3.ebo[0], &g.s3.map, GL_STATIC_DRAW);
         g.s3.map_ni = g.s3.map.ni;
         g.s3.map_ni_floor = g.s3.map.ni_floor;
         g.s3.map_gen = sc->map_generation;
+        g.s3.map_mode = sc->mode;
         g.s3.empty_hash = eh;
         g.s3.have_map = 1;
     }
-    s3d_build_sprites(sc, &p, &g.s3.spr);
-    p_glBindVertexArray(g.s3.vao[1]);
-    s3d_upload(g.s3.vbo[1], g.s3.ebo[1], &g.s3.spr, GL_STREAM_DRAW);
-    g.s3.spr_ni = g.s3.spr.ni;
+    if (sc->mode == CT_SCENE_WORLD) {   /* the overlay's tilemap; sprites wait for the camera */
+        bind_tex(0, g.s3.t_overlay);
+        if (sc->layer[2].present && sc->layer[2].tiles && sc->overlay_h <= 128)
+            p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, CT_SCENE_WORLD_STRIDE, sc->overlay_h,
+                              GL_RED_INTEGER, GL_UNSIGNED_SHORT, sc->layer[2].tiles);
+    } else {
+        s3d_build_sprites(sc, &p, &g.s3.spr);
+        p_glBindVertexArray(g.s3.vao[1]);
+        s3d_upload(g.s3.vbo[1], g.s3.ebo[1], &g.s3.spr, GL_STREAM_DRAW);
+        g.s3.spr_ni = g.s3.spr.ni;
+    }
     /* port: asset packs: which of the map's tiles have replacements */
     g.pack3d_on = g.pack_entries > 0 && g.pack_lookup != NULL;
     if (g.pack3d_on) {
@@ -1606,18 +1692,108 @@ static void s3d_update(const ct_scene *sc)
     p_glBindVertexArray(g.vao);
 }
 
-static void s3d_draw(int raised_only)
+/* The map's copies to draw, as offsets (px): one, or for a wrapping world
+   map those of its neighbours the view reaches (s3d_world_view). */
+static int n_copies = 1;
+static float copies[9][2];
+static int cloud_first, cloud_ni;   /* the overlay plane, in the sprite mesh */
+
+static void s3d_draw(int raised_only, int prog)
 {
     p_glBindVertexArray(g.s3.vao[0]);
     int first = raised_only ? g.s3.map_ni_floor : 0;
-    if (g.s3.map_ni > first)
-        p_glDrawElements(GL_TRIANGLES, g.s3.map_ni - first, GL_UNSIGNED_INT,
-                         (const void *)(sizeof(uint32_t) * (size_t)first));
+    int world = prog == P3_WSCENE || prog == P3_WSHADOW;
+    for (int k = 0; k < (world ? n_copies : 1); k++) {
+        if (world)
+            p_glUniform3f(U(prog, "uOffset"), copies[k][0], 0.0f, copies[k][1]);
+        if (g.s3.map_ni > first)
+            p_glDrawElements(GL_TRIANGLES, g.s3.map_ni - first, GL_UNSIGNED_INT,
+                             (const void *)(sizeof(uint32_t) * (size_t)first));
+    }
+    if (world)
+        p_glUniform3f(U(prog, "uOffset"), 0.0f, 0.0f, 0.0f);
     p_glBindVertexArray(g.s3.vao[1]);
     if (g.s3.spr_ni)
         p_glDrawElements(GL_TRIANGLES, g.s3.spr_ni, GL_UNSIGNED_INT, NULL);
     p_glBindVertexArray(g.vao);
 }
+
+/* The world map's camera-dependent part: the sprites (snapped to the
+   target's pixels, so they need the camera), the overlay plane, and which
+   copies of the wrapping map the view reaches. */
+#define S3D_CLOUD_Y 110.0f
+static void s3d_world_view(const ct_scene *sc, const float *eye, const float *at,
+                           const float *up, float fovy, float dist, int pw, int ph)
+{
+    s3d_view v = {.focal = 0.5f * (float)ph / tanf(fovy * 0.5f), .near = dist * 0.15f,
+                  .w = pw, .h = ph};
+    for (int k = 0; k < 3; k++) {
+        v.eye[k] = eye[k];
+        v.at[k] = at[k];
+        v.fwd[k] = at[k] - eye[k];
+    }
+    v3_norm(v.fwd);   /* as m4_look */
+    float *f = v.fwd, *r = v.right, *u = v.up;
+    r[0] = f[1] * up[2] - f[2] * up[1];
+    r[1] = f[2] * up[0] - f[0] * up[2];
+    r[2] = f[0] * up[1] - f[1] * up[0];
+    v3_norm(r);
+    u[0] = r[1] * f[2] - r[2] * f[1];
+    u[1] = r[2] * f[0] - r[0] * f[2];
+    u[2] = r[0] * f[1] - r[1] * f[0];
+
+    /* What the view sees of the ground (y = -10), a margin for the
+       mountains, and the far plane where a ray misses it. */
+    float th = tanf(fovy * 0.5f), tw = th * (float)pw / (float)ph, far_ = dist * 5.0f;
+    float x0 = eye[0], x1 = eye[0], z0 = eye[2], z1 = eye[2];
+    for (int k = 0; k < 4; k++) {
+        float sx = k & 1 ? 1.0f : -1.0f, sy = k & 2 ? 1.0f : -1.0f, d[3];
+        for (int j = 0; j < 3; j++)
+            d[j] = f[j] + r[j] * sx * tw + u[j] * sy * th;
+        for (int pl = 0; pl < 2; pl++) {   /* the ground, and the overlay plane above it */
+            float y = pl ? S3D_CLOUD_Y : -10.0f;
+            float t = d[1] < -1e-3f ? (eye[1] - y) / -d[1] : far_;
+            t = t > far_ ? far_ : t;
+            float px = eye[0] + d[0] * t, pz = eye[2] + d[2] * t;
+            x0 = px < x0 ? px : x0;
+            x1 = px > x1 ? px : x1;
+            z0 = pz < z0 ? pz : z0;
+            z1 = pz > z1 ? pz : z1;
+        }
+    }
+    x0 -= 64;
+    x1 += 64;
+    z0 -= 64;
+    z1 += 64;
+    float mw = (float)sc->map_w * sc->cell_px, mh = (float)sc->map_h * sc->cell_px;
+    n_copies = 0;
+    for (int j = -1; j <= 1; j++)
+        for (int i = -1; i <= 1; i++) {
+            if (!sc->wrap && (i || j))
+                continue;
+            float ox = (float)i * mw, oz = (float)j * mh;
+            if (ox + mw < x0 || ox > x1 || oz + mh < z0 || oz > z1)
+                continue;
+            copies[n_copies][0] = ox;
+            copies[n_copies][1] = oz;
+            n_copies++;
+        }
+
+    s3d_build_world_sprites(sc, &v, g.s3.marks, &g.s3.spr);
+    g.s3.spr_ni = g.s3.spr.ni;
+    cloud_first = g.s3.spr.ni;
+    cloud_ni = 0;
+    if (sc->overlay_blend && sc->layer[2].present && sc->overlay_w && sc->overlay_h) {
+        float c[4][3] = {{x0, S3D_CLOUD_Y, z0}, {x1, S3D_CLOUD_Y, z0}, {x0, S3D_CLOUD_Y, z1},
+                         {x1, S3D_CLOUD_Y, z1}};
+        if (!s3d_emit_corners(&g.s3.spr, c, 0, 0, 0))
+            cloud_ni = 6;
+    }
+    p_glBindVertexArray(g.s3.vao[1]);
+    s3d_upload(g.s3.vbo[1], g.s3.ebo[1], &g.s3.spr, GL_STREAM_DRAW);
+    p_glBindVertexArray(g.vao);
+}
+
 
 /* ssao.frag's kernel of n samples (at most 16), x y z each, in units of
    its radius: a golden-angle spiral over the unit disc lifted to the
@@ -1662,18 +1838,26 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
 
     /* The camera: looking at the middle of the console's view, tilted
        back from straight down, far enough off to show about its width. */
-    float tilt_deg = g.s3.tilt + g.s3.dtilt;   /* port: + the gyro's offset */
+    /* The world map has a camera of its own (a higher one, if the user
+       likes), centred on the player and never stopped by edges (it wraps). */
+    int world = sc->mode == CT_SCENE_WORLD;
+    float zoom = world ? g.s3.wzoom : g.s3.zoom;
+    float tilt_deg = (world ? g.s3.wtilt : g.s3.tilt) + g.s3.dtilt;   /* port: + the gyro's offset */
     tilt_deg = tilt_deg < 0 ? 0 : tilt_deg > 80 ? 80 : tilt_deg;
     float tilt = tilt_deg * 3.14159265f / 180.0f, fovy = g.s3.fov * 3.14159265f / 180.0f;
     float aspect = (float)pw / (float)ph;   /* the picture's, at any render scale */
-    float dist = 128.0f / g.s3.zoom / (tanf(fovy * 0.5f) * aspect);
+    float dist = 128.0f / zoom / (tanf(fovy * 0.5f) * aspect);
     float at[3] = {(float)sc->camera_x + 128.0f, 0.0f, (float)sc->camera_y + 120.0f};
+    if (world && sc->player < sc->n_objects) {
+        at[0] = (float)sc->object[sc->player].x;
+        at[2] = (float)sc->object[sc->player].y + 8.0f;
+    }
     /* The console's camera stops at the map's edges. This one sees
        further at the top of the picture (and wider there), so it stops
        sooner: the floor at the picture's edges stays on the map, give or
        take a margin the walls along an edge cover; a map smaller than the
        view is centered. */
-    {
+    if (!world) {
         int x0, z0, x1, z1;
         s3d_map_bounds(&x0, &z0, &x1, &z1);
         const float margin = 24.0f;
@@ -1707,12 +1891,19 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     m4_look(view, eye, at, up);
     m4_persp(proj, fovy, aspect, dist * 0.15f, dist * 5.0f, 1);
     m4_mul(mvp, proj, view);
+    if (world) {
+        s3d_world_view(sc, eye, at, up, fovy, dist, rw, rh);   /* snapped to the render target */
+    } else {
+        n_copies = 1;
+        copies[0][0] = copies[0][1] = 0.0f;
+        cloud_ni = 0;
+    }
 
     /* The key light, low from the south-west: lights the walls facing the
        camera, and casts shadows back and to the right. */
     float L[3] = {-0.5f, 0.75f, 0.45f};
     v3_norm(L);
-    float R = 300.0f / g.s3.zoom, far_ = 1200.0f;
+    float R = 300.0f / zoom, far_ = 1200.0f;
     float leye[3] = {at[0] + L[0] * far_ * 0.5f, at[1] + L[1] * far_ * 0.5f,
                      at[2] + L[2] * far_ * 0.5f - 60.0f};
     float lat[3] = {at[0], 0.0f, at[2] - 60.0f};
@@ -1723,21 +1914,22 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     m4_mul(lmvp, lproj, lview);
 
     p_glEnable(GL_DEPTH_TEST);
-    p_glDepthFunc(GL_LESS);
+    p_glDepthFunc(world ? GL_LEQUAL : GL_LESS);   /* the world map's front layer: on the same corners */
     p_glDepthMask(1);
 
     /* Shadow map: what stands up (walls, roofs, sprites). */
-    p_glUseProgram(g.prog[P3_SHADOW]);
-    p_glUniformMatrix4fv(U(P3_SHADOW, "uMVP"), 1, GL_FALSE, lmvp);
-    p_glUniformMatrix4fv(U(P3_SHADOW, "uLightMVP"), 1, GL_FALSE, lmvp);
-    p_glUniform1i(U(P3_SHADOW, "uVram"), 0);
+    int PS = world ? P3_WSHADOW : P3_SHADOW;
+    p_glUseProgram(g.prog[PS]);
+    p_glUniformMatrix4fv(U(PS, "uMVP"), 1, GL_FALSE, lmvp);
+    p_glUniformMatrix4fv(U(PS, "uLightMVP"), 1, GL_FALSE, lmvp);
+    p_glUniform1i(U(PS, "uVram"), 0);
     bind_tex(0, g.s3.t_vram);
     p_glBindFramebuffer(GL_FRAMEBUFFER, g.s3.fbo_shadow);
     p_glViewport(0, 0, S3D_SHADOW_SIZE, S3D_SHADOW_SIZE);
     p_glClear(GL_DEPTH_BUFFER_BIT);
     p_glEnable(GL_POLYGON_OFFSET_FILL);
     p_glPolygonOffset(1.5f, 2.0f);
-    s3d_draw(1);
+    s3d_draw(1, PS);
     p_glDisable(GL_POLYGON_OFFSET_FILL);
     prof_mark("s3d_shadow");
 
@@ -1750,7 +1942,7 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     p_glClearColor(void_[0] * bright, void_[1] * bright, void_[2] * bright, 1.0f);
     p_glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     p_glClearColor(0, 0, 0, 0);
-    int P = P3_SCENE;
+    int P = world ? P3_WSCENE : P3_SCENE;
     p_glUseProgram(g.prog[P]);
     p_glUniformMatrix4fv(U(P, "uMVP"), 1, GL_FALSE, mvp);
     p_glUniformMatrix4fv(U(P, "uLightMVP"), 1, GL_FALSE, lmvp);
@@ -1780,7 +1972,36 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     p_glUniform4f(U(P, "uDepth"), dist, dist * 1.6f, bright, 0.55f * s->shadow * a);
     p_glUniform4f(U(P, "uMisc"), s->point_light * a * (0.25f + 0.75f * dark_amt), dist * 1.25f,
                   dist * 3.5f, 1.0f / S3D_SHADOW_SIZE);
-    s3d_draw(0);
+    if (world) {   /* the world map's (scene3d_world.c) */
+        bind_tex(6, g.s3.t_world_nrm);
+        bind_tex(7, g.s3.t_overlay);
+        p_glUniform1i(U(P, "uPassKind"), 0);
+        p_glUniform1f(U(P, "uTime"), (float)(g.frame % 36000u) / 60.0f);
+        p_glUniform1i(U(P, "uOverlayChr"), sc->layer[2].chr_base);
+        p_glUniform4f(U(P, "uOverlay"), (float)sc->overlay_x, (float)sc->overlay_y,
+                      8.0f * sc->overlay_w, 8.0f * sc->overlay_h);
+        p_glUniform4f(U(P, "uCloud"), S3D_CLOUD_Y, sc->overlay_blend / 16.0f * 0.8f,
+                      cloud_ni ? 0.3f * a : 0.0f, 0.0f);
+        /* where the line of sight to the point looked at crosses the
+           overlay: it thins out there, so it never hides the player */
+        float t = eye[1] > S3D_CLOUD_Y ? (eye[1] - S3D_CLOUD_Y) / (eye[1] - at[1]) : 0.0f;
+        p_glUniform2f(U(P, "uCloudClear"), eye[0] + (at[0] - eye[0]) * t,
+                      eye[2] + (at[2] - eye[2]) * t);
+    }
+    s3d_draw(0, P);
+    if (world && cloud_ni) {   /* the overlay plane, blended over (its alpha: opacity) */
+        p_glDepthMask(0);
+        p_glEnable(GL_BLEND);
+        p_glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+        p_glUniform1i(U(P, "uPassKind"), 1);
+        p_glBindVertexArray(g.s3.vao[1]);
+        p_glDrawElements(GL_TRIANGLES, cloud_ni, GL_UNSIGNED_INT,
+                         (const void *)(sizeof(uint32_t) * (size_t)cloud_first));
+        p_glBindVertexArray(g.vao);
+        p_glUniform1i(U(P, "uPassKind"), 0);
+        p_glDisable(GL_BLEND);
+        p_glDepthMask(1);
+    }
     p_glDisable(GL_DEPTH_TEST);
     prof_mark("s3d_scene");
 
@@ -1853,7 +2074,7 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     p_glUseProgram(g.prog[P3_UI]);
     p_glUniform1i(U(P3_UI, "uColor"), 0);
     p_glUniform1i(U(P3_UI, "uLayer"), 1);
-    p_glUniform1i(U(P3_UI, "uUiZ"), ui_z);
+    p_glUniform1i(U(P3_UI, "uUiZ"), world ? -1 : ui_z);   /* the world map's BG3 is clouds */
     p_glUniform1i(U(P3_UI, "uEncode"), g.s3.scaled);
     bind_tex(0, g.t_color);
     bind_tex(1, g.t_layer);
@@ -1955,7 +2176,8 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
        map view; else the 2D path; both while crossfading. Fading out with
        no scene left (a battle starting), the last 3D frame stays. */
     const ct_scene *sc = g.s3.scene;
-    int want3 = s->scene3d && g.s3.ok && sc && sc->mode == CT_SCENE_FIELD && sc->vram &&
+    int want3 = s->scene3d && g.s3.ok && sc &&
+                (sc->mode == CT_SCENE_FIELD || sc->mode == CT_SCENE_WORLD) && sc->vram &&
                 !(st && st->mode == 7);
     if (!s->scene3d || (!want3 && (g.s3.pic_w != pw || g.s3.pic_h != ph)))
         g.s3.amt = 0.0f;

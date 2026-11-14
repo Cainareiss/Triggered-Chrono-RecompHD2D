@@ -1080,6 +1080,34 @@ static void set_cam_zoom(void *u, int v)
     hd2d_camera(&t, &z);
     hd2d_set_camera(t, 0.75f * (float)v / 100.0f);
 }
+static int get_wcam_tilt(void *u)
+{
+    (void)u;
+    float t, z;
+    hd2d_world_camera(&t, &z);
+    return (int)(t + 0.5f);
+}
+static void set_wcam_tilt(void *u, int v)
+{
+    (void)u;
+    float t, z;
+    hd2d_world_camera(&t, &z);
+    hd2d_set_world_camera((float)v, z);
+}
+static int get_wcam_zoom(void *u)   /* percent of the default zoom (0.75) */
+{
+    (void)u;
+    float t, z;
+    hd2d_world_camera(&t, &z);
+    return (int)(z / 0.75f * 100.0f + 0.5f);
+}
+static void set_wcam_zoom(void *u, int v)
+{
+    (void)u;
+    float t, z;
+    hd2d_world_camera(&t, &z);
+    hd2d_set_world_camera(t, 0.75f * (float)v / 100.0f);
+}
 static int on_3d(void *u)
 {
     (void)u;
@@ -1489,6 +1517,18 @@ static void register_settings(void)
                                  .enabled = on_3d,
                                  .help = "How close the 3D diorama's camera is (100%: about the "
                                          "console's view)."});
+    settings_register(&(setting){.key = "worldmap_tilt", .label = "World map tilt",
+                                 .category = "Look", .type = SETTING_INT, .min = 10, .max = 70,
+                                 .step = 5, .format = "%d\xc2\xb0", .get = get_wcam_tilt,
+                                 .set = set_wcam_tilt, .enabled = on_3d,
+                                 .help = "The same for the world map: lower looks down from "
+                                         "higher up (40\xc2\xb0)."});
+    settings_register(&(setting){.key = "worldmap_zoom", .label = "World map zoom",
+                                 .category = "Look", .type = SETTING_INT, .min = 40, .max = 160,
+                                 .step = 10, .format = "%d%%", .get = get_wcam_zoom,
+                                 .set = set_wcam_zoom, .enabled = on_3d,
+                                 .help = "How close the world map's camera is (100%: about the "
+                                         "console's view; less shows more of the world)."});
     settings_register(&(setting){
         .key = "render_scale", .label = "3D render scale", .category = "Look",
         .type = SETTING_ENUM, .options = rscale_labels, .values = rscale_values, .count = 7,

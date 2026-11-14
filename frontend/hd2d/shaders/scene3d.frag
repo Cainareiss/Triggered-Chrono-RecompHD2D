@@ -15,6 +15,14 @@
 // depth in alpha (0.5 at the focus), and the material (as light.frag's,
 // with the surface's normal in alpha for the ambient occlusion).
 //
+// With WORLD_MAP defined (a program of its own, so the field's stays as
+// it was), the world map's (scene3d_world.c): ground whose normal comes
+// from its height map (S3D_N_TERRAIN), water with a shimmer
+// (S3D_N_WATER), entrance marks (S3D_N_WATER on a sprite), sprites flat
+// over the picture (S3D_OBJ | S3D_OVERHEAD: captions), and the overlay
+// layer (clouds), drawn as a plane (uPassKind 1) and as the soft shadows
+// it casts.
+//
 // With SHADOW_PASS defined: only the cut-out test, for the shadow map.
 #ifdef GL_ES
 precision highp sampler2DShadow;
@@ -101,10 +109,45 @@ vec4 tileTexel(uint tile, vec2 uv)
 #ifdef SHADOW_PASS
 void main()
 {
+#ifdef WORLD_MAP
+    uint ni = (vTile >> 20u) & 7u;
+    bool flat_ = (vTile & (1u << 19)) != 0u && (vTile & (1u << 25)) != 0u;
+    if (ni == 7u || flat_)
+        discard;
+#endif
     if (tileTexel(vTile, vUV).a < 0.5)
         discard;
 }
 #else
+#ifdef WORLD_MAP
+// The world map's: normals per tile corner (rgb), wrapping.
+uniform sampler2D uWorldNrm;
+// The overlay layer (BG tilemap words, its tiles at uOverlayChr, 2 bpp):
+// scroll (px), size (px); uCloud: height, opacity, shadow amount (0: none).
+uniform usampler2D uOverlayMap;
+uniform int uOverlayChr;
+uniform vec4 uOverlay;
+uniform vec4 uCloud;
+uniform vec2 uCloudClear;        // where it thins out (over the player)
+uniform float uTime;             // seconds
+uniform int uPassKind;           // 0: surfaces, 1: the overlay plane
+
+vec4 overlayTexel(vec2 p)
+{
+    vec2 q = mod(p + uOverlay.xy, uOverlay.zw);
+    ivec2 t = ivec2(floor(q / 8.0));
+    uint e = texelFetch(uOverlayMap, t, 0).r;
+    uint tile = ((uint(uOverlayChr) + (e & 0x3FFu) * 8u) & 0x7FFFu) | ((e >> 10u) & 7u) << 15u |
+                (1u << 18u);
+    vec2 uv = q - vec2(t) * 8.0;
+    if ((e & 0x4000u) != 0u)
+        uv.x = 8.0 - uv.x;
+    if ((e & 0x8000u) != 0u)
+        uv.y = 8.0 - uv.y;
+    return tileTexel(tile, uv);
+}
+#endif
+
 uniform sampler2DShadow uShadowMap;
 uniform sampler2D uLightMap;     // point lights, in the console's screen space
 uniform vec3 uLightDir;          // towards the key light
@@ -138,6 +181,28 @@ float shadowAt(vec3 n, vec3 L)
 
 void main()
 {
+#ifdef WORLD_MAP
+    if (uPassKind == 1) {   // the overlay plane: blended over (alpha: its opacity)
+        vec4 c = overlayTexel(vWorld.xz);
+        if (c.a < 0.5)
+            discard;
+        float d = length(vWorld - uEye);
+        vec3 l = mix(c.rgb, uFog.rgb, uFog.a * 0.5 * smoothstep(uMisc.y, uMisc.z, d));
+        float a = uCloud.y * mix(0.25, 1.0, smoothstep(24.0, 72.0, distance(vWorld.xz, uCloudClear)));
+        oLit = vec4(l * uDepth.z, a);
+        oMat = vec4(0.0, 0.0, 2.0 / 8.0, a);
+        return;
+    }
+    if (((vTile >> 20u) & 7u) == 7u && (vTile & (1u << 19)) != 0u) {   // an entrance mark
+        vec2 d = abs(vUV - 4.0);
+        float r = d.x + d.y, pulse = 0.5 + 0.5 * sin(uTime * 2.5);
+        if (r > 2.5 + 0.5 * pulse || r < 1.0 + 0.5 * pulse)
+            discard;
+        oLit = vec4(vec3(1.0, 0.86, 0.5) * (0.85 + 0.3 * pulse) * uDepth.z, 0.5);
+        oMat = vec4(0.0, 0.0, 2.0 / 8.0, 0.0);
+        return;
+    }
+#endif
     vec4 tex = tileTexel(vTile, vUV);
     if (tex.a < 0.5)
         discard;
@@ -146,16 +211,51 @@ void main()
 
     int ni = int((vTile >> 20u) & 7u);
     vec3 n = NORMALS[min(ni, 5)];
+#ifdef WORLD_MAP
+    if (obj && (vTile & (1u << 25)) != 0u) {   // flat over the picture, as the UI
+        oLit = vec4(col * uDepth.z, 0.5);
+        oMat = vec4(1.0, 0.0, 5.0 / 8.0, 0.0);
+        return;
+    }
+    if (ni == 6)
+        n = normalize(texture(uWorldNrm, (vWorld.xz / 8.0 + 0.5) / vec2(textureSize(uWorldNrm, 0)))
+                          .rgb * 2.0 - 1.0);
+    else if (ni == 7)
+        n = vec3(0.0, 1.0, 0.0);
+#endif
     vec3 L = normalize(uLightDir);
     float vis = shadowAt(n, L);
     float shade = 1.0 - uDepth.w * (1.0 - vis);
+#ifdef WORLD_MAP
+    if (uCloud.z > 0.0) {   // the clouds' shadows, soft: four taps where the sun ray meets them
+        vec2 q = vWorld.xz + L.xz / max(L.y, 0.2) * (uCloud.x - vWorld.y);
+        float c = overlayTexel(q + vec2(-4.0, -3.0)).a + overlayTexel(q + vec2(4.0, -3.0)).a +
+                  overlayTexel(q + vec2(-3.0, 4.0)).a + overlayTexel(q + vec2(3.0, 4.0)).a;
+        shade *= 1.0 - uCloud.z * 0.25 * c;
+    }
+    float amb = ni == 0 || ni >= 6 ? 1.0 : 0.85;   // the ground keeps its colors where lit
+#else
+    float amb = ni == 0 ? 1.0 : 0.85;
+#endif
     // Relative to the sunlit floor, which keeps its colors.
     vec3 flat_ = uAmbient + uKey * max(L.y, 0.05);
-    vec3 light = uAmbient * (ni == 0 ? 1.0 : 0.85) + uKey * max(dot(n, L), 0.0) * shade;
+    vec3 light = uAmbient * amb + uKey * max(dot(n, L), 0.0) * shade;
     vec3 rel = light / flat_;
     if (obj)
         rel = mix(vec3(shade), rel, 0.4);   // sprites: mostly their own shading
     vec3 lit = col * rel;
+#ifdef WORLD_MAP
+    if (ni == 7) {   // water: a slow swell, and glints that twinkle, on the console's pixels
+        vec2 p = floor(vWorld.xz);
+        float w = sin(p.x * 0.05 + uTime * 0.9 + 1.5 * sin(p.y * 0.04 + uTime * 0.3)) *
+                  sin(p.y * 0.06 - uTime * 0.7);
+        lit *= 1.0 + 0.035 * w;
+        vec2 cell = floor(p / 3.0);
+        float h = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
+        float tw = pow(max(sin(uTime * 1.7 + h * 40.0), 0.0), 24.0) * step(0.93, fract(h * 7.31));
+        lit += vec3(0.22, 0.26, 0.3) * tw * shade * (0.6 + 0.4 * w);
+    }
+#endif
 
     // Point lights where the console drew this pixel (screen row = z - height).
     vec2 sp = vec2(vWorld.x - uCam.x, vWorld.z - vWorld.y - uCam.y) / vec2(256.0, 224.0);
@@ -172,6 +272,15 @@ void main()
     oLit = vec4(lit, depth);
     // a: the normal for the ambient occlusion (ssao.frag), index + 1 over 8;
     // 0 for sprites, which get none.
+#ifdef WORLD_MAP
+    // The ground's normal as the nearest of ssao.frag's (up unless steep);
+    // water gets none (it would darken under every shore).
+    int ao = ni;
+    if (ni == 6)
+        ao = n.y > 0.7 ? 0 : abs(n.x) > abs(n.z) ? (n.x > 0.0 ? 2 : 3) : (n.z > 0.0 ? 1 : 4);
+    oMat = vec4(0.0, obj ? 1.0 : 0.0, cls / 8.0, obj || ni == 7 ? 0.0 : float(min(ao, 5) + 1) / 8.0);
+#else
     oMat = vec4(0.0, obj ? 1.0 : 0.0, cls / 8.0, obj ? 0.0 : float(min(ni, 5) + 1) / 8.0);
+#endif
 }
 #endif
