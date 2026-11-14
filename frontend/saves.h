@@ -45,4 +45,18 @@ void saves_dump_at_exit(const char *path);
    game's save would. Returns 0, or -1 for a bad spec. */
 int saves_poke(const char *spec);
 
+/* port: after a save state's load (frontend/qol.h): the cartridge's save
+   RAM is the one on disk, not the state's, so a state never rolls back an
+   in-game save. No-op with saving off. */
+void saves_after_state_load(void);
+
+/* port: --import-srm / --export-srm: a raw CT_SRAM_SIZE-byte (8 KiB) save
+   RAM file, the format SNES emulators share. Import checks the size, keeps
+   the save it replaces as FILE.before-import-YYYYmmdd-HHMMSS, and writes
+   the new one atomically (as above, with FILE.bak). Export copies the save
+   file atomically to `to`. file/game_id find the save as saves_open does.
+   0 on success, 1 on failure (printed). */
+int saves_import(const char *from, const char *file, const char *game_id);
+int saves_export(const char *to, const char *file, const char *game_id);
+
 #endif

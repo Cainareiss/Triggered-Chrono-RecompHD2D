@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * A 5x7 bitmap font for the renderer's on-screen messages: A-Z, 0-9 and
- * ": - / . % ( ) , _ ' ! ? + = < >". One byte per row, bit 4 the leftmost
+ * ": - / . % ( ) , _ ' ! ? + = < > [ ]". One byte per row, bit 4 the leftmost
  * pixel. Lowercase is drawn as uppercase; anything else is a blank. */
 #ifndef CT_HD2D_OSD_FONT_H
 #define CT_HD2D_OSD_FONT_H
@@ -70,6 +70,9 @@ static inline const uint8_t *osd_glyph(char ch)
     static const uint8_t equal[7] = {0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00};
     static const uint8_t less[7] = {0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02};
     static const uint8_t greater[7] = {0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08};
+    /* port: button tags in messages ("[A] yes"), for glyphs later */
+    static const uint8_t lbracket[7] = {0x0E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0E};
+    static const uint8_t rbracket[7] = {0x0E, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0E};
     static const uint8_t blank[7] = {0};
     if (ch >= 'a' && ch <= 'z')
         ch = (char)(ch - 'a' + 'A');
@@ -94,6 +97,8 @@ static inline const uint8_t *osd_glyph(char ch)
     case '=': return equal;
     case '<': return less;
     case '>': return greater;
+    case '[': return lbracket;
+    case ']': return rbracket;
     default: return blank;
     }
 }

@@ -88,7 +88,8 @@ endfunction()
 ct_game_exe(ct_boot ${CMAKE_SOURCE_DIR}/tools/ct_boot.c ${CMAKE_SOURCE_DIR}/tools/tas_resync.c)
 set_target_properties(ct_boot PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 if(SDL2_FOUND)
-    ct_game_exe(ct_sdl ${CMAKE_SOURCE_DIR}/frontend/main.c ${CMAKE_SOURCE_DIR}/frontend/saves.c)
+    ct_game_exe(ct_sdl ${CMAKE_SOURCE_DIR}/frontend/main.c ${CMAKE_SOURCE_DIR}/frontend/saves.c
+        ${CMAKE_SOURCE_DIR}/frontend/qol.c)   # port: quality of life (qol.h)
     # port: the game id names its saves folder, as for ct_sdl_engine
     get_filename_component(ct_game_id ${GAME_DIR} NAME)
     target_compile_definitions(ct_sdl PRIVATE CT_GAME_ID="${ct_game_id}")
@@ -360,6 +361,13 @@ if(SDL2_FOUND)
     # Real-time pacing: other tests running beside it starve the audio queue.
     set_tests_properties(sdl_audio_60s PROPERTIES RUN_SERIAL TRUE)
     list(APPEND ct_game_tests sdl_boot sdl_record sdl_audio_60s)
+    # port: quality of life (frontend/qol.h): save states, the resume point
+    # (SIGTERM, sleep, the prompt), screenshots, pause, fast-forward,
+    # battery mode, save RAM import/export; headless, scripted.
+    add_test(NAME sdl_qol COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_sdl_qol.py
+        $<TARGET_FILE:ct_sdl> $<TARGET_FILE:ct_boot> ${GAME_DIR}/test/replay/leene_square.txt)
+    set_tests_properties(sdl_qol PROPERTIES RUN_SERIAL TRUE)   # real-time parts
+    list(APPEND ct_game_tests sdl_qol)
 endif()
 
 set_tests_properties(${ct_game_tests} PROPERTIES LABELS rom ENVIRONMENT

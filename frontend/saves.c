@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <SDL.h>
@@ -125,12 +126,12 @@ static int fsync_dir(const char *file)
 }
 
 /* FILE.tmp, fsync, FILE -> FILE.bak (a hard link, else a copy), FILE.tmp
-   -> FILE. 0 on success. */
-static int write_atomic(const uint8_t *data)
+   -> FILE. 0 on success. port: any file (export), and the .bak optional. */
+static int write_atomic_to(const char *target, const uint8_t *data, int keep_bak)
 {
     char tmp[PATHLEN + 8], bak[PATHLEN + 8];
-    snprintf(tmp, sizeof tmp, "%s.tmp", path);
-    snprintf(bak, sizeof bak, "%s.bak", path);
+    snprintf(tmp, sizeof tmp, "%s.tmp", target);
+    snprintf(bak, sizeof bak, "%s.bak", target);
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0)
         return -1;
@@ -152,11 +153,11 @@ static int write_atomic(const uint8_t *data)
         remove(tmp);
         return -1;
     }
-    if (!access(path, F_OK)) {
+    if (keep_bak && !access(target, F_OK)) {
         remove(bak);
-        if (link(path, bak)) {
+        if (link(target, bak)) {
             /* No hard links here: copy it. */
-            FILE *in = fopen(path, "rb"), *out = in ? fopen(bak, "wb") : NULL;
+            FILE *in = fopen(target, "rb"), *out = in ? fopen(bak, "wb") : NULL;
             uint8_t buf[CT_SRAM_SIZE];
             size_t n = in ? fread(buf, 1, sizeof buf, in) : 0;
             if (out)
@@ -167,12 +168,17 @@ static int write_atomic(const uint8_t *data)
                 fclose(in);
         }
     }
-    if (rename(tmp, path)) {
+    if (rename(tmp, target)) {
         remove(tmp);
         return -1;
     }
-    fsync_dir(path);
+    fsync_dir(target);
     return 0;
+}
+
+static int write_atomic(const uint8_t *data)
+{
+    return write_atomic_to(path, data, 1);
 }
 
 static int save_now(const uint8_t *sram)
@@ -263,4 +269,101 @@ static void at_exit(void)
     if (f && fclose(f))
         ok = 0;
     fprintf(stderr, "ct_sdl: SRAM %s %s\n", ok ? "dumped to" : "cannot be dumped to", dump_path);
+}
+
+/* ---- port: save states and import/export (saves.h) ---- */
+
+void saves_after_state_load(void)
+{
+    if (!path[0])
+        return;   /* no save file: the state's save RAM stays */
+    memcpy(bus_sram(), on_disk, CT_SRAM_SIZE);
+    memcpy(prev, on_disk, CT_SRAM_SIZE);
+    dirty = 0;
+}
+
+/* The save file's path, as saves_open finds it. 0, or -1 (printed). */
+static int find_path(const char *file, const char *game_id)
+{
+    if (file) {
+        snprintf(path, sizeof path, "%s", file);
+        return 0;
+    }
+    char *dir = SDL_GetPrefPath("ct-recomp", game_id);
+    if (!dir) {
+        fprintf(stderr, "ct_sdl: save: no preferences folder (%s)\n", SDL_GetError());
+        return -1;
+    }
+    snprintf(path, sizeof path, "%s%s.srm", dir, game_id);
+    SDL_free(dir);
+    return 0;
+}
+
+/* Exactly CT_SRAM_SIZE bytes of file into buf. 0, or -1 (printed). */
+static int read_srm(const char *file, uint8_t *buf)
+{
+    FILE *f = fopen(file, "rb");
+    if (!f) {
+        fprintf(stderr, "ct_sdl: cannot read %s (%s)\n", file, strerror(errno));
+        return -1;
+    }
+    size_t n = fread(buf, 1, CT_SRAM_SIZE, f);
+    int extra = fgetc(f), err = ferror(f);
+    fclose(f);
+    if (err || n != CT_SRAM_SIZE || extra != EOF) {
+        fprintf(stderr, "ct_sdl: %s is not a %u-byte (%u KiB) save RAM file\n", file,
+                CT_SRAM_SIZE, CT_SRAM_SIZE / 1024);
+        return -1;
+    }
+    return 0;
+}
+
+int saves_import(const char *from, const char *file, const char *game_id)
+{
+    uint8_t data[CT_SRAM_SIZE], old[CT_SRAM_SIZE];
+    if (read_srm(from, data) || find_path(file, game_id))
+        return 1;
+    if (!access(path, F_OK)) {   /* the save it replaces, kept under a new name */
+        if (read_srm(path, old))
+            return 1;
+        char keep[PATHLEN + 64];
+        time_t t = time(NULL);
+        struct tm tm;
+        localtime_r(&t, &tm);
+        size_t n = (size_t)snprintf(keep, sizeof keep, "%s.before-import-", path);
+        strftime(keep + n, sizeof keep - n, "%Y%m%d-%H%M%S", &tm);
+        char saved[PATHLEN];
+        snprintf(saved, sizeof saved, "%s", path);
+        if (write_atomic_to(keep, old, 0)) {
+            fprintf(stderr, "ct_sdl: cannot back up %s to %s (%s): nothing imported\n", saved,
+                    keep, strerror(errno));
+            return 1;
+        }
+        fprintf(stderr, "ct_sdl: the old save is kept as %s\n", keep);
+    }
+    if (write_atomic(data)) {
+        fprintf(stderr, "ct_sdl: cannot write %s (%s)\n", path, strerror(errno));
+        return 1;
+    }
+    fprintf(stderr, "ct_sdl: imported %s as %s\n", from, path);
+    path[0] = 0;
+    return 0;
+}
+
+int saves_export(const char *to, const char *file, const char *game_id)
+{
+    uint8_t data[CT_SRAM_SIZE];
+    if (find_path(file, game_id))
+        return 1;
+    char from[PATHLEN];
+    snprintf(from, sizeof from, "%s", path);
+    path[0] = 0;
+    if (read_srm(from, data))
+        return 1;
+    if (write_atomic_to(to, data, 0)) {
+        fprintf(stderr, "ct_sdl: cannot write %s (%s)\n", to, strerror(errno));
+        return 1;
+    }
+    fprintf(stderr, "ct_sdl: exported %s to %s\n", from, to);
+    return 0;
 }

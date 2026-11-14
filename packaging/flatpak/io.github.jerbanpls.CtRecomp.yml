@@ -28,6 +28,10 @@ finish-args:
   # reading the user's ROM
   - --filesystem=xdg-download:ro
   - --filesystem=xdg-documents:ro
+  # port: screenshots (frontend/qol.h) in ~/Pictures/ct-recomp
+  - --filesystem=xdg-pictures/ct-recomp:create
+  # port: logind's PrepareForSleep, to save the resume point before a suspend
+  - --system-talk-name=org.freedesktop.login1
 
 modules:
   - name: SDL2
