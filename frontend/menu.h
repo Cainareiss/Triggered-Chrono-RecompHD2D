@@ -62,6 +62,13 @@ void menu_draw(int w, int h);
    present) and write it to path as PNG. 0 on success. */
 int menu_shot(const char *path, int w, int h);
 
+/* A small checklist panel in the top-right corner, while the menu is
+   closed (the controller test, padtest.h): n labels, done[k] ticked,
+   current highlighted (-1: none), an optional footer line. Takes no
+   input. Draw it after the picture, before the present. */
+void menu_draw_checklist(int w, int h, const char *title, int n, const char *const *labels,
+                         const unsigned char *done, int current, const char *footer);
+
 /* The key the menu is waiting for (a key binding row was picked): the
    caller must not treat key presses as anything else meanwhile. */
 int menu_capturing_key(void);

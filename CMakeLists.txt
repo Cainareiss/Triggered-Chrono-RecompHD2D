@@ -311,7 +311,8 @@ if(CT_ANDROID)
     # (android/, ImportActivity). Every engine object is linked in and
     # exported, as for ct_sdl_engine, for the module to bind to.
     add_library(main SHARED ${CMAKE_SOURCE_DIR}/frontend/main.c
-        ${CMAKE_SOURCE_DIR}/frontend/qol.c)   # port: quality of life (qol.h)
+        ${CMAKE_SOURCE_DIR}/frontend/qol.c   # port: quality of life (qol.h)
+        ${CMAKE_SOURCE_DIR}/frontend/padtest.c)   # port: the controller test (padtest.h)
     target_include_directories(main PRIVATE ${CMAKE_SOURCE_DIR}/test)
     target_link_libraries(main ct_tables_empty
         "$<LINK_LIBRARY:WHOLE_ARCHIVE,ct_sched,ct_interp,ct_runtime>" ct_input ct_hd2d
@@ -337,7 +338,8 @@ if(SDL2_FOUND)
     endif()
     ct_engine_exe(ct_sdl_engine ${CMAKE_SOURCE_DIR}/frontend/main.c
         ${CMAKE_SOURCE_DIR}/frontend/firstrun.c ${CMAKE_SOURCE_DIR}/frontend/saves.c
-        ${CMAKE_SOURCE_DIR}/frontend/qol.c)   # port: quality of life (qol.h)
+        ${CMAKE_SOURCE_DIR}/frontend/qol.c   # port: quality of life (qol.h)
+        ${CMAKE_SOURCE_DIR}/frontend/padtest.c)   # port: the controller test (padtest.h)
     target_link_libraries(ct_sdl_engine ct_input ct_hd2d ct_packs ct_menu)
     target_compile_definitions(ct_sdl_engine PRIVATE CT_FIRSTRUN
         CT_FIRSTRUN_GAME="${CT_GAME_ID}" CT_FIRSTRUN_DATA_DIR="${CT_ENGINE_DATA_DIR}")

@@ -1043,6 +1043,77 @@ void menu_draw(int w, int h)
     }
 }
 
+void menu_draw_checklist(int w, int h, const char *title, int n, const char *const *labels,
+                         const unsigned char *done, int current, const char *footer)
+{
+    if (M.open || !M.have_host || n <= 0)
+        return;
+    if (!M.ready)
+        setup();
+    if (M.host.ren)
+        ImGui_ImplSDLRenderer2_NewFrame();
+    else
+        ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplSDL2_NewFrame();
+    ImGuiIO &io = ImGui::GetIO();
+    if (io.DisplaySize.x <= 0 || io.DisplaySize.y <= 0) {
+        io.DisplaySize = ImVec2((float)w, (float)h);
+        io.DisplayFramebufferScale = ImVec2(1, 1);
+    }
+    /* About two thirds of the menu's text size: readable on a 7" screen
+       without hiding much of the game. */
+    float px = body_px(io.DisplaySize.x, io.DisplaySize.y) * 0.62f;
+    if (px < 13.0f)
+        px = 13.0f;
+    ImGui::NewFrame();
+    ImGui::PushFont(M.font, px);
+    float pad = px * 0.6f;
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - pad, pad), ImGuiCond_Always,
+                            ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.82f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, px * 0.5f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad, pad * 0.8f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(px * 0.4f, px * 0.18f));
+    ImGui::Begin("##checklist", NULL,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
+    int ndone = 0;
+    for (int k = 0; k < n; k++)
+        ndone += done[k] != 0;
+    const ImVec4 gold(1.0f, 0.78f, 0.35f, 1.0f), green(0.45f, 0.85f, 0.45f, 1.0f),
+        dim(0.62f, 0.64f, 0.70f, 1.0f), white(0.95f, 0.95f, 0.95f, 1.0f);
+    ImGui::TextColored(gold, "%s", title);
+    ImGui::SameLine();
+    ImGui::TextColored(dim, "  %d / %d", ndone, n);
+    ImGui::Separator();
+    for (int k = 0; k < n; k++) {
+        if (done[k])
+            ImGui::TextColored(green, "[x] %s", labels[k]);
+        else if (k == current)
+            ImGui::TextColored(gold, "> %s", labels[k]);
+        else
+            ImGui::TextColored(white, "[ ] %s", labels[k]);
+    }
+    if (footer && *footer) {
+        ImGui::Separator();
+        ImGui::TextColored(dim, "%s", footer);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+    ImGui::PopFont();
+    ImGui::Render();
+    if (M.host.ren) {
+        ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), M.host.ren);
+    } else {
+        typedef void (*bind_fn)(unsigned, unsigned);
+        static bind_fn bind = (bind_fn)SDL_GL_GetProcAddress("glBindFramebuffer");
+        if (bind)
+            bind(0x8D40 /* GL_FRAMEBUFFER */, 0);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    }
+}
+
 int menu_shot(const char *path, int w, int h)
 {
     unsigned char *px = (unsigned char *)malloc((size_t)w * h * 4);

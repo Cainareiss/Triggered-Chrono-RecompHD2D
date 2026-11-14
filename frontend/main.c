@@ -123,6 +123,12 @@
  *       packs= in settings.ini; F5 reloads), or dump every new tile and
  *       sprite drawn into a pack. A pack needs the GL renderer: without
  *       --hd2d it is used with the off preset.
+ *   --mute | --no-mute
+ *       silence the game for this run only (the volume setting is kept).
+ *   --pad-test
+ *       the controller test (padtest.h, docs/HANDHELD.md): a checklist of
+ *       every control in the corner, ticked as each is used; quits once all
+ *       work. Muted unless --no-mute.
  *   --pacing auto|timer|vsync [--log-pacing]
  *       how frames are paced: a sleep to each 60.0988 Hz frame time
  *       (timer; auto, the default, is the timer for now), or the
@@ -184,6 +190,7 @@
 #include "qol.h"        /* port: quality of life (save states, fast-forward, ...) */
 #include "menu.h"       /* port: the in-game settings menu */
 #include "settings.h"   /* port: the settings registry the menu shows */
+#include "padtest.h"    /* port: the controller test (--pad-test) */
 
 #ifndef CT_VERSION
 #define CT_VERSION "dev"
@@ -470,6 +477,7 @@ static touch_opts touch_o = {0, 15};
    (0-100, applied to the samples queued), muting while the window isn't
    focused, the mouse cursor hidden after 2 s without moving. */
 static int volume = 100, mute_unfocused, focused = 1;
+static int mute_run;   /* port: --mute (and --pad-test): silent this run, nothing saved */
 static int renderer_saved = -1;   /* settings.ini renderer=plain|hd2d: the menu's choice, -1 none */
 static int menu_ready;        /* menu_init done: ACTION_MENU opens it */
 static int menu_hold_mask;    /* after closing: pad 1 kept from the game until let go */
@@ -591,6 +599,7 @@ static void present_plain(const uint8_t *bgrx)
         qol_picture_rect(w, h, &px, &py, &pw, &ph);
         int s = ph / 180 > 2 ? ph / 180 : 2;
         osd_sdl_draw(ren, px + s * 4, py + s * 4, s, 1);
+        padtest_draw(w, h);   /* port: the controller test's checklist */
     }
     SDL_RenderPresent(ren);
 }
@@ -664,8 +673,10 @@ static void present_hd2d(void)
     if (menu_is_open()) {   /* port: the menu, after the picture, before the swap */
         menu_draw(w, h);
         take_menu_shot(w, h);
-    } else if (touch_gl_ok) {
-        touch_gl_draw(w, h);   /* port: touch overlay */
+    } else {
+        if (touch_gl_ok)
+            touch_gl_draw(w, h);   /* port: touch overlay */
+        padtest_draw(w, h);   /* port: the controller test's checklist */
     }
     SDL_GL_SwapWindow(win);
     if (log_gpu && sched_frame_count() % 60 == 0)
@@ -1723,6 +1734,7 @@ static void poll_input(long f)
     }
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
+        padtest_event(&ev);   /* port: the controller test only watches */
         if (!menu_is_open() && touch_event(&ev, f))
             continue;   /* port: a touch, used by the overlay */
         /* port: QOL keys, the pause and the resume prompt; while the menu
@@ -1944,7 +1956,7 @@ static void queue_audio(long f)
     /* port: the volume, and silence in the background (mute_unfocused):
        the samples are scaled, not dropped, so the queue and its rate
        control carry on as before. */
-    int vol = mute_unfocused && !focused ? 0 : volume;
+    int vol = mute_run || (mute_unfocused && !focused) ? 0 : volume;
     if (vol < 100)
         for (int k = 0; k < n_out * 2; k++)
             out[k] = (int16_t)(out[k] * vol / 100);
@@ -2589,6 +2601,7 @@ static void usage(FILE *out)
             "[--coop] [--no-coop] [--coop-split]"
             " "
             "[--pack-dump NAME] [--pack NAME|none]...\n         "
+            "[--mute] [--no-mute] [--pad-test]\n         "
             "[--menu-test FILE] [--hash-log FILE]"
 #ifdef CT_FIRSTRUN
             " [--data-dir DIR] [--game ID] [--shot status:PATH] [--build-only]"
@@ -2740,6 +2753,12 @@ int main(int argc, char **argv)
             save_path = argv[++k];
         } else if (!strcmp(argv[k], "--no-save")) {
             no_save = 1;
+        } else if (!strcmp(argv[k], "--mute")) {   /* port: silent this run */
+            mute_run = 1;
+        } else if (!strcmp(argv[k], "--no-mute")) {
+            mute_run = -1;
+        } else if (!strcmp(argv[k], "--pad-test")) {   /* port: the controller test */
+            padtest_start();
         } else if (!strcmp(argv[k], "--dump-sram") && k + 1 < argc) {
             saves_dump_at_exit(argv[++k]);
         } else if (!strcmp(argv[k], "--poke-sram") && k + 1 < argc) {
@@ -2857,6 +2876,8 @@ int main(int argc, char **argv)
             return 2;
         }
     }
+    /* port: the controller test is silent unless --no-mute */
+    mute_run = mute_run > 0 || (mute_run == 0 && padtest_active());
     if (import_srm || export_srm) {   /* port: QOL: a save RAM file in or out, then stop */
         if (import_srm && export_srm) {
             fprintf(stderr, "ct_sdl: --import-srm or --export-srm, not both\n");
@@ -3107,6 +3128,10 @@ int main(int argc, char **argv)
         }
         sched_run_frame();
         qol_after_frame();
+        if (padtest_tick(menu_opened_count())) {   /* port: every control checked */
+            set_exit_reason("pad test: every control works");
+            running = 0;
+        }
     }
     qol_quit(!running);   /* port: QOL: the resume point, on a quit */
 

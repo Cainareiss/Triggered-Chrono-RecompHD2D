@@ -462,6 +462,20 @@ the [player's guide](USER-GUIDE.md#your-saves).
 - **Start over:** delete `~/.local/share/ct-recomp/ct/ct_game.stamp` to rebuild the game
   code, or `ct/rom_path` to search for the ROM again. Your saves are left alone.
 
+## Testing your controller
+
+```
+ct_sdl --pad-test                 # the AppImage: CT_Recomp-x86_64.AppImage --pad-test
+```
+
+A checklist of every control appears in the top-right corner while the game runs,
+muted (add `--no-mute` for sound). Press each control once, in any order: it turns
+green, the next one is highlighted, and each step is also printed to the terminal
+(`pad test: ok ...`). The back buttons do a real quick save and quick load, so add
+`--states-dir /tmp/padtest` to keep your own slots untouched. When all 18 work the game
+says so and quits a few seconds later. `--mute` alone silences any run without
+changing your volume setting.
+
 ## Not yet tested on real hardware
 
 These parts were tested on a ROG Ally running Bazzite, but only headless (SDL's
@@ -485,8 +499,11 @@ The InputPlumber reader (`hid_deck`) was checked on the Ally itself: the device'
 descriptor and two seconds of its reports were read, and `ct_sdl_engine` found it and
 used it on pad 1 (`hid_deck=off` gave the no-controller message instead). Its parsing,
 hot-plugging and auto mode are tested with reports made from the documented layout
-(`test_hid_deck`: a fake sysfs and a FIFO). Pressing the real buttons, Steam starting
-and stopping, and suspend have not been tried yet.
+(`test_hid_deck`: a fake sysfs and a FIFO). On 2026-11-14 every control was pressed on
+the Ally outside Steam with `--pad-test` (below), and all 18 passed: face buttons,
+d-pad, left stick, L1/R1, L2/R2, View, Menu, both back buttons (a real quick save and
+quick load) and the L3+R3 menu chord. Steam starting and stopping, and suspend, have
+not been tried yet.
 
 The quality-of-life features were tested headless (SDL's dummy drivers, scripted with
 `--qol-action`; `sdl_qol` and `savestate_replay` in ctest) and on a desktop, including
