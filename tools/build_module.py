@@ -42,6 +42,23 @@ def run(cmd: list[str], env: dict | None = None, capture: bool = False) -> str:
     return r.stdout if capture else ''
 
 
+# One compile of a big generated file takes up to about 600 MB. On a handheld
+# with 16 cores, one job per core can run the machine out of memory (the
+# kernel then kills the game or the desktop), so fit the jobs to the memory
+# that is free now, keeping 1 GB spare.
+JOB_MB = 600
+
+
+def default_jobs() -> int:
+    cpus = os.cpu_count() or 4
+    try:
+        with open('/proc/meminfo') as f:
+            avail_kb = next(int(l.split()[1]) for l in f if l.startswith('MemAvailable:'))
+    except (OSError, StopIteration, ValueError):
+        return cpus
+    return max(1, min(cpus, (avail_kb // 1024 - 1024) // JOB_MB))
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--game', required=True, help='game directory, e.g. game/<id>')
@@ -49,7 +66,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument('--out', required=True)
     ap.add_argument('--cc', default=os.environ.get('CC', 'cc'))
     ap.add_argument('--native', action='store_true')
-    ap.add_argument('--jobs', type=int, default=os.cpu_count() or 4)
+    ap.add_argument('--jobs', type=int, default=default_jobs())
     ap.add_argument('--keep-c', action='store_true')
     a = ap.parse_args(argv[1:])
 
