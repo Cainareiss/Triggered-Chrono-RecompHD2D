@@ -102,7 +102,8 @@ def main(argv: list[str]) -> int:
     sources += [os.path.join(gen, 'ct_overlays.c'), os.path.join(gen, 'ct_funcs.c'), *game_c,
                 os.path.join(ROOT, 'runtime', 'module_entry.c')]
     cflags = ['-O2', '-fPIC', '-fvisibility=hidden', '-std=c11', '-DCT_TEST_BUILD',
-              '-DCT_TABLES_DEFINE', '-I', gen, '-I', os.path.join(ROOT, 'runtime')]
+              '-DCT_TABLES_DEFINE', '-I', gen, '-I', os.path.join(ROOT, 'runtime'),
+              '-I', game]   # the game's own headers (e.g. game/<id>/*.h)
     if a.native:
         cflags.append('-march=native')
 

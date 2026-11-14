@@ -413,6 +413,10 @@ add_executable(test_packs test/test_packs.c)   # port: asset packs
 target_link_libraries(test_packs ct_packs)
 target_compile_options(test_packs PRIVATE ${CT_WARN} -Wno-format-truncation)
 add_test(NAME packs COMMAND test_packs ${CMAKE_SOURCE_DIR} ${CMAKE_BINARY_DIR})
+# port: the installed data dir can build a module (every header the game's C
+# includes is installed); a gap here breaks every packaged first run.
+add_test(NAME install_layout COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_install_layout.py
+         ${CMAKE_COMMAND} ${CMAKE_BINARY_DIR})
 add_test(NAME pack_upscale COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_pack_upscale.py)   # port: asset packs
 add_test(NAME decode_calls COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_decode_calls.py)
 add_test(NAME funcs_meta COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_funcs_meta.py)
@@ -502,7 +506,7 @@ if(TARGET ct_sdl_engine)
     foreach(g ${ct_games})
         if(EXISTS ${g}/game.toml)
             get_filename_component(gid ${g} NAME)
-            file(GLOB ct_inst_game ${g}/*.toml ${g}/*.c)
+            file(GLOB ct_inst_game ${g}/*.toml ${g}/*.c ${g}/*.h)
             file(GLOB ct_inst_game_tools ${g}/tools/*.py)
             install(FILES ${ct_inst_game} DESTINATION ${CT_DATA_DIR}/game/${gid})
             install(FILES ${ct_inst_game_tools} DESTINATION ${CT_DATA_DIR}/game/${gid}/tools)
