@@ -82,3 +82,10 @@ int device_gl_is_deck(const char **renderer)
         *renderer = r ? r : "";
     return device_renderer_is_deck(r);
 }
+
+const char *device_no_pad_hint(int kind, int controllers)
+{
+    if (kind == DEVICE_PC || controllers > 0)
+        return NULL;
+    return "No controller found. Launch from Steam, or see HANDHELD.md (InputPlumber)";
+}

@@ -178,6 +178,7 @@ if(SDL2_FOUND)
     # port: the on-screen touch controller (touch.h) and its GL drawer.
     add_library(ct_input STATIC frontend/input.c frontend/touch.c frontend/touch_gl.c
         frontend/device.c   # port: device.c: Steam Game Mode, Steam Deck (HANDHELD.md)
+        frontend/hid_deck.c # port: Deck-format hidraw pads SDL misses (InputPlumber)
         # port: frontend actions, their bindings, button glyphs in messages
         frontend/actions.c frontend/bindings.c frontend/glyphs.c frontend/osd_text.c
         frontend/settings.c)   # port: the settings registry (settings.h)
@@ -429,6 +430,12 @@ if(SDL2_FOUND)
     target_link_libraries(test_handheld ct_input)
     target_compile_options(test_handheld PRIVATE ${CT_WARN})
     add_test(NAME handheld COMMAND test_handheld)
+    # port: the Deck-format hidraw reader (frontend/hid_deck.h): reports
+    # made from the documented layout, through a fake sysfs and a FIFO
+    add_executable(test_hid_deck test/test_hid_deck.c)
+    target_link_libraries(test_hid_deck ct_input)
+    target_compile_options(test_hid_deck PRIVATE ${CT_WARN})
+    add_test(NAME hid_deck COMMAND test_hid_deck ${CMAKE_BINARY_DIR}/test_hid_deck_tmp)
     # port: back buttons -> frontend actions, glyphs, gyro, through SDL
     # virtual controllers with paddles
     add_executable(test_actions test/test_actions.c)

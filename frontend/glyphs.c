@@ -115,6 +115,13 @@ int glyphs_family(int type, uint16_t vendor, uint16_t product, const char *name,
         switch (product) {
         case 0x1205:   /* the Steam Deck's built-in controller */
             return GLYPHS_STEAM_DECK;
+        case 0x12f0: case 0x12fa: case 0x12fb: case 0x12fc: case 0x12fd: case 0x12fe:
+        case 0x12ff:
+            /* InputPlumber's emulated Deck controller on other handhelds
+               (Ally 12fd, Legion Go 12fe, ...: hid_deck.h): the Deck's
+               layout, A / B / X / Y where an Xbox pad has them, and L4 /
+               R4 / L5 / R5 for the back buttons it maps */
+            return GLYPHS_STEAM_DECK;
         case 0x1302: case 0x1303: case 0x1304: case 0x1305:
             /* the 2026 Steam Controller (and its dongles): the Deck's
                layout, L4 / L5 / R4 / R5 included */

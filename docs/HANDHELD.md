@@ -203,6 +203,92 @@ game shows it with the Deck's glyphs. That is from SDL's source at the `release-
 tag, not from a real controller. An AppImage built with `SDL2=build` (SDL 2.32.10) does
 not know this controller: there it works through Steam Input's virtual pad only.
 
+### Bazzite / InputPlumber (ROG Ally, Legion Go, ... outside Steam)
+
+On Bazzite, **InputPlumber** (a system service) takes over the built-in controls of a ROG
+Ally, Legion Go, MSI Claw or Zotac Zone. It hides the real pad (the Ally's
+"Microsoft X-Box 360 pad" event device is made root-only) and offers an **emulated Steam
+Deck controller** instead, which Steam reads. Started outside Steam, SDL finds no
+controller at all, so the game reads that emulated controller itself.
+
+What it is, as checked on a ROG Ally (RC71L), Bazzite, InputPlumber 0.84.0 (composite
+device "ASUS ROG Ally", target `deck-uhid`):
+
+- A **uhid** device (`/sys/devices/virtual/misc/uhid/0003:28DE:12FD.*`), bound to
+  `hid-generic`, seen as `/dev/hidrawN` (it was `hidraw10`). `HID_ID=0003:000028DE:000012FD`,
+  `HID_NAME=ROG Ally Controller`. The desktop user gets read access through an ACL.
+- Its report descriptor is the Deck controller interface's: one vendor-defined collection
+  (usage page 0xFFFF, usage 1) with 64 input bytes and 64 feature bytes, no report IDs.
+  The kernel makes no event device from it.
+- It streams **Deck state reports** continuously (about 450 a second, idle too): 64 bytes,
+  `01 00 09 40` (report version 1, type 9 = `ID_CONTROLLER_DECK_STATE`, length 64), then
+  the packet number, the button words, trackpads, accelerometer (about 1 g on one axis),
+  gyro, triggers and sticks: exactly SDL's `SteamDeckStatePacket_t`.
+- The product ID is InputPlumber's own, one per handheld, so Steam can tell them apart
+  (InputPlumber's `ProductId`: Steam Deck 1205, generic 12f0, MSI Claw 12fa, Legion Go 2
+  12fb, Zotac Zone 12fc, **ROG Ally 12fd** (all Ally models), Legion Go 12fe, Legion Go S
+  12ff). Its lizard (keyboard / mouse) mode is off; InputPlumber's own keyboard and mouse
+  targets do that work. Nothing needs to be written to it.
+- The Ally's buttons arrive as the Deck's: A / B / X / Y, View, Menu, the sticks and
+  triggers; the **left back button (M1) is L4** and the **right one (M2) is R4** (so quick
+  save and quick load by default); Command Center (short press) is the Steam button and
+  Armoury Crate (short press) the Deck's ... button. The Ally has no L5 / R5: open the
+  menu with **L3 + R3**. (InputPlumber's capability map `ally_type1.yaml`; a profile can
+  change this.)
+
+Why SDL doesn't take it:
+
+- **SDL 3.4.x** (Bazzite's sdl2-compat 2.32.74 on SDL 3.4.20; also `main` in November
+  2026): hidapi lists the uhid device (its Linux backend handles uhid nodes without a USB
+  parent), and Valve's vendor ID passes the usage-page filter, but no driver claims it.
+  The Deck driver accepts only what `SDL_IsJoystickSteamDeck` calls a Deck, which is
+  product **1205** alone (`controller_list.h`); the Steam Controller driver only the
+  Steam Controller IDs. 12fd is in neither list, so there are 0 joysticks, with or without
+  `SDL_JOYSTICK_HIDAPI_STEAMDECK=1` / `SDL_JOYSTICK_HIDAPI_STEAM=1`.
+- **SDL 2.32.10** (the AppImage's `SDL2=build`): the same product check, and before that
+  its hidapi enumeration drops every hidraw device without a USB parent, so a uhid device
+  is never listed. Patching the product list alone would not be enough, which is why the
+  AppImage's SDL is left as it is.
+
+**What the game does.** `frontend/hid_deck.c` (Linux) looks in `/sys/class/hidraw` for a
+device with Valve's vendor ID, a vendor-defined report descriptor, and Deck state reports
+when read; opens it **read-only**; and shows it to the rest of the game as an SDL virtual
+game controller with the device's name, vendor and product. Everything else works as with
+any pad: the SNES mapping above, the back buttons, the Deck's button pictures, co-op, the
+menu. The report parsing is ported from SDL's Deck driver (zlib; see THIRD_PARTY.md). It
+never writes to the device. The log says:
+
+```
+ct_sdl: hid_deck: using "ROG Ally Controller" (/dev/hidraw10, 28de:12fd): Steam Deck reports, read-only, as a virtual game controller
+ct_sdl: using "ROG Ally Controller" on pad 1
+```
+
+InputPlumber makes the device anew when Steam starts or stops and around suspend; the game
+drops the old one when reads fail and looks again every 2 seconds. `settings.ini`
+`hid_deck=auto|on|off` (the menu's **Controls** > **Built-in controls (InputPlumber)**):
+
+- `auto` (the default): read it only while SDL has no other game controller. Started from
+  Steam, Steam's virtual pad is there, so the game uses that and doesn't read the device
+  twice; a USB pad plugged in also takes over. A real Deck (28de:1205) is left to SDL's
+  own driver.
+- `on`: read it next to the other controllers (and a real Deck's too, without turning its
+  lizard mode off).
+- `off`: never.
+
+With `--log-input`, each button change of the device is printed
+(`ct_sdl: hid_deck: A down`, `... R4 (paddle1) down`, `... L2 down (past half)`,
+`... left stick left`), next to SDL's own `controller button ...` lines.
+
+If the device can't be opened (no ACL on `/dev/hidrawN`), the log says
+`ct_sdl: hid_deck: can't read /dev/hidrawN (Permission denied)`. If a handheld starts with
+no controller at all, the game says so once on screen: "No controller found. Launch from
+Steam, or see HANDHELD.md (InputPlumber)". Starting it from Steam always works: Steam reads
+the emulated controller and gives the game its virtual pad.
+
+While Steam runs in the background, a game started outside it still gets the device (SDL
+hides Steam's virtual pads from programs Steam didn't start), and Steam's desktop layout
+may send keys as well; see the paragraph above.
+
 ### Under Steam Input (Game Mode, or started from Steam)
 
 Steam hides the real controllers from the game (`SDL_GAMECONTROLLER_IGNORE_DEVICES`) and
@@ -394,6 +480,13 @@ DualSense and Switch Pro pads) against sdl2-compat 2.32.74 / SDL 3.4.20, and the
 pictures in headless HD-2D and plain renders. Not tried on real hardware: SDL's
 Deck and Steam Controller drivers in Desktop Mode, the 2026 Steam Controller, a real gyro,
 and the Steam Input template.
+
+The InputPlumber reader (`hid_deck`) was checked on the Ally itself: the device's
+descriptor and two seconds of its reports were read, and `ct_sdl_engine` found it and
+used it on pad 1 (`hid_deck=off` gave the no-controller message instead). Its parsing,
+hot-plugging and auto mode are tested with reports made from the documented layout
+(`test_hid_deck`: a fake sysfs and a FIFO). Pressing the real buttons, Steam starting
+and stopping, and suspend have not been tried yet.
 
 The quality-of-life features were tested headless (SDL's dummy drivers, scripted with
 `--qol-action`; `sdl_qol` and `savestate_replay` in ctest) and on a desktop, including
