@@ -32,6 +32,12 @@ endif()
 # game directory added even when $CT_ROM is set, so nothing generated from a
 # ROM can reach the build or `cmake --install`.
 option(CT_ENGINE_ONLY "Build only the engine programs, never game code" OFF)
+# port: every test runs with its own data and config dirs, never the user's:
+# no saved settings (renderer, look, rumble, ...) leak in, and the built-in
+# pad reader and rumble stay off, so no test touches real hardware.
+set(CT_TEST_XDG ${CMAKE_BINARY_DIR}/test-xdg)
+file(MAKE_DIRECTORY ${CT_TEST_XDG}/config)
+file(WRITE ${CT_TEST_XDG}/data/ct-recomp/hd2d/settings.ini "hid_deck=off\nrumble=off\n")
 
 # port: Android (docs/ANDROID-BUILD.md), from android/'s Gradle build: the
 # engine and frontend as libmain.so (SDL's Java side loads it), SDL2 built
@@ -538,4 +544,4 @@ endif()
 # SDL dummy drivers: the frontend test runs headless.
 get_property(ct_engine_tests DIRECTORY PROPERTY TESTS)
 set_tests_properties(${ct_engine_tests} PROPERTIES ENVIRONMENT
-    "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy")
+    "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy;XDG_DATA_HOME=${CT_TEST_XDG}/data;XDG_CONFIG_HOME=${CT_TEST_XDG}/config")
