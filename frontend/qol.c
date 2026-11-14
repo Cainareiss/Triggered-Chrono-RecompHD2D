@@ -13,9 +13,11 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "actions.h"
+#include "bindings.h"
 #include "hd2d/hd2d.h"
-#include "hd2d/osd_font.h"
 #include "input.h"
+#include "osd_text.h"
 #include "png.h"
 #include "saves.h"
 #include "savestate.h"
@@ -26,7 +28,7 @@
 enum { AUTO, ON, OFF };
 enum { BATT_OFF, BATT_LIGHT, BATT_SAVER };
 
-static struct {
+typedef struct {
     int ffwd_speed;       /* 2-4 */
     uint16_t turbo;       /* buttons with autofire */
     int pause_focus;      /* AUTO: on, except in Game Mode */
@@ -36,7 +38,12 @@ static struct {
     int crt;              /* plain picture */
     int integer;          /* plain picture: whole multiples */
     int always_run;
-} set = {3, 0, AUTO, ON, ON, BATT_OFF, 0, 1, 0};
+} qol_settings;
+static qol_settings set = {3, 0, AUTO, ON, ON, BATT_OFF, 0, 1, 0};
+/* --qol-set changes set for this run only: settings.ini gets saved, the
+   settings as they were before, plus what is toggled during the run. */
+static qol_settings saved;
+static int overridden;
 
 static const struct { const char *name; uint16_t bit; } button_names[] = {
     {"a", PAD_A}, {"b", PAD_B}, {"x", PAD_X}, {"y", PAD_Y}, {"l", PAD_L}, {"r", PAD_R},
@@ -86,17 +93,18 @@ void qol_settings_write(FILE *f)
 {
     static const char *const tri[] = {"auto", "on", "off"};
     static const char *const batt[] = {"off", "light", "saver"};
-    fprintf(f, "ffwd_speed=%d\nturbo=", set.ffwd_speed);
+    const qol_settings *v = overridden ? &saved : &set;
+    fprintf(f, "ffwd_speed=%d\nturbo=", v->ffwd_speed);
     const char *sep = "";
     for (size_t k = 0; k < sizeof button_names / sizeof *button_names; k++)
-        if (set.turbo & button_names[k].bit) {
+        if (v->turbo & button_names[k].bit) {
             fprintf(f, "%s%s", sep, button_names[k].name);
             sep = ",";
         }
     fprintf(f, "\npause_on_focus_loss=%s\npause_on_disconnect=%s\nresume=%s\n"
                "battery_mode=%s\ncrt=%s\ninteger_scale=%s\nalways_run=%s\n",
-            tri[set.pause_focus], tri[set.pause_pad], tri[set.resume], batt[set.battery],
-            set.crt ? "on" : "off", set.integer ? "on" : "off", set.always_run ? "on" : "off");
+            tri[v->pause_focus], tri[v->pause_pad], tri[v->resume], batt[v->battery],
+            v->crt ? "on" : "off", v->integer ? "on" : "off", v->always_run ? "on" : "off");
 }
 
 /* ---- state ---- */
@@ -123,6 +131,7 @@ static long frames_run;              /* this session (since start or the last lo
 static int user_preset = -1;         /* HD-2D preset before the battery changed it */
 static int on_batt, batt_checked;
 static Uint32 batt_at;
+static int focus_pause;              /* pause_on_focus_loss, auto decided */
 static int focus_lost;               /* paused for it */
 static int focus_pending;            /* lost: pause if it stays lost a moment */
 static Uint32 focus_since;
@@ -133,18 +142,19 @@ static SDL_Window *focus_win;
 static struct { long frame; char name[24]; } actions[MAX_ACTIONS];
 static int n_actions;
 
-/* ---- on-screen messages ---- */
-
-static char osd_text[64];
-static Uint32 osd_until;
+/* ---- on-screen messages ----
+   As main.c's: HD-2D's or the plain picture's (osd_text.h), [token]s as
+   the buttons of the device in use; on stderr as their labels. */
 
 void qol_osd(const char *msg)
 {
-    fprintf(stderr, "ct_sdl: %s\n", msg);
-    snprintf(osd_text, sizeof osd_text, "%s", msg);
-    osd_until = SDL_GetTicks() + 2000;
+    char plain[256];
+    osd_text_plain(msg, plain, sizeof plain);
+    fprintf(stderr, "ct_sdl: %s\n", plain);
     if (hd2d)
         hd2d_osd(msg);
+    else
+        osd_sdl_show(msg);
 }
 
 /* ---- files ---- */
@@ -506,7 +516,6 @@ static void pause_clear(int why)
             swallow[p] = last_live[p];   /* held now: not a press for the game */
         if (host.pacing_reset)
             host.pacing_reset();
-        osd_until = 0;   /* (HD-2D's message fades by itself) */
         fprintf(stderr, "ct_sdl: playing\n");
     }
 }
@@ -524,9 +533,9 @@ void qol_pause_toggle(void)
 static const char *pause_text(void)
 {
     if (paused & P_PROMPT)
-        return "Resume? [A] yes [B] no";
+        return "Resume? [a] yes [b] no";
     if (paused & P_PAD)
-        return "Paused: controller disconnected - [A] to go on";
+        return "Paused: a controller went - [a] goes on";
     return "Paused";
 }
 
@@ -733,6 +742,7 @@ void qol_turbo_toggle(uint16_t buttons)
         set.turbo = 0;
     else
         set.turbo ^= buttons;
+    saved.turbo = set.turbo;
     char msg[64] = "Turbo: off";
     if (set.turbo) {
         size_t n = (size_t)snprintf(msg, sizeof msg, "Turbo:");
@@ -760,6 +770,7 @@ uint16_t qol_buttons(int port, uint16_t live, long frame)
 void qol_always_run_toggle(void)
 {
     set.always_run = !set.always_run;
+    saved.always_run = set.always_run;
     sched_set_pref(SCHED_PREF_ALWAYS_RUN, set.always_run);
     qol_osd(set.always_run ? "Always run: on (hold the run button to walk)" : "Always run: off");
     if (host.save_settings)
@@ -769,6 +780,7 @@ void qol_always_run_toggle(void)
 void qol_crt_toggle(void)
 {
     set.crt = !set.crt;
+    saved.crt = set.crt;
     qol_osd(set.crt ? (hd2d ? "CRT look: on (original picture only)" : "CRT look: on")
                     : "CRT look: off");
     if (host.save_settings)
@@ -788,6 +800,10 @@ int qol_option(int argc, char **argv, int *k)
         no_resume_opt = 1;
     } else if (!strcmp(a, "--qol-set") && *k + 1 < argc) {   /* a settings.ini line, for now */
         char key[32], val[64];
+        if (!overridden) {
+            saved = set;
+            overridden = 1;
+        }
         if (sscanf(argv[++*k], "%31[^=]=%63s", key, val) != 2 || !qol_setting(key, val))
             return -1;
     } else if (!strcmp(a, "--qol-action") && *k + 1 < argc) {
@@ -821,6 +837,8 @@ void qol_usage(FILE *out)
 
 /* ---- init ---- */
 
+static void on_action(ct_action a, int down, void *user);
+
 void qol_init(const qol_host *h, const char *game_id, int gm, int hd, int states, int rec,
               int scr)
 {
@@ -831,9 +849,13 @@ void qol_init(const qol_host *h, const char *game_id, int gm, int hd, int states
     scripted = scr;
     states_on = states || states_dir_opt;
     inited = 1;
-    if (set.pause_focus == AUTO)
-        set.pause_focus = game_mode ? OFF : ON;   /* gamescope's focus comes and goes */
+    /* auto: not in Game Mode, where gamescope's focus comes and goes */
+    focus_pause = set.pause_focus == AUTO ? !game_mode : set.pause_focus == ON;
     sched_set_pref(SCHED_PREF_ALWAYS_RUN, set.always_run);
+    actions_set_handler(ACTION_QUICKSAVE, on_action, NULL);
+    actions_set_handler(ACTION_QUICKLOAD, on_action, NULL);
+    actions_set_handler(ACTION_FFWD, on_action, NULL);
+    actions_set_handler(ACTION_SCREENSHOT, on_action, NULL);
     if (states_dir_opt) {
         snprintf(states_dir, sizeof states_dir, "%s", states_dir_opt);
     } else {
@@ -883,22 +905,56 @@ static void prompt_answer(int yes)
     pause_clear(P_PROMPT);
 }
 
-static int key_action(SDL_Scancode sc, int shift)
+/* The keys of what has no action (yet): a bound key (bindings.h:
+   settings.ini key_*) always goes to its action instead. Shift with the
+   quick save / load key saves to / loads the selected slot. */
+static int key_action(SDL_Scancode sc, SDL_Keymod mod)
 {
+    ct_action bound = bindings_for_key(bindings_current(), sc);
+    if (mod & KMOD_SHIFT) {
+        if (bound == ACTION_QUICKSAVE) {
+            qol_save_slot(slot);
+            return 1;
+        }
+        if (bound == ACTION_QUICKLOAD) {
+            qol_load_slot(slot);
+            return 1;
+        }
+    }
+    if (bound != ACTION_NONE)
+        return 0;
+    int ctrl = (mod & KMOD_CTRL) != 0;
     switch (sc) {
-    case SDL_SCANCODE_F6: qol_save_slot(shift ? slot : 0); return 1;
-    case SDL_SCANCODE_F7: qol_load_slot(shift ? slot : 0); return 1;
-    case SDL_SCANCODE_F8: qol_slot_next(); return 1;
-    case SDL_SCANCODE_F9: qol_crt_toggle(); return 1;
-    case SDL_SCANCODE_F10: qol_turbo_toggle(last_live[0]); return 1;
-    case SDL_SCANCODE_F12:
-    case SDL_SCANCODE_PRINTSCREEN: qol_screenshot(); return 1;
-    case SDL_SCANCODE_TAB: qol_ffwd_set(1); return 1;
+    case SDL_SCANCODE_F7: qol_slot_next(); return 1;
     case SDL_SCANCODE_GRAVE: qol_ffwd_toggle(); return 1;
+    case SDL_SCANCODE_PRINTSCREEN: qol_screenshot(); return 1;
     case SDL_SCANCODE_CAPSLOCK: qol_always_run_toggle(); return 1;
     case SDL_SCANCODE_PAUSE:
     case SDL_SCANCODE_P: qol_pause_toggle(); return 1;
+    case SDL_SCANCODE_T:
+        if (!ctrl)
+            return 0;
+        qol_turbo_toggle(last_live[0]);
+        return 1;
+    case SDL_SCANCODE_R:
+        if (!ctrl)
+            return 0;
+        qol_crt_toggle();
+        return 1;
     default: return 0;
+    }
+}
+
+/* The frontend actions (actions.h) this implements. */
+static void on_action(ct_action a, int down, void *user)
+{
+    (void)user;
+    switch (a) {
+    case ACTION_QUICKSAVE: if (down) qol_quicksave(); break;
+    case ACTION_QUICKLOAD: if (down) qol_quickload(); break;
+    case ACTION_FFWD: qol_ffwd_set(down); break;
+    case ACTION_SCREENSHOT: if (down) qol_screenshot(); break;
+    default: break;
     }
 }
 
@@ -920,16 +976,11 @@ int qol_event(const SDL_Event *ev, long frame)
                 prompt_answer(0);
             return !(sc == SDL_SCANCODE_Q && (ev->key.keysym.mod & KMOD_CTRL));
         }
-        if (key_action(ev->key.keysym.scancode, (ev->key.keysym.mod & KMOD_SHIFT) != 0))
+        if (key_action(ev->key.keysym.scancode, (SDL_Keymod)ev->key.keysym.mod))
             return 1;
-        if (paused && !(ev->key.keysym.mod & KMOD_CTRL)) {
+        if (paused && !(ev->key.keysym.mod & KMOD_CTRL) &&
+            bindings_for_key(bindings_current(), ev->key.keysym.scancode) == ACTION_NONE) {
             pause_clear(paused);   /* any other key goes on */
-            return 1;
-        }
-        return 0;
-    case SDL_KEYUP:
-        if (ev->key.keysym.scancode == SDL_SCANCODE_TAB) {
-            qol_ffwd_set(0);
             return 1;
         }
         return 0;
@@ -941,7 +992,9 @@ int qol_event(const SDL_Event *ev, long frame)
                 prompt_answer(0);
             return 1;
         }
-        if (paused) {
+        if (paused && bindings_for_button(bindings_current(),
+                                          (SDL_GameControllerButton)ev->cbutton.button) ==
+                          ACTION_NONE) {
             pause_clear(paused);
             return 1;
         }
@@ -955,7 +1008,7 @@ int qol_event(const SDL_Event *ev, long frame)
     case SDL_WINDOWEVENT:
         /* Not at once: windows flick out of focus and back as they appear
            (and under compositors that move it around). */
-        if (ev->window.event == SDL_WINDOWEVENT_FOCUS_LOST && set.pause_focus == ON) {
+        if (ev->window.event == SDL_WINDOWEVENT_FOCUS_LOST && focus_pause) {
             focus_pending = 1;
             focus_since = SDL_GetTicks();
             focus_win = SDL_GetWindowFromID(ev->window.windowID);
@@ -1012,6 +1065,10 @@ static void run_action(const char *a)
         qol_crt_toggle();
     else if (!strncmp(a, "turbo", 5))
         qol_turbo_toggle(PAD_A);
+    else if (!strncmp(a, "press:", 6) && action_parse(a + 6) > 0)   /* as a key or button would */
+        actions_emit((ct_action)action_parse(a + 6), 1);
+    else if (!strncmp(a, "release:", 8) && action_parse(a + 8) > 0)
+        actions_emit((ct_action)action_parse(a + 8), 0);
     else
         fprintf(stderr, "ct_sdl: unknown --qol-action %s\n", a);
 }
@@ -1096,13 +1153,16 @@ void qol_idle(void)
     if (!paused)
         return;
     if (!pause_shown || idle_ticks % 90 == 0) {   /* keep the message up */
-        if (!pause_shown)
-            fprintf(stderr, "ct_sdl: %s\n", pause_text());
+        if (!pause_shown) {
+            char plain[128];
+            osd_text_plain(pause_text(), plain, sizeof plain);
+            fprintf(stderr, "ct_sdl: %s\n", plain);
+        }
         pause_shown = 1;
-        snprintf(osd_text, sizeof osd_text, "%s", pause_text());
-        osd_until = SDL_GetTicks() + 2000;
         if (hd2d)
             hd2d_osd(pause_text());
+        else
+            osd_sdl_show(pause_text());
     }
     idle_ticks++;
     sleep_poll();
@@ -1208,33 +1268,6 @@ void qol_plain_draw(SDL_Renderer *ren, SDL_Texture *frame, int w, int h)
     SDL_Texture *m = crt_mask(ren, r.w, r.h);
     if (m)
         SDL_RenderCopy(ren, m, NULL, &r);
-}
-
-void qol_plain_osd(SDL_Renderer *ren, int w, int h)
-{
-    if (!osd_text[0] || (SDL_TICKS_PASSED(SDL_GetTicks(), osd_until) && !paused))
-        return;
-    const char *t = paused && pause_shown ? pause_text() : osd_text;
-    int k = h / 200 > 2 ? h / 200 : 2;   /* font pixel size */
-    int n = (int)strlen(t);
-    if (n * 6 * k + 4 * k > w)
-        k = w / (n * 6 + 4) > 1 ? w / (n * 6 + 4) : 1;
-    SDL_Rect box = {2 * k, 2 * k, (n * 6 + 3) * k, 11 * k};
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(ren, 0, 0, 0, 170);
-    SDL_RenderFillRect(ren, &box);
-    SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
-    static SDL_Rect px[64 * 35];
-    int m = 0;
-    for (int c = 0; c < n && c < 64; c++) {
-        const uint8_t *rows = osd_glyph(t[c]);
-        for (int y = 0; y < 7; y++)
-            for (int x = 0; x < 5; x++)
-                if (rows[y] & (0x10 >> x))
-                    px[m++] = (SDL_Rect){box.x + (2 + c * 6 + x) * k, box.y + (2 + y) * k, k, k};
-    }
-    SDL_RenderFillRects(ren, px, m);
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
 }
 
 int qol_plain_shot(SDL_Renderer *ren, SDL_Texture *frame, int w, int h, const char *path)

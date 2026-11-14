@@ -4,6 +4,9 @@
 """The SDL frontend's quality-of-life features (frontend/qol.h), headless
 (SDL dummy drivers), with scripted actions (--qol-action F:NAME):
 
+Quick save, quick load, the screenshot and fast-forward go through the
+frontend actions (actions.h), as their keys and back buttons do.
+
 - states: a quick save from ct_sdl runs on in ct_boot exactly as ct_boot's
   own run of the same replay; slots and thumbnails; a quick load.
 - resume: SIGTERM saves the resume point; the next start asks, and yes
@@ -62,8 +65,8 @@ def main(argv: list[str]) -> int:
 
         # -- states --
         rc, log = sdl(ct_sdl, base + ['--fast', '--frames', '700', '--script', script,
-                                      '--qol-action', '600:quicksave', '--qol-action', '650:save2'],
-                      env)
+                                      '--qol-action', '600:press:quicksave',
+                                      '--qol-action', '650:save2'], env)
         quick = os.path.join(st, 'quick.state')
         check(rc == 0 and os.path.exists(quick) and os.path.exists(os.path.join(st, 'quick.png'))
               and os.path.exists(os.path.join(st, 'slot2.state')), 'quick save and slot 2', log)
@@ -81,7 +84,7 @@ def main(argv: list[str]) -> int:
             check(tail == got and len(got) == 900 - f0,
                   f'ct_sdl state at frame {f0} runs on as ct_boot ({len(got)} frames)')
         rc, log = sdl(ct_sdl, base + ['--fast', '--frames', '700', '--qol-action',
-                                      '660:quickload'], env)
+                                      '660:press:quickload'], env)
         check(rc == 0 and 'Quick slot: loaded' in log, 'quick load', log)
 
         # -- resume --
@@ -110,7 +113,7 @@ def main(argv: list[str]) -> int:
         # -- screenshots, CRT --
         pics = os.path.join(d, 'pics', 'ct-recomp')
         rc, log = sdl(ct_sdl, base + ['--fast', '--frames', '1600', '--no-resume',
-                                      '--qol-action', '1500:screenshot'], env)
+                                      '--qol-action', '1500:press:screenshot'], env)
         shots = sorted(os.listdir(pics)) if os.path.isdir(pics) else []
         check(rc == 0 and len(shots) == 1 and 'Screenshot: ct-recomp-' in log, 'screenshot', log)
         if shots:
@@ -129,7 +132,7 @@ def main(argv: list[str]) -> int:
 
         # -- pause --
         rc, log = sdl(ct_sdl, base + ['--fast', '--frames', '200', '--no-resume',
-                                      '--qol-action', '100:unpad', '--qol-action', '101:pause'],
+                                      '--qol-action', '100:unpad', '--qol-action', '100:pause'],
                       env)
         check(rc == 0 and 'paused (a controller went)' in log and 'playing' in log,
               'pause on a controller going', log)
@@ -137,7 +140,7 @@ def main(argv: list[str]) -> int:
         # -- fast-forward: 480 frames take 8 s in real time; x4 about 2 --
         t = time.monotonic()
         rc, log = sdl(ct_sdl, base + ['--frames', '480', '--no-resume', '--qol-set', 'ffwd_speed=4',
-                                      '--qol-action', '1:ffwd'], env)
+                                      '--qol-action', '1:press:ffwd'], env)
         took = time.monotonic() - t
         check(rc == 0 and 'Fast-forward x4' in log and took < 6.0,
               f'fast-forward x4: 480 frames in {took:.1f} s', log)

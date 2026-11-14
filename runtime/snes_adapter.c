@@ -506,12 +506,15 @@ void snes_hw_state(ss_io *s)
     if (!s->loading) {
         *tmp = *g_ppu;
         tmp->renderBuffer = tmp->layerBuffer = tmp->behindColor = tmp->behindLayer = NULL;
+        tmp->provBuffer = NULL;
     }
     ss_bytes(s, tmp, sizeof *tmp);
     if (SS_APPLY(s)) {
         uint8_t *render = g_ppu->renderBuffer, *layer = g_ppu->layerBuffer;
         uint8_t *bcolor = g_ppu->behindColor, *blayer = g_ppu->behindLayer;
+        PpuProv *prov = g_ppu->provBuffer;
         *g_ppu = *tmp;
+        g_ppu->provBuffer = prov;
         g_ppu->renderBuffer = render;
         g_ppu->layerBuffer = layer;
         g_ppu->behindColor = bcolor;

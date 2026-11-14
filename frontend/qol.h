@@ -7,8 +7,11 @@
  * always-run, and the plain picture's integer scale and CRT look.
  *
  * main.c calls in at a few places (marked "port: QOL") and lends a few
- * callbacks (qol_host); everything else is here. The entry points the
- * input actions (frontend/actions.h) call are the qol_* verbs below.
+ * callbacks (qol_host); everything else is here. qol_init hooks the
+ * frontend actions (actions.h) it implements: quick save, quick load,
+ * fast-forward (hold) and the screenshot, on the keys and back buttons
+ * bindings.h gives them (F6, F9, Tab, F8; L4, R4, L5). The other verbs
+ * below have keys of their own here, until there are actions for them.
  *
  * Save states (runtime/savestate.h) are taken and loaded only between
  * sched_run_frame calls (qol_after_frame); a request waits for the next
@@ -20,14 +23,12 @@
  * disk is put back (saves_after_state_load), so loading an old state never
  * rolls back an in-game save.
  *
- * Temporary keys until the action bindings land (none on F5):
- *   F6 quick save, Shift+F6 save to the selected slot
- *   F7 quick load, Shift+F7 load the selected slot, F8 select slot 1-4
- *   Tab (held) fast-forward, ` (grave) fast-forward on/off
- *   F10 turbo on/off for the buttons held on pad 1
- *   F12 or Print Screen: screenshot
- *   F9 CRT look on/off (plain picture), Caps Lock always-run on/off
- *   Pause or P: pause */
+ * Keys here (never one bindings.h has bound; none of F1-F5, F11, F12):
+ *   Shift + the quick save / quick load key: save to / load the selected
+ *   slot; F7 select the next slot (1-4); ` (grave) fast-forward on/off;
+ *   Print Screen screenshot; Ctrl+T turbo on/off for the buttons held on
+ *   pad 1; Ctrl+R the CRT look (plain picture); Caps Lock always run;
+ *   Pause or P pause. */
 #ifndef CT_QOL_H
 #define CT_QOL_H
 
@@ -88,7 +89,6 @@ void qol_quit(int quit);
    and the on-screen messages. */
 void qol_picture_rect(int w, int h, int *x, int *y, int *pw, int *ph);
 void qol_plain_draw(SDL_Renderer *ren, SDL_Texture *frame, int w, int h);
-void qol_plain_osd(SDL_Renderer *ren, int w, int h);
 /* Write the plain picture at w x h to path (screenshots). */
 int qol_plain_shot(SDL_Renderer *ren, SDL_Texture *frame, int w, int h, const char *path);
 /* The HD-2D preset to save in settings.ini: the user's, not the battery's. */

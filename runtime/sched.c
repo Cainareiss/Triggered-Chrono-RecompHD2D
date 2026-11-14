@@ -1867,4 +1867,6 @@ void sched_state(ss_io *s)
         PpuSetBehindBuffer(ppu, fb_behind, SCHED_WIDTH * 4, fb_behind_layers, SCHED_WIDTH);
     else
         PpuSetBehindBuffer(ppu, NULL, 0, NULL, 0);
+    PpuSetProvBuffer(ppu, prov_on ? fb_prov : NULL, SCHED_WIDTH);
+    present_prov_valid = 0;
 }
