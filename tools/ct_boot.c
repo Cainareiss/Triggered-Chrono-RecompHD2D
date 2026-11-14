@@ -116,6 +116,17 @@
  *                  the HD-2D renderer does, to measure what it costs
  * --prov           also draw the PPU's provenance G-buffer (sched_prov), as
  *                  asset packs do (port)
+ * --save-state F:PATH  port: write a save state (runtime/savestate.h) at
+ *                  the first frame edge from F on where one can be taken
+ *                  (the SPC700 at an instruction boundary), and print
+ *                  "ct_boot: state saved at frame N to PATH"
+ * --load-state PATH  port: start from a save state instead of from reset;
+ *                  --frames still counts from reset
+ * --state-roundtrip N  port: every N frames (at the first edge where one can
+ *                  be taken), save a state and load it straight back: the
+ *                  run goes on from the loaded state (a new CPU coroutine,
+ *                  native frames dropped), and must match one without
+ *                  (--hash-log); prints how many round trips it made
  *
  * On a fatal error the last 64 instruction addresses are printed.
  *
@@ -139,6 +150,7 @@
 #include "dsp.h"
 #include "wav.h"
 #include "module.h"   /* port: --module */
+#include "savestate.h"   /* port: --save-state, --load-state */
 #include "tas_resync.h"
 
 static jmp_buf fatal_jmp;
@@ -555,6 +567,8 @@ int main(int argc, char **argv)
     static double min_native = -1;
     static const char *needed;
     static const char *resync_ref, *resync_out;
+    static const char *save_path, *load_path;   /* port: save states */
+    static long save_frame = -1, roundtrip, roundtrips;
     static long resync_lag;
     static int resync_jobs;
     for (int k = 1; k < argc; k++) {
@@ -668,6 +682,18 @@ int main(int argc, char **argv)
                 fprintf(stderr, "ct_boot: unknown --ref-quirk %s\n", argv[k]);
                 return 2;
             }
+        } else if (!strcmp(argv[k], "--save-state") && k + 1 < argc) {   /* port */
+            char *end;
+            save_frame = strtol(argv[++k], &end, 10);
+            if (*end != ':' || !end[1]) {
+                fprintf(stderr, "ct_boot: bad --save-state %s\n", argv[k]);
+                return 2;
+            }
+            save_path = end + 1;
+        } else if (!strcmp(argv[k], "--load-state") && k + 1 < argc) {
+            load_path = argv[++k];
+        } else if (!strcmp(argv[k], "--state-roundtrip") && k + 1 < argc && atol(argv[k + 1]) > 0) {
+            roundtrip = atol(argv[++k]);
         } else if (!strcmp(argv[k], "--behind")) {
             sched_set_behind(1);   /* port */
         } else if (!strcmp(argv[k], "--prov")) {
@@ -746,7 +772,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "usage: ct_boot [--frames N] [--dump DIR] [--shot-every N DIR] [--thumbs FILE] [--resync REF LAG OUT] [--needed-hw FILE] "
                             "[--min-nmis K] [--require-render] [--wav FILE] "
                             "[--require-audio] [--input F1-F2:BUTTONS] [--script FILE] "
-                            "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--scene FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE] [--behind] [--coop] [--coop-chars L] [--coop-chars3 L] [--coop-split] [--shot F:PATH] [--prov]\n");
+                            "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--scene FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE] [--behind] [--coop] [--coop-chars L] [--coop-chars3 L] [--coop-split] [--shot F:PATH] [--prov] [--save-state F:PATH] [--load-state PATH] [--state-roundtrip N]\n");
             return 2;
         }
     }
@@ -801,8 +827,45 @@ int main(int argc, char **argv)
     for (int p = 1; p < REPLAY_PORTS; p++)
         sched_set_joypad(p, replay_port_buttons(&input, p, 1));
     sched_set_reset_hook(script_reset);
-    while (sched_frame_count() < frames)
+    if (load_path) {   /* port: save states */
+        const char *why;
+        if (savestate_read_file(load_path, &why)) {
+            fprintf(stderr, "ct_boot: --load-state %s: %s\n", load_path, why);
+            return 2;
+        }
+        printf("ct_boot: state loaded from %s at frame %ld\n", load_path, sched_frame_count());
+    }
+    while (sched_frame_count() < frames) {
         sched_run_frame();
+        if (save_path && sched_frame_count() >= save_frame && !savestate_ready(NULL)) {
+            const char *why;
+            if (savestate_write_file(save_path, &why)) {
+                fprintf(stderr, "ct_boot: --save-state %s: %s\n", save_path, why);
+                return 1;
+            }
+            printf("ct_boot: state saved at frame %ld to %s\n", sched_frame_count(), save_path);
+            save_path = NULL;
+        }
+        if (roundtrip && sched_frame_count() >= (roundtrips + 1) * roundtrip &&
+            !savestate_ready(NULL)) {
+            size_t len;
+            const char *why = "?";
+            uint8_t *blob = savestate_save(&len, &why);
+            if (!blob || savestate_load(blob, len, &why)) {
+                fprintf(stderr, "ct_boot: --state-roundtrip at frame %ld: %s\n",
+                        sched_frame_count(), why);
+                return 1;
+            }
+            free(blob);
+            roundtrips++;
+        }
+    }
+    if (roundtrip)
+        printf("ct_boot: %ld state round trips\n", roundtrips);
+    if (save_path) {
+        printf("ct_boot: --save-state: no frame edge from %ld on could take one\n", save_frame);
+        return 1;
+    }
     resync_finish(sched_frame_count());
     if (wav)
         wav_close(wav);

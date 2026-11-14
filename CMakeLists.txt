@@ -63,7 +63,9 @@ add_library(ct_runtime STATIC runtime/cpu.c runtime/bus.c
     runtime/snes_adapter.c runtime/png.c runtime/wav.c runtime/hwlog.c
     runtime/cycles.c runtime/replay.c runtime/resample.c
     runtime/spc700_host.cpp
-    runtime/func_table.c runtime/module.c)   # port: table indirection, game modules
+    runtime/func_table.c runtime/module.c   # port: table indirection, game modules
+    runtime/sha1.c   # port: ROM identity (first run, save states)
+    runtime/savestate_io.c)   # port: save states' serialization
 target_include_directories(ct_runtime PUBLIC runtime)
 target_link_libraries(ct_runtime PUBLIC ct_snes_vendor m ${CMAKE_DL_LIBS})
 # port: our own context switch (runtime/compat/ucontext.h) where the C
@@ -108,7 +110,8 @@ target_link_libraries(ct_interp PUBLIC ct_runtime)
 target_compile_options(ct_interp PRIVATE ${CT_WARN})
 
 # ---- frame scheduler (sched.h) ----
-add_library(ct_sched STATIC runtime/sched.c runtime/overlay.c)
+add_library(ct_sched STATIC runtime/sched.c runtime/overlay.c
+    runtime/savestate.c)   # port: save states (savestate.h)
 target_link_libraries(ct_sched PUBLIC ct_interp)
 target_compile_options(ct_sched PRIVATE ${CT_WARN})
 
@@ -282,8 +285,7 @@ if(SDL2_FOUND)
         set(CT_GAME_ID ${ct_first_game} CACHE STRING "Default game for ct_sdl_engine (--game)")
     endif()
     ct_engine_exe(ct_sdl_engine ${CMAKE_SOURCE_DIR}/frontend/main.c
-        ${CMAKE_SOURCE_DIR}/frontend/firstrun.c ${CMAKE_SOURCE_DIR}/frontend/sha1.c
-        ${CMAKE_SOURCE_DIR}/frontend/saves.c)
+        ${CMAKE_SOURCE_DIR}/frontend/firstrun.c ${CMAKE_SOURCE_DIR}/frontend/saves.c)
     target_link_libraries(ct_sdl_engine ct_input ct_hd2d ct_packs)
     target_compile_definitions(ct_sdl_engine PRIVATE CT_FIRSTRUN
         CT_FIRSTRUN_GAME="${CT_GAME_ID}" CT_FIRSTRUN_DATA_DIR="${CT_ENGINE_DATA_DIR}")

@@ -18,6 +18,7 @@
 
 extern "C" {
 #include "apu.h"
+#include "savestate.h"   /* port: spc_host_state */
 #include "spc700_host.h"
 }
 
@@ -85,6 +86,11 @@ struct Host : ares::SPC700 {
     ucontext_t core_ctx, caller_ctx;
     void *stack = nullptr;
     bool started = false;
+    /* port: save states: no cycle of the current instruction has run yet
+       (it is suspended before its opcode fetch) */
+    bool boundary = true;
+    uint16_t insn_pc = 0;   /* PC at that instruction's start (fetch has moved it) */
+    bool entered = false;   /* the coroutine has run (it is suspended in a fetch) */
 
     void yield() { swapcontext(&core_ctx, &caller_ctx); }
     void begin() {
@@ -94,6 +100,7 @@ struct Host : ares::SPC700 {
     void tick() {
         apu_tick(apu);
         cycle++;
+        boundary = false;
     }
     void end() {
         if (spc_host_cycle_end)
@@ -127,15 +134,36 @@ Host host;
 
 void core_main()
 {
-    for (;;)
+    host.entered = true;   /* port: save states */
+    for (;;) {
+        host.boundary = true;   /* port: save states */
+        host.insn_pc = (uint16_t)host.r.pc.w;
         host.instruction();
+    }
+}
+
+/* port: a new core coroutine, suspended before its next instruction (a
+   reset, or a save state's load). */
+void core_start()
+{
+    enum { STACK = 256 * 1024 };
+    if (!host.stack)
+        host.stack = malloc(STACK);
+    getcontext(&host.core_ctx);
+    host.core_ctx.uc_stack.ss_sp = host.stack;
+    host.core_ctx.uc_stack.ss_size = STACK;
+    host.core_ctx.uc_link = nullptr;
+    makecontext(&host.core_ctx, core_main, 0);
+    host.started = true;
+    host.boundary = true;
+    host.entered = false;
+    host.insn_pc = (uint16_t)host.r.pc.w;
 }
 
 }  // namespace
 
 extern "C" void spc_host_reset(Apu *apu)
 {
-    enum { STACK = 256 * 1024 };
     host.apu = apu;
     host.cycle = host.target = 0;
     host.power();
@@ -145,14 +173,7 @@ extern "C" void spc_host_reset(Apu *apu)
     host.r.pc.w = (uint32_t)(apu_cpuRead(apu, 0xFFFE) | apu_cpuRead(apu, 0xFFFF) << 8);
     host.tick();
     host.tick();
-    if (!host.stack)
-        host.stack = malloc(STACK);
-    getcontext(&host.core_ctx);
-    host.core_ctx.uc_stack.ss_sp = host.stack;
-    host.core_ctx.uc_stack.ss_size = STACK;
-    host.core_ctx.uc_link = nullptr;
-    makecontext(&host.core_ctx, core_main, 0);
-    host.started = true;
+    core_start();
 }
 
 extern "C" void spc_host_run(uint32_t cycles)
@@ -175,4 +196,47 @@ extern "C" void spc_host_regs(uint8_t out[8])
     out[5] = (uint8_t)(host.r.pc.w >> 8);
     out[6] = (uint8_t)(uint32_t)host.r.p;
     out[7] = (uint8_t)(host.r.wait | host.r.stop << 1);
+}
+
+/* port: save states (savestate.h). Only at an instruction boundary
+   (spc_host_at_boundary): the core's registers, its cycle count and run
+   target; a load starts a new core coroutine there. The APU it drives
+   (RAM, DSP, timers) is the adapter's (snes_hw_state). A core in SLEEP or
+   STOP never reaches a boundary again; the game this was written for
+   never uses either. */
+extern "C" int spc_host_at_boundary(void) { return host.boundary; }
+
+extern "C" void spc_host_state(ss_io *s)
+{
+    /* At a boundary the core is suspended in its opcode fetch, whose PC++
+       has already happened: the instruction's own PC is saved. */
+    uint8_t r[10] = {(uint8_t)host.insn_pc, (uint8_t)(host.insn_pc >> 8),
+                    (uint8_t)host.r.ya.byte.l, (uint8_t)host.r.ya.byte.h, (uint8_t)host.r.x,
+                    (uint8_t)host.r.s, (uint8_t)(uint32_t)host.r.p, (uint8_t)host.r.wait,
+                    (uint8_t)host.r.stop, (uint8_t)host.entered};
+    uint64_t cycle = host.cycle, target = host.target;
+    ss_begin(s, "SPC7");
+    ss_bytes(s, r, sizeof r);
+    SS(s, cycle);
+    SS(s, target);
+    ss_end(s);
+    if (!SS_APPLY(s))
+        return;
+    host.r.pc.w = (uint16_t)(r[0] | r[1] << 8);
+    host.r.ya.byte.l = r[2];
+    host.r.ya.byte.h = r[3];
+    host.r.x = r[4];
+    host.r.s = r[5];
+    host.r.p = r[6];
+    host.r.wait = r[7] != 0;
+    host.r.stop = r[8] != 0;
+    host.cycle = cycle;
+    core_start();
+    if (r[9]) {
+        /* Suspended in its opcode fetch, as the saved core was (its PC
+           already past the opcode): run it to there, no cycle further. */
+        host.target = cycle;
+        swapcontext(&host.caller_ctx, &host.core_ctx);
+    }
+    host.target = target;
 }

@@ -267,6 +267,19 @@ add_test(NAME lockstep_soft_reset COMMAND ${Python3_EXECUTABLE}
     --script ${GAME_DIR}/test/replay/soft_reset.txt --expect-pc C28523)
 list(APPEND ct_game_tests soft_reset_replay lockstep_soft_reset)
 
+# port: save states (runtime/savestate.h, test/test_savestate.py): on the
+# Leene Square replay, a state saved at frame N and loaded must run on
+# exactly as the run that saved it (every frame's state hashes and
+# picture), saving must not change that run, and a save-and-load every K
+# frames must leave the whole run unchanged. Native (the save lands deep
+# in native code; the load resumes in the interpreter) and interpreted.
+add_test(NAME savestate_replay COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_savestate.py
+    $<TARGET_FILE:ct_boot> ${GAME_DIR}/test/replay/leene_square.txt 8500 9210 7)
+add_test(NAME savestate_replay_interp COMMAND ${Python3_EXECUTABLE}
+    ${GAME_DIR}/test/test_savestate.py $<TARGET_FILE:ct_boot>
+    ${GAME_DIR}/test/replay/leene_square.txt 3000 3600 5 --interp-only)
+list(APPEND ct_game_tests savestate_replay savestate_replay_interp)
+
 # Battle sprites must not drop out on alternate frames (Gato's fight from
 # its start; broken until OAMADD kept its own reload value, test_hw_map).
 add_test(NAME battle_no_flicker COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_flicker.py
