@@ -380,6 +380,17 @@ if(SDL2_FOUND)
         $<TARGET_FILE:ct_sdl> $<TARGET_FILE:ct_boot> ${GAME_DIR}/test/replay/leene_square.txt)
     set_tests_properties(sdl_qol PROPERTIES RUN_SERIAL TRUE)   # real-time parts
     list(APPEND ct_game_tests sdl_qol)
+    # port: the in-game menu (frontend/menu.h), opened by the menu action at
+    # frame 150, driven by synthetic controller events: the look and the
+    # volume change in settings.ini, no frame runs while it is open, and
+    # every frame hash matches a run without it. sdl_menu_hd2d does the
+    # same through the HD-2D renderer where SDL's offscreen driver has
+    # OpenGL (else it skips).
+    add_test(NAME sdl_menu COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_menu.py
+        $<TARGET_FILE:ct_sdl> 300 150)
+    add_test(NAME sdl_menu_hd2d COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_menu.py
+        $<TARGET_FILE:ct_sdl> 300 150 --hd2d)
+    list(APPEND ct_game_tests sdl_menu sdl_menu_hd2d)
 endif()
 
 set_tests_properties(${ct_game_tests} PROPERTIES LABELS rom ENVIRONMENT

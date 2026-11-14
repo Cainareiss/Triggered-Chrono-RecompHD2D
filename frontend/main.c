@@ -1380,9 +1380,9 @@ static void register_settings(void)
     settings_register(&(setting){
         .key = "preset", .label = "Look", .category = "Look", .type = SETTING_ENUM,
         .options = preset_labels, .values = preset_values, .count = HD2D_PRESETS, .get = get_preset,
-        .set = set_preset, .enabled = on_hd2d,
+        .set = set_preset,
         .help = "Original pixels, or the HD-2D renderer: light, depth of field, bloom; the 3D "
-                "diorama rebuilds maps in 3D. HD-2D renderer only. (F1, R3)"});
+                "diorama rebuilds maps in 3D. Used by the HD-2D renderer. (F1, R3)"});
     settings_register(&(setting){.key = "aspect", .label = "Aspect", .category = "Look",
                                  .type = SETTING_ENUM, .options = aspect_labels,
                                  .count = HD2D_ASPECTS, .get = get_aspect, .set = set_aspect,
