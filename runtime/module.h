@@ -14,6 +14,7 @@
 
 #include "cpu.h"
 #include "func_table.h"
+#include "rumble.h"
 
 /* Bump when CPU, the table entry layouts, or what generated code expects
    of the engine change. The ops.h helpers are compiled into the module, so
@@ -27,8 +28,10 @@
    (sched.h); 6 is the preferences API patches call (sched_pref: a module
    with the always-run patches needs it from the engine), and save
    states record it (savestate.h); 7 is the world map scene
-   (CT_SCENE_WORLD and ct_scene's overlay fields). */
-#define CT_MODULE_ABI 7
+   (CT_SCENE_WORLD and ct_scene's overlay fields); 8 is simulated rumble
+   (rumble.h: the rumble_event API patches call, and the frame hook
+   ct_module_info.rumble). */
+#define CT_MODULE_ABI 8
 
 /* ---- the scene: what the game is showing, for renderers (docs/SCENE.md) ----
    A module may describe its current view as a map of cells, tile layers
@@ -146,6 +149,8 @@ typedef struct {
     /* The scene export (ABI 4: these two fields and ct_scene's layout). */
     uint32_t scene_size;     /* sizeof(ct_scene) */
     ct_module_scene_fn scene;   /* NULL: no scene description */
+    /* The rumble frame hook (ABI 8, rumble.h). */
+    ct_module_rumble_fn rumble;   /* NULL: none */
 } ct_module_info;
 
 typedef const ct_module_info *(*ct_module_get_fn)(void);

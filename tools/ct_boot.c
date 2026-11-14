@@ -103,6 +103,11 @@
  *                  --coop-chars3 also turns on a third player (pad 3)
  * --always-run     port: the always-run preference on (sched_set_pref): a
  *                  game module's patches that honour it invert the run button
+ * --log-rumble FILE  port: simulated rumble on (runtime/rumble.h): write
+ *                  each event the game module and the detectors raise,
+ *                  "rumble frame F player P source tag low high ms", to
+ *                  FILE ("-": stdout). It only reads: the run is the same
+ * --rumble-sound   with --log-rumble, the sound detector too
  * --coop-split     --coop with the experimental split screen
  *                  (sched_set_views(2))
  * --shot F:PATH    write frame F as a PNG to PATH (repeatable); with
@@ -154,6 +159,7 @@
 #include "module.h"   /* port: --module */
 #include "savestate.h"   /* port: --save-state, --load-state */
 #include "tas_resync.h"
+#include "rumble.h"   /* port: --log-rumble */
 
 static jmp_buf fatal_jmp;
 static char fatal_msg[256];
@@ -400,6 +406,8 @@ static void write_thumb(FILE *out, const uint8_t *bgrx)
     fwrite(t, 1, sizeof t, out);
 }
 static FILE *wav, *hash_log, *ref_log;
+static FILE *rumble_log;   /* port: --log-rumble */
+static long rumble_count;
 static const char *wram_path, *vram_path, *aram_path, *scene_path;
 static long last_frame;
 static int dumped_state;
@@ -570,6 +578,17 @@ static void on_frame(long f)
         }
     if (wav)
         wav_write(wav, audio, n);
+    if (rumble_log) {   /* port: simulated rumble */
+        static const char *const src[] = {"game", "shake", "flash", "sound", "test"};
+        rumble_frame(f, audio, n, SCHED_AUDIO_HZ);
+        rumble_ev ev[16];
+        int k, got;
+        while ((got = rumble_take(ev, 16)) > 0)
+            for (k = 0; k < got; k++, rumble_count++)
+                fprintf(rumble_log, "rumble frame %ld player %d %s %s %u %u %u\n", ev[k].frame,
+                        ev[k].player, src[ev[k].source % 5], ev[k].tag, ev[k].low, ev[k].high,
+                        ev[k].ms);
+    }
     if (dump && png_dump_frame(dump, f, sched_frame(), SCHED_WIDTH, SCHED_HEIGHT) > 0)
         dumped++;
     if (shot_dir && f % shot_every == 0) {
@@ -755,6 +774,15 @@ int main(int argc, char **argv)
                 }
             if (player == 2)
                 sched_set_players(3);
+        } else if (!strcmp(argv[k], "--log-rumble") && k + 1 < argc) {   /* port */
+            const char *path = argv[++k];
+            if (!(rumble_log = strcmp(path, "-") ? fopen(path, "w") : stdout)) {
+                fprintf(stderr, "ct_boot: cannot write %s\n", path);
+                return 2;
+            }
+            rumble_set_enabled(1);
+        } else if (!strcmp(argv[k], "--rumble-sound")) {
+            rumble_set_detectors(1, 1);
         } else if (!strcmp(argv[k], "--always-run")) {
             sched_set_pref(SCHED_PREF_ALWAYS_RUN, 1);   /* port */
         } else if (!strcmp(argv[k], "--coop-split")) {
@@ -813,7 +841,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "usage: ct_boot [--frames N] [--dump DIR] [--shot-every N DIR] [--thumbs FILE] [--resync REF LAG OUT] [--needed-hw FILE] "
                             "[--min-nmis K] [--require-render] [--wav FILE] "
                             "[--require-audio] [--input F1-F2:BUTTONS] [--script FILE] "
-                            "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--scene FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE] [--behind] [--coop] [--coop-chars L] [--coop-chars3 L] [--coop-split] [--always-run] [--shot F:PATH] [--prov] [--save-state F:PATH] [--load-state PATH] [--state-roundtrip N]\n");
+                            "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--scene FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE] [--behind] [--coop] [--coop-chars L] [--coop-chars3 L] [--coop-split] [--always-run] [--log-rumble FILE] [--rumble-sound] [--shot F:PATH] [--prov] [--save-state F:PATH] [--load-state PATH] [--state-roundtrip N]\n");
             return 2;
         }
     }
@@ -910,6 +938,13 @@ int main(int argc, char **argv)
     resync_finish(sched_frame_count());
     if (wav)
         wav_close(wav);
+    if (rumble_log) {   /* port */
+        fprintf(stderr, "ct_boot: %ld rumble events\n", rumble_count);
+        if (rumble_log != stdout)
+            fclose(rumble_log);
+        else
+            fflush(stdout);
+    }
     if (hash_log)
         fclose(hash_log);
     if (thumbs)

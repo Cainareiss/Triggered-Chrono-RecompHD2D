@@ -3864,6 +3864,7 @@ addr = 0xC03C11
 states = ["m1x0"]
 e = 0
 module = "bankc0"
+patch = "rumble_sound"   # port: rumble (game/ct/rumble.c)
 
 [[func]]
 name = "EventCmd_PlayMusic"
@@ -3934,6 +3935,7 @@ addr = 0xC03D84
 states = ["m1x0"]
 e = 0
 module = "bankc0"
+patch = "rumble_quake"   # port: rumble (game/ct/rumble.c)
 
 [[func]]
 name = "EventCmd_CopyTiles"
@@ -6466,6 +6468,7 @@ addr = 0xFDDB97
 states = ["m1x0"]
 e = 0
 module = "bankfd"
+patch = "rumble_gate"   # port: rumble (game/ct/rumble.c)
 
 [[func]]
 name = "Warp_BackupWram7F"
@@ -8114,6 +8117,7 @@ addr = 0xC1EC7F
 states = ["m1x0"]
 e = 0
 module = "bankc1"
+patch = "rumble_results"   # port: rumble (game/ct/rumble.c)
 
 [[func]]
 name = "Battle_InitCombatantRecords"

@@ -64,6 +64,7 @@ add_library(ct_runtime STATIC runtime/cpu.c runtime/bus.c
     runtime/cycles.c runtime/replay.c runtime/resample.c
     runtime/spc700_host.cpp
     runtime/func_table.c runtime/module.c   # port: table indirection, game modules
+    runtime/rumble.c   # port: simulated rumble
     runtime/sha1.c   # port: ROM identity (first run, save states)
     runtime/savestate_io.c)   # port: save states' serialization
 target_include_directories(ct_runtime PUBLIC runtime)
@@ -376,7 +377,7 @@ set_tests_properties(runtime_fatal_unhooked PROPERTIES PASS_REGULAR_EXPRESSION "
 set_tests_properties(runtime_fatal_entry PROPERTIES PASS_REGULAR_EXPRESSION "ct: \\$C08100: entry state m0 x0 e0, expected m1 x0")
 
 foreach(t snes_bus hw_map interp_modes interp_system sched stack_guard replay resample dsp
-        decimal)   # port: decimal (test/test_decimal.c)
+        decimal rumble)   # port: decimal (test/test_decimal.c), rumble (test/test_rumble.c)
     ct_engine_test(test_${t} test/test_${t}.c)
     add_test(NAME ${t} COMMAND test_${t})
 endforeach()

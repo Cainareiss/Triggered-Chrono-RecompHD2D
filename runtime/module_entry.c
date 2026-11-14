@@ -13,6 +13,8 @@ __attribute__((visibility("default"))) const ct_module_info *ct_module_get(void)
 /* The game's scene description, if it has one (a weak reference: NULL
    when the game defines none). */
 __attribute__((weak)) int ct_game_scene(ct_scene *out);
+/* Its rumble frame hook (rumble.h), the same way. */
+__attribute__((weak)) int ct_game_rumble(long frame);
 
 const ct_module_info *ct_module_get(void)
 {
@@ -21,7 +23,7 @@ const ct_module_info *ct_module_get(void)
         CT_MODULE_ABI, sizeof(CPU), sizeof(ct_func), sizeof(ct_overlay_func),
         {ct_funcs, ct_func_count, ct_externs, ct_extern_count, ct_jumptables,
          ct_jumptable_count, ct_overlay_funcs, ct_overlay_func_count},
-        sizeof(ct_scene), ct_game_scene,
+        sizeof(ct_scene), ct_game_scene, ct_game_rumble,
     };
     return &info;
 }
