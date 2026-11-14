@@ -87,6 +87,11 @@
  *       messages, in both pictures, show the buttons of the device last
  *       used (glyphs.h, osd_text.h); settings.ini gyro=on aims the 3D
  *       diorama's camera with pad 1's gyro.
+ *   quality of life (frontend/qol.h, docs/USER-GUIDE.md): save states
+ *       (quick and 4 slots), resume where you left off (on quit, SIGTERM
+ *       and sleep), fast-forward, turbo, auto-pause, battery mode,
+ *       screenshots, always run, the plain picture's integer scale and
+ *       CRT look; --import-srm / --export-srm. qol_usage lists the keys.
  *   --coop | --no-coop
  *       two players (docs/USER-GUIDE.md, co-op): a second controller plays
  *       SNES pad 2, and the game module's co-op patches share the game
@@ -154,6 +159,7 @@
 #include "touch.h"      /* port: on-screen touch controller */
 #include "hd2d/osd_font.h" /* port: the co-op turn tag */
 #include "touch_gl.h"
+#include "qol.h"        /* port: quality of life (save states, fast-forward, ...) */
 
 #define RATE 48000
 /* Device buffer: 960 samples, exactly 20 ms at 48 kHz. Queue target: two
@@ -433,8 +439,11 @@ static touch_opts touch_o = {0, 15};
 /* port: where the picture is: HD-2D's aspect, or the plain integer scale. */
 static touch_rect picture_rect(int w, int h)
 {
-    if (!hd2d_mode)
-        return touch_picture_plain(w, h);
+    if (!hd2d_mode) {   /* port: QOL integer scale or fit */
+        touch_rect r;
+        qol_picture_rect(w, h, &r.x, &r.y, &r.w, &r.h);
+        return r;
+    }
     int a = hd2d_aspect();
     return touch_picture_aspect(w, h, a == HD2D_ASPECT_PIXEL ? (SCHED_WIDTH * 8.0 / 7.0) / SCHED_HEIGHT
                                       : a == HD2D_ASPECT_STRETCH ? 0.0 : 4.0 / 3.0);
@@ -502,13 +511,13 @@ static void present_plain(const uint8_t *bgrx)
         SDL_RenderPresent(ren);
         return;
     }
-    touch_rect p = touch_picture_plain(w, h);
-    SDL_Rect dst = {p.x, p.y, p.w, p.h};
-    SDL_RenderCopy(ren, tex, NULL, &dst);
+    qol_plain_draw(ren, tex, w, h);   /* port: QOL integer scale or fit, CRT look */
     touch_draw_sdl(ren);
     {   /* port: the message, placed and sized as HD-2D's */
-        int s = p.h / 180 > 2 ? p.h / 180 : 2;
-        osd_sdl_draw(ren, p.x + s * 4, p.y + s * 4, s, 1);
+        int px, py, pw, ph;
+        qol_picture_rect(w, h, &px, &py, &pw, &ph);
+        int s = ph / 180 > 2 ? ph / 180 : 2;
+        osd_sdl_draw(ren, px + s * 4, py + s * 4, s, 1);
     }
     SDL_RenderPresent(ren);
 }
@@ -844,6 +853,11 @@ static void settings_load(void)
             gyro_strength = (float)atof(val);
         else if (sscanf(line, "steam_hidapi=%63s", val) == 1)   /* port: input_sdl_hints */
             steam_hidapi = !(!strcmp(val, "off") || !strcmp(val, "0"));
+        else {   /* port: QOL settings (qol.h) */
+            char key[32];
+            if (sscanf(line, "%31[^=]=%63s", key, val) == 2)
+                qol_setting(key, val);
+        }
     }
     if (f)
         fclose(f);
@@ -856,7 +870,8 @@ static void settings_save(void)
     FILE *f = path ? fopen(path, "w") : NULL;
     if (f) {
         fprintf(f, "preset=%s\naspect=%d\n",
-                hd2d_preset_name(preset_forced >= 0 ? preset_forced : hd2d_preset()), hd2d_aspect());
+                hd2d_preset_name(preset_forced >= 0 ? preset_forced
+                                                    : qol_user_preset(hd2d_preset())), hd2d_aspect());
         if (n_pack_names) {   /* port: asset packs, in priority order */
             fputs("packs=", f);
             for (int k = 0; k < n_pack_names; k++)
@@ -875,6 +890,7 @@ static void settings_save(void)
         bindings_write(bindings_current(), f);   /* port: back buttons, keys */
         fprintf(f, "gyro=%s\ngyro_strength=%.2f\nsteam_hidapi=%s\n", gyro_on ? "on" : "off",
                 gyro_strength, steam_hidapi ? "on" : "off");
+        qol_settings_write(f);   /* port: QOL */
         fclose(f);
     }
     free(path);
@@ -962,6 +978,8 @@ static void poll_input(long f)
     while (SDL_PollEvent(&ev)) {
         if (touch_event(&ev, f))
             continue;   /* port: a touch, used by the overlay */
+        if (qol_event(&ev, f))
+            continue;   /* port: QOL keys, the pause and the resume prompt */
         if (log_input && (ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) && !ev.key.repeat)
             fprintf(stderr, "ct_sdl: frame %ld key %s %s (scancode %d)\n", f,
                     SDL_GetScancodeName(ev.key.keysym.scancode),
@@ -1081,12 +1099,12 @@ static void poll_input(long f)
    (co-op) and the script's "pN" pads likewise. */
 static void set_input(long f)
 {
-    uint16_t b = live_buttons | replay_buttons(&script, f);
+    uint16_t b = qol_buttons(0, live_buttons, f) | replay_buttons(&script, f);   /* port: QOL turbo */
     sched_set_joypad(0, b);
     replay_rec_frame(&rec, f, b);
     for (int p = 1; p < REPLAY_PORTS; p++) {
         uint16_t bp = (uint16_t)(replay_port_buttons(&script, p, f) |
-                                 (p == 1 ? live_buttons2 : p == 2 ? live_buttons3 : 0));
+                                 qol_buttons(p, p == 1 ? live_buttons2 : p == 2 ? live_buttons3 : 0, f));
         sched_set_joypad(p, bp);
         if (bp || p == 1)
             replay_rec_port(&rec, p, f, bp);
@@ -1099,8 +1117,8 @@ static void queue_audio(long f)
 {
     static int16_t in[4096 * 2], out[8192 * 2];
     int n_in = sched_audio_take(in, 4096);
-    if (!audio)
-        return;
+    if (!audio || qol_audio_muted())
+        return;   /* port: QOL fast-forward drops the sound */
     unsigned level = SDL_GetQueuedAudioSize(audio) / 4;
     if (playing && !level)
         audio_underruns++;
@@ -1215,9 +1233,19 @@ static void choose_pacing(void)
    its audio, wait for its time slot, then read input for frame f+1. Runs
    at the same point whether the CPU is interpreted or inside a native
    function, so a native call spanning frames can't bunch them up. */
+/* port: draw this frame (also while paused: QOL). */
+static void present_now(void)
+{
+    if (hd2d_mode)
+        present_hd2d();
+    else
+        present_plain(turn_tag(sched_frame()));   /* port: with the touch overlay, the co-op tag */
+}
+
 static void on_frame(long f)
 {
     exit_frame = f;
+    int show = qol_frame(f);   /* port: QOL: fast-forward and the battery's 30 Hz skip some */
     queue_audio(f);
     if (pace_vsync && playing && audio && !fast) {
         /* port: a frame that missed its refresh is lost under vsync, and the
@@ -1250,7 +1278,7 @@ static void on_frame(long f)
         }
         last_turn = t;
     }
-    if (hd2d_mode) {
+    if (hd2d_mode && show) {
         /* port: this frame's asset pack replacements */
         if (packs_active() && sched_prov()) {
             uint64_t t0 = SDL_GetPerformanceCounter();
@@ -1262,20 +1290,19 @@ static void on_frame(long f)
         } else {
             hd2d_pack_map(NULL);
         }
-        present_hd2d();
-        /* The PPU's behind G-buffer only while the look uses it. */
-        sched_set_behind(hd2d_wants_behind());
-    } else {
-        present_plain(turn_tag(fb));   /* port: with the touch overlay, the co-op tag */
     }
+    if (show)
+        present_now();
+    if (hd2d_mode)   /* The PPU's behind G-buffer only while the look uses it. */
+        sched_set_behind(hd2d_wants_behind());
     if (n_shots)
         take_shots(f);
     if (pack_dump)   /* port: new tiles and sprites into the pack */
         packs_dump_frame(f, sched_prov(), sched_prov_mem());
     if (dump)
         png_dump_frame(dump, f, fb, SCHED_WIDTH, SCHED_HEIGHT);
-    if (!fast) {
-        next_frame += perf_freq * FRAME_NS / 1000000000ull;
+    if (!fast) {   /* port: QOL fast-forward: qol_speed() frames per frame time */
+        next_frame += perf_freq * FRAME_NS / 1000000000ull / (unsigned)qol_speed();
         uint64_t now = SDL_GetPerformanceCounter();
         if (pace_vsync) {
             /* port: the swap above waited for the display; the timer only
@@ -1490,6 +1517,49 @@ static void usage(FILE *out)
           "  --no-coop change it. --coop-split (experimental): a second view when\n"
           "  player 2 walks away.\n",
           out);
+    qol_usage(out);   /* port: QOL */
+}
+
+/* ---- port: what QOL (qol.h) borrows ---- */
+
+static void qol_audio_restart(void)
+{
+    if (!audio)
+        return;
+    SDL_PauseAudioDevice(audio, 1);
+    SDL_ClearQueuedAudio(audio);
+    playing = 0;   /* playback starts again once the queue is back at its target */
+    level_avg = AUDIO_TARGET;
+    rs_init(&rs, SCHED_AUDIO_HZ, RATE);
+}
+
+static void qol_pacing_reset(void)
+{
+    next_frame = SDL_GetPerformanceCounter();
+    pace.last = 0;
+}
+
+static void qol_poll(void)
+{
+    poll_input(sched_frame_count());
+}
+
+/* What is on screen, at the window's size. */
+static int qol_shot(const char *path)
+{
+    int w, h;
+    if (!hd2d_mode) {
+        SDL_GetRendererOutputSize(ren, &w, &h);
+        SDL_UpdateTexture(tex, NULL, turn_tag(sched_frame()), SCHED_WIDTH * 4);
+        return qol_plain_shot(ren, tex, w, h, path);
+    }
+    SDL_GL_GetDrawableSize(win, &w, &h);
+    int sw = shot_w, sh = shot_h;
+    shot_w = w, shot_h = h;
+    int ok = write_shot(path, sched_frame(), sched_layers(), sched_behind(),
+                        sched_behind_layers(), sched_ppu_state_get());
+    shot_w = sw, shot_h = sh;
+    return ok ? 0 : -1;
 }
 
 int main(int argc, char **argv)
@@ -1506,6 +1576,8 @@ int main(int argc, char **argv)
 #endif
     static const char *save_path;   /* port: --save */
     static int no_save;
+    static const char *import_srm, *export_srm;   /* port: QOL */
+    static int recording, scripted;
     settings_load();   /* port: saved HD-2D settings; options below override */
     for (int k = 1; k < argc; k++) {
         if (!strcmp(argv[k], "--scale") && k + 1 < argc)
@@ -1538,11 +1610,13 @@ int main(int argc, char **argv)
                 return 2;
             }
             atexit(close_record);
+            recording = 1;
         } else if (!strcmp(argv[k], "--script") && k + 1 < argc) {
             if (replay_load(&script, argv[++k])) {
                 fprintf(stderr, "ct_sdl: bad --script %s\n", argv[k]);
                 return 2;
             }
+            scripted = 1;
         } else if (!strcmp(argv[k], "--module") && k + 1 < argc) {
             module_path = argv[++k];
         } else if (!strcmp(argv[k], "--rom") && k + 1 < argc) {
@@ -1645,10 +1719,24 @@ int main(int argc, char **argv)
         } else if (!strcmp(argv[k], "--help") || !strcmp(argv[k], "-h")) {
             usage(stdout);
             return 0;
+        } else if (!strcmp(argv[k], "--import-srm") && k + 1 < argc) {   /* port: QOL */
+            import_srm = argv[++k];
+        } else if (!strcmp(argv[k], "--export-srm") && k + 1 < argc) {
+            export_srm = argv[++k];
+        } else if (qol_option(argc, argv, &k) > 0) {
+            /* port: QOL options (qol.h); a bad one is a usage error below */
         } else {
             usage(stderr);
             return 2;
         }
+    }
+    if (import_srm || export_srm) {   /* port: QOL: a save RAM file in or out, then stop */
+        if (import_srm && export_srm) {
+            fprintf(stderr, "ct_sdl: --import-srm or --export-srm, not both\n");
+            return 2;
+        }
+        return import_srm ? saves_import(import_srm, save_path, game_id)
+                          : saves_export(export_srm, save_path, game_id);
     }
     if (scale < 1)
         scale = 1;
@@ -1857,16 +1945,29 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    {   /* port: QOL (qol.h): save states, resume, fast-forward, ... */
+        static const qol_host qh = {qol_shot, qol_audio_restart, present_now, qol_poll,
+                                    qol_pacing_reset, settings_save};
+        qol_init(&qh, game_id, game_mode, hd2d_mode, !no_save, recording, scripted);
+    }
     key_filter_init(&keys);
     perf_freq = SDL_GetPerformanceFrequency();
     pace.last = 0;   /* port: the setup screens' time is not a frame */
     next_frame = SDL_GetPerformanceCounter();
-    poll_input(0);
-    set_input(1);
+    poll_input(sched_frame_count());   /* port: a loaded state's frame (QOL), else 0 */
+    set_input(sched_frame_count() + 1);
     /* Everything per frame happens in on_frame, at the frame edge; this
-       loop only keeps the scheduler running. */
-    while (running && (frames < 0 || sched_frame_count() < frames))
+       loop only keeps the scheduler running. port: QOL pauses it (qol_idle)
+       and saves and loads states between frames. */
+    while (running && (frames < 0 || sched_frame_count() < frames)) {
+        if (qol_paused()) {
+            qol_idle();
+            continue;
+        }
         sched_run_frame();
+        qol_after_frame();
+    }
+    qol_quit(!running);   /* port: QOL: the resume point, on a quit */
 
     if (running)
         set_exit_reason("--frames %ld reached", frames);

@@ -63,7 +63,9 @@ add_library(ct_runtime STATIC runtime/cpu.c runtime/bus.c
     runtime/snes_adapter.c runtime/png.c runtime/wav.c runtime/hwlog.c
     runtime/cycles.c runtime/replay.c runtime/resample.c
     runtime/spc700_host.cpp
-    runtime/func_table.c runtime/module.c)   # port: table indirection, game modules
+    runtime/func_table.c runtime/module.c   # port: table indirection, game modules
+    runtime/sha1.c   # port: ROM identity (first run, save states)
+    runtime/savestate_io.c)   # port: save states' serialization
 target_include_directories(ct_runtime PUBLIC runtime)
 target_link_libraries(ct_runtime PUBLIC ct_snes_vendor m ${CMAKE_DL_LIBS})
 # port: our own context switch (runtime/compat/ucontext.h) where the C
@@ -108,7 +110,8 @@ target_link_libraries(ct_interp PUBLIC ct_runtime)
 target_compile_options(ct_interp PRIVATE ${CT_WARN})
 
 # ---- frame scheduler (sched.h) ----
-add_library(ct_sched STATIC runtime/sched.c runtime/overlay.c)
+add_library(ct_sched STATIC runtime/sched.c runtime/overlay.c
+    runtime/savestate.c)   # port: save states (savestate.h)
 target_link_libraries(ct_sched PUBLIC ct_interp)
 target_compile_options(ct_sched PRIVATE ${CT_WARN})
 
@@ -257,7 +260,8 @@ if(CT_ANDROID)
     # Python or compiler on a phone): the app passes --rom and --module
     # (android/, ImportActivity). Every engine object is linked in and
     # exported, as for ct_sdl_engine, for the module to bind to.
-    add_library(main SHARED ${CMAKE_SOURCE_DIR}/frontend/main.c)
+    add_library(main SHARED ${CMAKE_SOURCE_DIR}/frontend/main.c
+        ${CMAKE_SOURCE_DIR}/frontend/qol.c)   # port: quality of life (qol.h)
     target_include_directories(main PRIVATE ${CMAKE_SOURCE_DIR}/test)
     target_link_libraries(main ct_tables_empty
         "$<LINK_LIBRARY:WHOLE_ARCHIVE,ct_sched,ct_interp,ct_runtime>" ct_input ct_hd2d
@@ -282,8 +286,8 @@ if(SDL2_FOUND)
         set(CT_GAME_ID ${ct_first_game} CACHE STRING "Default game for ct_sdl_engine (--game)")
     endif()
     ct_engine_exe(ct_sdl_engine ${CMAKE_SOURCE_DIR}/frontend/main.c
-        ${CMAKE_SOURCE_DIR}/frontend/firstrun.c ${CMAKE_SOURCE_DIR}/frontend/sha1.c
-        ${CMAKE_SOURCE_DIR}/frontend/saves.c)
+        ${CMAKE_SOURCE_DIR}/frontend/firstrun.c ${CMAKE_SOURCE_DIR}/frontend/saves.c
+        ${CMAKE_SOURCE_DIR}/frontend/qol.c)   # port: quality of life (qol.h)
     target_link_libraries(ct_sdl_engine ct_input ct_hd2d ct_packs)
     target_compile_definitions(ct_sdl_engine PRIVATE CT_FIRSTRUN
         CT_FIRSTRUN_GAME="${CT_GAME_ID}" CT_FIRSTRUN_DATA_DIR="${CT_ENGINE_DATA_DIR}")
@@ -382,6 +386,13 @@ if(SDL2_FOUND)
     target_link_libraries(test_actions ct_input ct_runtime)
     target_compile_options(test_actions PRIVATE ${CT_WARN})
     add_test(NAME actions COMMAND test_actions)
+    # port: the quality-of-life helpers (frontend/qol.h): battery, pictures
+    # folder, settings, turbo, the plain picture's rectangle
+    add_executable(test_qol test/test_qol.c frontend/qol.c frontend/saves.c)
+    target_include_directories(test_qol PRIVATE test)
+    target_link_libraries(test_qol ct_input ct_hd2d ct_sched ct_tables_empty)
+    target_compile_options(test_qol PRIVATE ${CT_WARN})
+    add_test(NAME qol COMMAND test_qol)
     # The 3D diorama's geometry from a scene (frontend/hd2d/scene3d.h)
     add_executable(test_scene3d test/test_scene3d.c)
     target_link_libraries(test_scene3d ct_hd2d)

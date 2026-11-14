@@ -11,6 +11,9 @@
 #include "dma.h"
 #include "ppu.h"
 #include "snes.h"
+#include "savestate.h"   /* port: snes_hw_state */
+#include <stddef.h>
+#include <stdlib.h>
 
 static Ppu *g_ppu;
 static Dma *g_dma;
@@ -486,6 +489,55 @@ void snes_hw_soft_reset(void)
     for (int t = 0; t < 3; t++)
         g_apu->timer[t].counter = 0;
     spc_host_reset(g_apu);
+}
+
+/* port: save states (savestate.h): the PPU, DMA/HDMA and APU structs as
+   they are in memory, without their pointers (the PPU's render targets
+   stay this process's), and this adapter's latches. The SPC700 core
+   saves itself (spc700_host.cpp). */
+void snes_hw_state(ss_io *s)
+{
+    static Ppu *tmp;
+    if (!tmp && !(tmp = malloc(sizeof *tmp))) {
+        s->err = s->err ? s->err : "out of memory";
+        return;
+    }
+    ss_begin(s, "PPU ");
+    if (!s->loading) {
+        *tmp = *g_ppu;
+        tmp->renderBuffer = tmp->layerBuffer = tmp->behindColor = tmp->behindLayer = NULL;
+        tmp->provBuffer = NULL;
+    }
+    ss_bytes(s, tmp, sizeof *tmp);
+    if (SS_APPLY(s)) {
+        uint8_t *render = g_ppu->renderBuffer, *layer = g_ppu->layerBuffer;
+        uint8_t *bcolor = g_ppu->behindColor, *blayer = g_ppu->behindLayer;
+        PpuProv *prov = g_ppu->provBuffer;
+        *g_ppu = *tmp;
+        g_ppu->provBuffer = prov;
+        g_ppu->renderBuffer = render;
+        g_ppu->layerBuffer = layer;
+        g_ppu->behindColor = bcolor;
+        g_ppu->behindLayer = blayer;
+    }
+    SS(s, ppu1_mdr);
+    SS(s, ppu2_mdr);
+    SS(s, vram_latch);
+    SS(s, oamadd_reload);
+    ss_end(s);
+
+    ss_begin(s, "DMA ");
+    ss_bytes(s, (uint8_t *)g_dma + offsetof(Dma, channel), sizeof(Dma) - offsetof(Dma, channel));
+    ss_end(s);
+
+    ss_begin(s, "APU ");
+    ss_bytes(s, (uint8_t *)g_apu + offsetof(Apu, ram), sizeof(Apu) - offsetof(Apu, ram));
+    ss_bytes(s, (uint8_t *)g_apu->dsp + offsetof(Dsp, ram), sizeof(Dsp) - offsetof(Dsp, ram));
+    ss_bytes(s, (uint8_t *)g_apu->spc + offsetof(Spc, a), sizeof(Spc) - offsetof(Spc, a));
+    ss_bytes(s, port_new, sizeof port_new);
+    ss_bytes(s, port_vis, sizeof port_vis);
+    SS(s, port_pending);
+    ss_end(s);
 }
 
 Ppu *snes_hw_ppu(void) { return g_ppu; }

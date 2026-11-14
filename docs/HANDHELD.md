@@ -123,10 +123,10 @@ are not SNES buttons. They drive the frontend instead:
 | R5 (lower right) | F10 | Menu (for now a message listing these buttons) |
 | | F8 | Screenshot |
 
-Quick save, quick load, fast-forward and the screenshot are hooks for now: pressing them
-shows "*Quick save: not available yet*" until those features land. The keys avoid F1-F4
-and F11 (look, debug view, aspect, co-op, fullscreen), F5 (the asset packs' reload) and
-F12 (Steam's screenshot key).
+What they do, and the rest of the quality-of-life features, is in [Quality of life on a
+handheld](#quality-of-life-on-a-handheld) below. The menu is still a message listing the
+buttons. The keys avoid F1-F4 and F11 (look, debug view, aspect, co-op, fullscreen), F5
+(the asset packs' reload) and F12 (Steam's screenshot key).
 
 To change them, edit `settings.ini` (in `~/.local/share/ct-recomp/hd2d/`) while the game
 is closed:
@@ -270,6 +270,42 @@ smooth it looks depends on the refresh rate:
 - **`--log-pacing`:** prints frame-time statistics when started from a terminal, and
   every exit prints them for the whole run.
 
+## Quality of life on a handheld
+
+The full description is in the [player's guide](USER-GUIDE.md#quality-of-life). On a
+Deck or an Ally:
+
+| Feature | How | Default |
+| --- | --- | --- |
+| Quick save / quick load | L4 / R4 | on |
+| Save slots 1-4 | Shift+F6 / Shift+F9, F7 picks the slot (keyboard) | |
+| Fast-forward | hold L5 (x3, sound muted; `ffwd_speed=2..4`) | |
+| Resume where you left off | quit (View+Menu, Steam's Exit Game), or put the handheld to sleep; the next start asks **Resume? [A] yes [B] no** | `resume=on` |
+| Pause when a controller goes | press a button to go on | `pause_on_disconnect=on` |
+| Pause when the window loses focus | | `pause_on_focus_loss=auto`: off in Game Mode |
+| Battery mode | `battery_mode=light` (deck look on battery) or `saver` (also a 30 Hz picture, game at 60) | `off` |
+| Screenshot | F8, or Steam's own (Steam + R1) | |
+| Always run | Caps Lock, or `always_run=on` | `off` |
+| Turbo | Ctrl+T while holding the buttons, or `turbo=a,b` | none |
+| Original picture: integer scale, CRT look | `integer_scale=on`, `crt=on` (Ctrl+R) | integer on, CRT off |
+
+All settings are in `~/.local/share/ct-recomp/hd2d/settings.ini`; edit it while the game
+is closed.
+
+- **Steam's Exit Game** stops the program with SIGTERM: the engine treats it as a quit,
+  saves the resume point (a few frames' work) and your in-game save, and exits.
+- **Sleep** (the power button): the engine hears about it from logind and writes the
+  resume point before the system sleeps (it holds a "delay" lock for that, at most a few
+  seconds). The sound stops first, so there is no buzz, and on waking it starts again
+  cleanly; the frame timer starts over instead of racing to catch up. If the battery runs
+  out while asleep, the next start offers that resume point.
+- **Focus in Game Mode:** gamescope moves the focus around (the Steam overlay, the
+  quick-access menu), so pausing on focus loss is off there unless you set
+  `pause_on_focus_loss=on`.
+- **Battery:** the engine reads `/sys/class/power_supply` every few seconds. The Deck's
+  and the Ally's USB-C chargers count as outside power. `saver` halves the GPU's work
+  (the HD-2D picture is drawn every other frame), the game itself keeps its 60 Hz timing.
+
 ## Saves and where files live
 
 Everything is in `~/.local/share/ct-recomp/`:
@@ -280,7 +316,8 @@ Everything is in `~/.local/share/ct-recomp/`:
 | `ct/ct_game.stamp` | What it was built from |
 | `ct/rom_path` | Where your ROM is |
 | `ct/ct.srm`, `ct/ct.srm.bak` | Your in-game saves, and the copy before the last write |
-| `hd2d/settings.ini` | The look and the picture shape |
+| `ct/states/` | Save states, the resume point (`auto.state`) and their pictures |
+| `hd2d/settings.ini` | The look, the picture shape, the buttons and the settings above |
 
 Saves are written a few seconds after you save in the game, and again on quit,
 including through the Steam button. To back them up, copy `ct/ct.srm`. More detail is in
@@ -322,3 +359,11 @@ DualSense and Switch Pro pads) against sdl2-compat 2.32.74 / SDL 3.4.20, and the
 pictures in headless HD-2D and plain renders. Not tried on real hardware: SDL's
 Deck and Steam Controller drivers in Desktop Mode, the 2026 Steam Controller, a real gyro,
 and the Steam Input template.
+
+The quality-of-life features were tested headless (SDL's dummy drivers, scripted with
+`--qol-action`; `sdl_qol` and `savestate_replay` in ctest) and on a desktop, including
+a real logind delay lock (`systemd-inhibit --list` shows `ct-recomp ... sleep ... delay`).
+Not tried on real hardware: an actual suspend and wake on a Deck or an Ally (the resume
+point written before sleep, the sound after waking), Steam's Exit Game in Game Mode,
+the battery mode's switch on a real unplug, and how the 30 Hz picture looks under
+gamescope.

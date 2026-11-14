@@ -4,6 +4,7 @@
 #include "bus.h"
 #include "cycles.h"
 #include "func_table.h"
+#include "savestate.h"   /* port: interp_state */
 
 typedef struct {
     uint32_t a;
@@ -774,6 +775,14 @@ unsigned interp_interrupt(CPU *c, int nmi)
 int interp_waiting(void) { return waiting; }
 
 void interp_wake(void) { waiting = 0; }
+
+/* port: save states (savestate.h): a WAI waiting for its interrupt. */
+void interp_state(ss_io *s)
+{
+    ss_begin(s, "INTP");
+    SS(s, waiting);
+    ss_end(s);
+}
 
 void interp_reset(CPU *c)
 {

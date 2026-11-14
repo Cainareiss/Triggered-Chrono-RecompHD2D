@@ -65,6 +65,11 @@ With one player, every co-op patch returns 0 without touching memory. Frame hash
 match a build without the patches: the gato_win replay's 13,950 per-frame hash lines are
 identical. Module ABI 5 added the patches and that API.
 
+The player's preferences come through `sched.h` too (`sched_pref`): the always-run patches
+(`game/ct/always_run.c`, on the eight field direction routines) read
+`SCHED_PREF_ALWAYS_RUN`, and return 0 when it is off. Module ABI 6 added that API: a
+module with those patches needs it from the engine, so an older module is rebuilt.
+
 ## Guarantees
 
 - `module_parity` (ctest, needs the ROM): the engine plus the module matches the static

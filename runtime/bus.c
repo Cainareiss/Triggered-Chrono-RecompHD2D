@@ -2,6 +2,7 @@
 #include "hwlog.h"
 #include "cpu.h"
 #include "snes_adapter.h"
+#include "savestate.h"   /* port: bus_state */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -364,4 +365,22 @@ void write16_rmw(uint32_t a, uint16_t v)
 {
     write8((a + 1) & 0xFFFFFF, (uint8_t)(v >> 8));
     write8(a, (uint8_t)v);
+}
+
+/* port: save states (savestate.h): WRAM, SRAM, the multiply/divide unit,
+   the WRAM port address, MEMSEL and the data bus. A load marks every WRAM
+   page written, so native overlays recheck their bytes. */
+void bus_state(ss_io *s)
+{
+    ss_begin(s, "BUS ");
+    ss_bytes(s, wram, sizeof wram);
+    ss_bytes(s, sram, sizeof sram);
+    SS(s, alu);
+    SS(s, wram_port_addr);
+    SS(s, memsel);
+    SS(s, bus_mdr);
+    ss_end(s);
+    if (SS_APPLY(s))
+        for (unsigned p = 0; p < CT_WRAM_SIZE >> 8; p++)
+            ct_wram_gen[p]++;
 }

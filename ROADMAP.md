@@ -34,9 +34,9 @@ milestone. MSU-1 comes first.
 ## Saves
 | Feature | Where | Issue |
 |---|---|---|
-| Save states | engine | #35 |
+| Save states (done: `runtime/savestate.h`, slots and resume in `frontend/qol.h`) | engine | #35 |
 | Autosave on every scene change, in CT's save format, 3 rotating slots; skipped during cutscenes, battles and event scripts | both | #45, #46 |
-| `.srm` import from Snes9x, bsnes and Mesen (ships with PC Release) | engine | #56 |
+| `.srm` import from Snes9x, bsnes and Mesen (ships with PC Release) (done: `--import-srm`, `--export-srm`) | engine | #56 |
 | Cloud saves | engine | #57 |
 
 ## Cheats, patches, mods

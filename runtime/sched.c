@@ -16,7 +16,9 @@
 #include "interp.h"
 #include "overlay.h"
 #include "ppu.h"
+#include "savestate.h"   /* port: sched_state */
 #include "snes_adapter.h"
+#include "spc700_host.h"
 
 static CPU *cpu;
 static uint8_t fb[SCHED_WIDTH * SCHED_HEIGHT * 4];        /* PPU draws here */
@@ -65,6 +67,12 @@ static int wai_over;             /* WAI: an interrupt ended it; one more idle cy
 static int skip_check;           /* just entered an interrupt: run one instruction first */
 static int walked;               /* advance is committing a walk (events handled) */
 static int edge_undo_from = -1;  /* WRAM writes from this bus access on came after the edge */
+/* port: save states. The ends of walk_commit (walk_tail) and of a WAI
+   cycle (wai_finish), kept here so a load can finish them; a load's new
+   CPU coroutine resumes (resume_tail) before its first instruction. */
+static int commit_on, commit_line, commit_init, commit_nmi;
+static int wai_tail;
+static int resume_pending;
 
 static uint8_t nmitimen;        /* $4200 */
 static uint8_t rdnmi;           /* $4210 bit 7: NMI flag, cleared by read */
@@ -357,6 +365,19 @@ int sched_slot_player(int slot)
     return slot_player[slot];
 }
 
+static int prefs[SCHED_PREFS];   /* port: sched_set_pref */
+
+void sched_set_pref(int pref, int value)
+{
+    if (pref >= 0 && pref < SCHED_PREFS)
+        prefs[pref] = value;
+}
+
+int sched_pref(int pref)
+{
+    return pref >= 0 && pref < SCHED_PREFS ? prefs[pref] : 0;
+}
+
 uint16_t sched_joypad_read(int port)
 {
     return port >= 0 && port < 4 ? joy[port] : 0;
@@ -498,6 +519,7 @@ void sched_init(CPU *c)
     memset(prof, 0, sizeof prof);
     nmi_done = 1;
     take_irq = wai_over = skip_check = walked = 0;
+    commit_on = wai_tail = resume_pending = 0;   /* port */
     insn_i = 1;
     line_start = frame_clock = 0;
     dma_lo = dma_hi = 0;
@@ -1027,6 +1049,20 @@ static void dma_start(const uint32_t sizes[8])
     pend.dma_after = (int)ct_bus_n - 1;   /* the $420B write */
 }
 
+/* port: what walk_commit does after its advance, kept in statics rather
+   than read from the walk, so that a save state taken at a frame edge
+   inside that advance can finish it (sched_state, resume_tail). */
+static void walk_tail(void)
+{
+    walked = 0;
+    edge_undo_from = -1;
+    if (commit_on && line == commit_line) {
+        init_done |= commit_init;
+        nmi_done |= commit_nmi;
+    }
+    commit_on = 0;
+}
+
 static void walk_commit(const struct walk *w, uint64_t start, uint64_t t)
 {
     refresh_paid += w->refreshes;
@@ -1035,14 +1071,13 @@ static void walk_commit(const struct walk *w, uint64_t start, uint64_t t)
         dma_lo = w->dma_lo;
         dma_hi = w->dma_hi;
     }
+    commit_on = 1;
+    commit_line = w->line;
+    commit_init = w->init_done;
+    commit_nmi = w->nmi_done;
     walked = 1;
     advance((unsigned)(t - start));
-    walked = 0;
-    edge_undo_from = -1;
-    if (line == w->line) {
-        init_done |= w->init_done;
-        nmi_done |= w->nmi_done;
-    }
+    walk_tail();
 }
 
 /* One idle cycle of WAI (6 clocks), or a run of them up to just before the
@@ -1403,8 +1438,9 @@ static void tick(CPU *c, uint32_t at, uint8_t op)
         CPU before = *c;
         long depth = int_depth++;
         insn_i = 1;
-        charge(interp_interrupt(c, nmi));
-        skip_check = 1;
+        unsigned clocks = interp_interrupt(c, nmi);
+        skip_check = 1;   /* port: before the charge (see exec_one) */
+        charge(clocks);
         shadow_push(c);
         while (int_depth > depth)
             exec_one();
@@ -1438,6 +1474,17 @@ static void tick(CPU *c, uint32_t at, uint8_t op)
    entry is followed by at least one instruction of the handler. */
 /* Its own function: a caller of setjmp is compiled conservatively, and
    exec_one runs for every interpreted instruction. */
+/* port: a WAI's last idle cycle done (see exec_one). */
+static void wai_finish(void)
+{
+    if (wai_tail) {
+        wai_tail = 0;
+        wai_over = 0;
+        interp_wake();
+        take_irq = pend.prev_irq;
+    }
+}
+
 static __attribute__((noinline)) void run_overlay(const ct_overlay_func *o)
 {
     overlay_act *a = overlay_enter(o, overlay_last_idx, cpu->S);
@@ -1459,21 +1506,19 @@ static void exec_one(void)
         take_irq = 0;
         int_depth++;
         insn_i = 1;
-        charge(interp_interrupt(cpu, nmi));   /* IRQ is level: until $4211 is read */
-        skip_check = 1;
+        unsigned clocks = interp_interrupt(cpu, nmi);   /* IRQ is level: until $4211 is read */
+        skip_check = 1;   /* port: before the charge, so a save state at an edge in it has it */
+        charge(clocks);
         shadow_push(cpu);
         return;
     }
     if (interp_waiting()) {
         /* WAI (Mesen 2): idle cycles until an NMI is seen or the IRQ line
-           is up, then one more; then the interrupt, if any, is taken. */
-        int over = wai_over;
+           is up, then one more; then the interrupt, if any, is taken.
+           port: the end of it (wai_finish) from a static, as walk_tail. */
+        wai_tail = wai_over;
         wai_cycle();
-        if (over) {
-            wai_over = 0;
-            interp_wake();
-            take_irq = pend.prev_irq;
-        }
+        wai_finish();
         return;
     }
     note_stack();
@@ -1567,6 +1612,7 @@ static void soft_reset(void)
     shadow_n = 0;
     nmi_done = 1;
     take_irq = wai_over = skip_check = walked = 0;
+    commit_on = wai_tail = 0;   /* port: the tails the reset's longjmp skips */
     insn_i = 1;
     edge_undo_from = -1;
     dma_lo = dma_hi = 0;
@@ -1613,6 +1659,21 @@ static void yield_frame(void)
     in_cpu = 1;
 }
 
+/* port: a loaded save state's first moments: the rest of what the CPU was
+   doing when the state's frame edge suspended it (sched_state). The edge
+   came inside an advance (from charge, walk_commit or a WAI cycle) unless
+   a reset had just ended the frame (need_start: cpu_main starts the line).
+   Then the next instruction runs, in the interpreter (or natively at a
+   compiled function's entry). */
+static void resume_tail(void)
+{
+    if (need_start)
+        return;
+    advance(0);    /* the events left at this clock after the edge */
+    walk_tail();   /* nothing to do unless the edge came in walk_commit */
+    wai_finish();  /* likewise, a WAI cycle */
+}
+
 static void cpu_main(void)
 {
     in_cpu = 1;
@@ -1622,6 +1683,10 @@ static void cpu_main(void)
             yield_frame();
         }
         reset_armed = 1;
+        if (resume_pending) {   /* port: save states */
+            resume_pending = 0;
+            resume_tail();
+        }
         for (;;) {
             if (need_start) {
                 need_start = 0;
@@ -1676,3 +1741,132 @@ uint64_t sched_clock(void) { return line_start + hclock; }
 uint64_t sched_frame_clock(void) { return frame_clock; }
 long sched_nmi_count(void) { return nmis; }
 int sched_line(void) { return line; }
+
+/* ---- port: save states (savestate.h) ----
+   Everything above that a frame edge leaves set, and the CPU. A save is
+   taken between sched_run_frame calls: the CPU coroutine is suspended at
+   a frame edge (yield_frame), inside the accounting of the instruction
+   that crossed it (charge, walk_commit, a WAI cycle) or right after a
+   reset. A load drops that coroutine and its C stack, native frames and
+   all, and starts a new one that finishes the accounting (resume_tail)
+   and runs on from the CPU's PB:PC. Settings (native dispatch, players,
+   views, the behind G-buffer) and the profile are not state. */
+int sched_state_ready(const char **why)
+{
+    const char *w = NULL;
+    if (in_cpu)
+        w = "the CPU is running (save between frames)";
+    else if (!spc_host_at_boundary())
+        w = "the sound CPU is between instructions (the next frame edge may do)";
+    if (why)
+        *why = w;
+    return w != NULL;
+}
+
+void sched_state(ss_io *s)
+{
+    ss_begin(s, "CPU ");
+    SS(s, *cpu);
+    ss_end(s);
+
+    ss_begin(s, "SCHD");
+    SS(s, line);
+    SS(s, hclock);
+    SS(s, line_start);
+    SS(s, frames);
+    SS(s, nmis);
+    SS(s, pend);
+    SS(s, nmi_done);
+    SS(s, insn_i);
+    SS(s, take_irq);
+    SS(s, wai_over);
+    SS(s, skip_check);
+    SS(s, walked);
+    SS(s, edge_undo_from);
+    SS(s, commit_on);
+    SS(s, commit_line);
+    SS(s, commit_init);
+    SS(s, commit_nmi);
+    SS(s, wai_tail);
+    SS(s, nmitimen);
+    SS(s, rdnmi);
+    SS(s, rdnmi_set);
+    SS(s, rdnmi_cleared);
+    SS(s, in_vblank);
+    SS(s, autojoy_busy);
+    SS(s, autojoy_step);
+    SS(s, autojoy_on);
+    SS(s, autojoy_start);
+    SS(s, autojoy_pad);
+    SS(s, wrio);
+    SS(s, htime);
+    SS(s, vtime);
+    SS(s, timeup);
+    SS(s, lat_h);
+    SS(s, lat_v);
+    SS(s, lat_flag);
+    SS(s, ophct_hi);
+    SS(s, opvct_hi);
+    SS(s, pad);
+    SS(s, joy);
+    SS(s, turn_player);
+    SS(s, irq_at);
+    SS(s, irq_done);
+    SS(s, hblank_done);
+    SS(s, refresh_at);
+    SS(s, refresh_done);
+    SS(s, refresh_paid);
+    SS(s, init_done);
+    SS(s, need_start);
+    SS(s, start_delay);
+    SS(s, dma_lo);
+    SS(s, dma_hi);
+    SS(s, edge_in_dma);
+    SS(s, frame_clock);
+    SS(s, field_base);
+    SS(s, int_depth);
+    ss_end(s);
+
+    /* The last frame shown, so the picture is right before the next one. */
+    ss_begin(s, "SHOW");
+    ss_bytes(s, present, sizeof present);
+    ss_bytes(s, present_layers, sizeof present_layers);
+    SS(s, present_state);
+    ss_end(s);
+
+    /* DSP output not yet taken. */
+    ss_begin(s, "RING");
+    ss_bytes(s, ring, sizeof ring);
+    SS(s, ring_head);
+    SS(s, ring_len);
+    ss_end(s);
+
+    if (!SS_APPLY(s))
+        return;
+    /* A new CPU coroutine (sched_run_frame starts it), which finishes what
+       the old one was doing at the edge; nothing of the old one runs. */
+    cpu_live = in_cpu = 0;
+    resume_pending = 1;
+    reset_armed = 0;
+    frame_done = 0;
+    ct_tail_fn = NULL;
+    if (cyc_in_progress())
+        cyc_finish();
+    cyc_done();
+    ct_wram_hit = 0;
+    overlay_reset_active();   /* bus_state marked WRAM written: overlays recheck */
+    shadow_n = 0;
+    present_behind_valid = 0;
+    /* The PPU draws this frame into this process's buffers, as line 0's
+       start would have set them (start_line). */
+    Ppu *ppu = snes_hw_ppu();
+    ppu->renderBuffer = fb;
+    ppu->renderPitch = SCHED_WIDTH * 4;
+    PpuSetLayerBuffer(ppu, fb_layers, SCHED_WIDTH);
+    if (behind_on)
+        PpuSetBehindBuffer(ppu, fb_behind, SCHED_WIDTH * 4, fb_behind_layers, SCHED_WIDTH);
+    else
+        PpuSetBehindBuffer(ppu, NULL, 0, NULL, 0);
+    PpuSetProvBuffer(ppu, prov_on ? fb_prov : NULL, SCHED_WIDTH);
+    present_prov_valid = 0;
+}

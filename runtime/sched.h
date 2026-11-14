@@ -151,6 +151,12 @@ int sched_slot_player(int slot);
    show; -1 (the default) none. Set by the game's patches. */
 void sched_set_turn_player(int player);
 int sched_turn_player(void);
+/* port: player preferences a game module's patches may honour, each game
+   as it can (none have to). Default 0; nothing in the engine changes with
+   them. ALWAYS_RUN: the run button inverted (held: walk). */
+enum { SCHED_PREF_ALWAYS_RUN, SCHED_PREFS };
+void sched_set_pref(int pref, int value);
+int sched_pref(int pref);
 /* The buttons port 0-3 returned at the last auto-joypad read ($4218-$421F
    as a word, sched_set_joypad's layout), without a bus access. */
 uint16_t sched_joypad_read(int port);

@@ -88,7 +88,8 @@ endfunction()
 ct_game_exe(ct_boot ${CMAKE_SOURCE_DIR}/tools/ct_boot.c ${CMAKE_SOURCE_DIR}/tools/tas_resync.c)
 set_target_properties(ct_boot PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 if(SDL2_FOUND)
-    ct_game_exe(ct_sdl ${CMAKE_SOURCE_DIR}/frontend/main.c ${CMAKE_SOURCE_DIR}/frontend/saves.c)
+    ct_game_exe(ct_sdl ${CMAKE_SOURCE_DIR}/frontend/main.c ${CMAKE_SOURCE_DIR}/frontend/saves.c
+        ${CMAKE_SOURCE_DIR}/frontend/qol.c)   # port: quality of life (qol.h)
     # port: the game id names its saves folder, as for ct_sdl_engine
     get_filename_component(ct_game_id ${GAME_DIR} NAME)
     target_compile_definitions(ct_sdl PRIVATE CT_GAME_ID="${ct_game_id}")
@@ -267,6 +268,31 @@ add_test(NAME lockstep_soft_reset COMMAND ${Python3_EXECUTABLE}
     --script ${GAME_DIR}/test/replay/soft_reset.txt --expect-pc C28523)
 list(APPEND ct_game_tests soft_reset_replay lockstep_soft_reset)
 
+# port: save states (runtime/savestate.h, test/test_savestate.py): on the
+# Leene Square replay, a state saved at frame N and loaded must run on
+# exactly as the run that saved it (every frame's state hashes and
+# picture), saving must not change that run, and a save-and-load every K
+# frames must leave the whole run unchanged. Native (the save lands deep
+# in native code; the load resumes in the interpreter) and interpreted.
+add_test(NAME savestate_replay COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_savestate.py
+    $<TARGET_FILE:ct_boot> ${GAME_DIR}/test/replay/leene_square.txt 8500 9210 7)
+add_test(NAME savestate_replay_interp COMMAND ${Python3_EXECUTABLE}
+    ${GAME_DIR}/test/test_savestate.py $<TARGET_FILE:ct_boot>
+    ${GAME_DIR}/test/replay/leene_square.txt 3000 3600 5 --interp-only)
+list(APPEND ct_game_tests savestate_replay savestate_replay_interp)
+
+# port: always run (game/ct/always_run.c, sched_pref): walking up to the bell
+# without the run button, the leader's Y velocity ($7E1D2D) is -$10; with
+# --always-run, -$20 (running). The module build takes the same patches.
+set(ct_always_run --frames 8900 --script ${GAME_DIR}/test/replay/leene_square.txt)
+add_test(NAME always_run COMMAND ct_boot ${ct_always_run} --always-run
+    --expect-wram 8900:1D2D=E0)
+add_test(NAME always_run_off COMMAND ct_boot ${ct_always_run} --expect-wram 8900:1D2D=F0)
+add_test(NAME always_run_module COMMAND $<TARGET_FILE:ct_boot_engine>
+    --module $<TARGET_FILE:ct_game_module> ${ct_always_run} --always-run
+    --expect-wram 8900:1D2D=E0)
+list(APPEND ct_game_tests always_run always_run_off always_run_module)
+
 # Battle sprites must not drop out on alternate frames (Gato's fight from
 # its start; broken until OAMADD kept its own reload value, test_hw_map).
 add_test(NAME battle_no_flicker COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_flicker.py
@@ -347,6 +373,13 @@ if(SDL2_FOUND)
     # Real-time pacing: other tests running beside it starve the audio queue.
     set_tests_properties(sdl_audio_60s PROPERTIES RUN_SERIAL TRUE)
     list(APPEND ct_game_tests sdl_boot sdl_record sdl_audio_60s)
+    # port: quality of life (frontend/qol.h): save states, the resume point
+    # (SIGTERM, sleep, the prompt), screenshots, pause, fast-forward,
+    # battery mode, save RAM import/export; headless, scripted.
+    add_test(NAME sdl_qol COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_sdl_qol.py
+        $<TARGET_FILE:ct_sdl> $<TARGET_FILE:ct_boot> ${GAME_DIR}/test/replay/leene_square.txt)
+    set_tests_properties(sdl_qol PROPERTIES RUN_SERIAL TRUE)   # real-time parts
+    list(APPEND ct_game_tests sdl_qol)
 endif()
 
 set_tests_properties(${ct_game_tests} PROPERTIES LABELS rom ENVIRONMENT
