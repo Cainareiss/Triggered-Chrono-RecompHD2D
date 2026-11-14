@@ -404,6 +404,7 @@ double hd2d_last_ms(void) { return last_ms; }
 
 /* The 3D diorama's quality, as set (0 / -1: the preset's). */
 static float user_render_scale, user_sharpen = -1.0f, user_ao = -1.0f;
+static int user_ao_div;
 
 static float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
 void hd2d_set_render_scale(float v) { user_render_scale = v > 0.0f ? clampf(v, 0.5f, 1.0f) : 0.0f; }
@@ -412,6 +413,8 @@ void hd2d_set_sharpen(float v) { user_sharpen = v < 0.0f ? -1.0f : clampf(v, 0.0
 float hd2d_sharpen(void) { return user_sharpen; }
 void hd2d_set_ao(float v) { user_ao = v < 0.0f ? -1.0f : clampf(v, 0.0f, 1.0f); }
 float hd2d_ao(void) { return user_ao; }
+void hd2d_set_ao_size(int div) { user_ao_div = div == 2 || div == 4 ? div : 0; }
+int hd2d_ao_size(void) { return user_ao_div; }
 
 /* ---- GL objects ---- */
 
@@ -1643,7 +1646,7 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     float ao_base = user_ao >= 0.0f ? user_ao : s->ao3d, ao_amt = ao_base * a;
     if (g.float_type != GL_HALF_FLOAT)   /* its depths need half floats */
         ao_base = ao_amt = 0.0f;
-    int div = s->ao_div > 0 ? s->ao_div : 2;
+    int div = user_ao_div ? user_ao_div : s->ao_div > 0 ? s->ao_div : 2;
     int aw = ao_base > 0.0f ? rw / div : 0, ah = ao_base > 0.0f ? rh / div : 0;
     if (s3d_resize(rw, rh, pw, ph, aw, ah))
         return -1;

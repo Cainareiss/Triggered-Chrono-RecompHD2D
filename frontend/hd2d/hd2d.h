@@ -34,7 +34,9 @@ enum { HD2D_ASPECT_4_3, HD2D_ASPECT_PIXEL, HD2D_ASPECT_STRETCH, HD2D_ASPECTS };
    - sharpen, 0-1: CAS at a render scale of 1 (0: off), RCAS's strength
      below it. < 0: the preset's (0 at 1, 0.5 below).
    - ambient occlusion strength, 0-1 (0: off, and the pass is skipped).
-     < 0: the preset's.
+     < 0: the preset's (0.6).
+   - ambient occlusion size: the render size / 2 or / 4 each way. 0: the
+     preset's (2 in hd2d3d, 4 in deck3d).
    Settings (settings.ini render_scale, sharpen, ao); out-of-range values
    are clamped. The getters return what was set (0 / -1: the preset's). */
 void hd2d_set_render_scale(float scale);
@@ -43,6 +45,8 @@ void hd2d_set_sharpen(float amount);
 float hd2d_sharpen(void);
 void hd2d_set_ao(float strength);
 float hd2d_ao(void);
+void hd2d_set_ao_size(int div);
+int hd2d_ao_size(void);
 
 /* Load GL entry points (SDL_GL_GetProcAddress), compile the shaders, make
    the fixed-size targets. gles: the context is OpenGL ES 3.0. Returns 0,

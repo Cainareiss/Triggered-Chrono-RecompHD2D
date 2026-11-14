@@ -141,6 +141,7 @@
  *   --menu-test FILE, --hash-log FILE
  *       for tests: scripted menu use (menu_test_load), and per frame a hash
  *       of WRAM and the picture. */
+#include <math.h>     /* port: fabsf (the 3D quality settings) */
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -1099,6 +1100,45 @@ static const char *const debug_labels[HD2D_DEBUGS] = {"Off", "Layers", "Depth", 
 static int get_debug(void *u) { (void)u; return hd2d_debug(); }
 static void set_debug(void *u, int v) { (void)u; hd2d_set_debug(v); }
 
+/* The 3D diorama's quality (hd2d.h). The menu shows and settings.ini
+   keeps the saved values (ini_*); --render-scale, --sharpen and --ao
+   change them for the run only. Each list's first entry is the preset's
+   own ("auto"). */
+static float ini_render_scale, ini_sharpen = -1.0f, ini_ao = -1.0f;
+static int ini_ao_size;
+static const char *const rscale_labels[7] = {"Auto", "50%", "60%", "67%", "75%", "85%", "100%"};
+static const char *const rscale_values[7] = {"auto", "50", "60", "67", "75", "85", "100"};
+static const float scale_of[7] = {0.0f, 0.5f, 0.6f, 0.67f, 0.75f, 0.85f, 1.0f};
+static const char *const amount_labels[6] = {"Auto", "Off", "25%", "50%", "75%", "100%"};
+static const char *const amount_values[6] = {"auto", "0", "0.25", "0.5", "0.75", "1"};
+static const float amount_of[6] = {-1.0f, 0.0f, 0.25f, 0.5f, 0.75f, 1.0f};
+static const char *const ao_size_labels[3] = {"Auto", "Half", "Quarter"};
+static const char *const ao_size_values[3] = {"auto", "half", "quarter"};
+static int nearest_of(const float *of, int n, float v)   /* the list entry nearest v */
+{
+    int best = 0;
+    for (int k = 1; k < n; k++)
+        if (fabsf(of[k] - v) < fabsf(of[best] - v))
+            best = k;
+    return best;
+}
+static int get_render_scale(void *u) { (void)u; return nearest_of(scale_of, 7, ini_render_scale); }
+static void set_render_scale(void *u, int v)
+{
+    (void)u;
+    hd2d_set_render_scale(ini_render_scale = scale_of[v]);
+}
+static int get_sharpen(void *u) { (void)u; return nearest_of(amount_of, 6, ini_sharpen); }
+static void set_sharpen(void *u, int v) { (void)u; hd2d_set_sharpen(ini_sharpen = amount_of[v]); }
+static int get_ao(void *u) { (void)u; return nearest_of(amount_of, 6, ini_ao); }
+static void set_ao(void *u, int v) { (void)u; hd2d_set_ao(ini_ao = amount_of[v]); }
+static int get_ao_size(void *u) { (void)u; return ini_ao_size == 4 ? 2 : ini_ao_size == 2; }
+static void set_ao_size(void *u, int v)
+{
+    (void)u;
+    hd2d_set_ao_size(ini_ao_size = v == 2 ? 4 : v == 1 ? 2 : 0);
+}
+
 /* Display */
 static int get_fullscreen(void *u) { (void)u; return wst.fs; }
 static void set_fullscreen(void *u, int v)
@@ -1442,6 +1482,30 @@ static void register_settings(void)
                                  .enabled = on_3d,
                                  .help = "How close the 3D diorama's camera is (100%: about the "
                                          "console's view)."});
+    settings_register(&(setting){
+        .key = "render_scale", .label = "3D render scale", .category = "Look",
+        .type = SETTING_ENUM, .options = rscale_labels, .values = rscale_values, .count = 7,
+        .get = get_render_scale, .set = set_render_scale, .enabled = on_3d,
+        .help = "Draw the 3D scene smaller and upscale it with AMD FSR 1: faster on handhelds. "
+                "The UI stays sharp. Auto: 100%, 67% in the Steam Deck 3D look."});
+    settings_register(&(setting){
+        .key = "sharpen", .label = "Sharpening", .category = "Look", .type = SETTING_ENUM,
+        .options = amount_labels, .values = amount_values, .count = 6, .get = get_sharpen,
+        .set = set_sharpen, .enabled = on_3d,
+        .help = "AMD CAS on the 3D scene at 100%, FSR's RCAS below it. Auto: off at 100%, "
+                "50% below."});
+    settings_register(&(setting){
+        .key = "ao", .label = "Ambient occlusion", .category = "Look", .type = SETTING_ENUM,
+        .options = amount_labels, .values = amount_values, .count = 6, .get = get_ao,
+        .set = set_ao, .enabled = on_3d,
+        .help = "Soft contact shadows where walls meet floors, in corners and under eaves. "
+                "Auto: 60%."});
+    settings_register(&(setting){
+        .key = "ao_size", .label = "Occlusion quality", .category = "Look",
+        .type = SETTING_ENUM, .options = ao_size_labels, .values = ao_size_values, .count = 3,
+        .get = get_ao_size, .set = set_ao_size, .enabled = on_3d,
+        .help = "The occlusion's resolution: half or a quarter of the 3D scene's. Auto: half, "
+                "a quarter in the Steam Deck 3D look."});
     settings_register(&(setting){.key = "gyro", .label = "Gyro aiming", .category = "Look",
                                  .type = SETTING_BOOL, .get = get_gyro, .set = set_gyro,
                                  .enabled = on_hd2d,
