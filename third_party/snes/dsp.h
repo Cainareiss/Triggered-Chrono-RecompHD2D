@@ -100,6 +100,12 @@ extern void (*dsp_output_hook)(int16_t l, int16_t r);
 enum { DSP_INTERP_GAUSS = 0, DSP_INTERP_CUBIC = 1, DSP_INTERP_SINC = 2 };
 extern int dsp_interp;
 void dsp_set_interp(int mode);
+// ct-recomp: voices (bit n: voice n) left out of what dsp_output_hook
+// hears, except those set in the APU RAM byte at dsp_host_keep_addr (-1:
+// none); while any is left out, the echo return is too. 0 by default: the
+// host hears everything, as before.
+extern uint8_t dsp_host_mute;
+extern int dsp_host_keep_addr;
 uint8_t dsp_read(Dsp* dsp, uint8_t adr);
 void dsp_write(Dsp* dsp, uint8_t adr, uint8_t val);
 void dsp_getSamples(Dsp* dsp, int16_t* sampleData, int samplesPerFrame, int numChannels);

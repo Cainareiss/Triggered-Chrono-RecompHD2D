@@ -30,8 +30,9 @@
    states record it (savestate.h); 7 is the world map scene
    (CT_SCENE_WORLD and ct_scene's overlay fields); 8 is simulated rumble
    (rumble.h: the rumble_event API patches call, and the frame hook
-   ct_module_info.rumble). */
-#define CT_MODULE_ABI 8
+   ct_module_info.rumble); 9 is the music and text exports
+   (ct_music_hooks, ct_text: audio packs and HD text). */
+#define CT_MODULE_ABI 9
 
 /* ---- the scene: what the game is showing, for renderers (docs/SCENE.md) ----
    A module may describe its current view as a map of cells, tile layers
@@ -140,6 +141,79 @@ typedef struct {
    out filled, or -1 when the module can't say. */
 typedef int (*ct_module_scene_fn)(ct_scene *out);
 
+/* ---- music: what the game asks its sound program to play (audio packs,
+   docs/ASSET-PACKS.md) ----
+   The module watches the commands the CPU sends through the APU ports
+   and says, in its game's own song ids, when a song starts, fades or
+   stops. The engine only passes the port writes on and never reads
+   game memory for this. */
+enum {                       /* ct_music_event.kind */
+    CT_MUSIC_PLAY = 1,       /* song starts (or restarts) */
+    CT_MUSIC_STOP = 2,       /* no music: the song stops */
+    CT_MUSIC_FADE = 3,       /* the music's volume moves to `volume` over `frames` */
+};
+typedef struct {
+    uint8_t kind;            /* CT_MUSIC_* */
+    uint8_t song;            /* PLAY: the game's song id */
+    uint8_t volume;          /* FADE: the target, 0 (silent) - 255 (the song's full volume) */
+    uint8_t reserved;
+    uint16_t frames;         /* FADE: how long, in frames (0: at once) */
+} ct_music_event;
+
+typedef struct {
+    /* Every CPU write to an APU port (0-3), with what the CPU has last
+       written to each port, this write included. Called mid-frame, from
+       the CPU's write: it may read memory, never change it. */
+    void (*port_write)(unsigned port, uint8_t value, const uint8_t ports[4]);
+    /* At the frame edge: the events since the last call, oldest first;
+       returns how many it wrote (at most max). */
+    int (*events)(ct_music_event *out, int max);
+    /* The sound program's APU RAM byte whose bit n is set while DSP voice
+       n plays a sound effect, not music; -1 when the module can't tell
+       them apart (then a replaced song silences all of the console's
+       sound). */
+    int32_t sfx_voices_aram;
+} ct_music_hooks;
+
+/* ---- text: what the game's text boxes show, as characters (HD text) ----
+   For a renderer that draws a box's text with a font of the player's at
+   the screen's resolution, over the console's glyphs. The module gives
+   the characters it has drawn into each line of a box and where the
+   line's 8x8 tiles are in VRAM; the engine finds them on the screen from
+   the provenance G-buffer (sched_prov), so wherever the game puts the
+   box, the text follows, and a line not on the screen is not drawn. */
+#define CT_TEXT_LINES   4
+#define CT_TEXT_GLYPHS  64
+#define CT_TEXT_COLS    32
+#define CT_TEXT_ROWS    2
+typedef struct {
+    uint32_t ch;             /* Unicode code point (0: a glyph with no character) */
+    int16_t x;               /* left edge, px from the line's left */
+    uint8_t w;               /* the console font's advance, px */
+    uint8_t reserved;
+} ct_text_glyph;
+typedef struct {
+    uint8_t n;               /* glyphs in g[] */
+    uint8_t cols, rows;      /* the line's tiles: cols x rows (at most CT_TEXT_COLS x CT_TEXT_ROWS) */
+    uint8_t top;             /* glyph cell top, px below the line's top */
+    uint8_t height;          /* glyph cell height, px (the console font's) */
+    uint8_t reserved[3];
+    /* VRAM word address of each 8x8 character of the line, rows x cols:
+       the tile drawn at (col, row) from the line's top-left. */
+    uint16_t chr[CT_TEXT_ROWS][CT_TEXT_COLS];
+    ct_text_glyph g[CT_TEXT_GLYPHS];
+} ct_text_line;
+typedef struct {
+    uint8_t layer;           /* the BG layer (0-3) the lines are drawn on */
+    uint8_t n_lines;
+    uint8_t fg, shadow;      /* the glyphs' color and shadow: color index within their palette */
+    ct_text_line line[CT_TEXT_LINES];
+} ct_text;
+/* Module export (optional): this frame's text, at the frame edge.
+   Returns 0 with out filled (n_lines may be 0), or -1 when the module
+   can't say. */
+typedef int (*ct_module_text_fn)(ct_text *out);
+
 typedef struct {
     uint32_t abi;            /* CT_MODULE_ABI the module was built with */
     uint32_t cpu_size;       /* sizeof(CPU) */
@@ -151,6 +225,11 @@ typedef struct {
     ct_module_scene_fn scene;   /* NULL: no scene description */
     /* The rumble frame hook (ABI 8, rumble.h). */
     ct_module_rumble_fn rumble;   /* NULL: none */
+    /* ABI 9: music and text (NULL: none). */
+    uint32_t music_size;     /* sizeof(ct_music_hooks) */
+    const ct_music_hooks *music;
+    uint32_t text_size;      /* sizeof(ct_text) */
+    ct_module_text_fn text;
 } ct_module_info;
 
 typedef const ct_module_info *(*ct_module_get_fn)(void);
@@ -168,5 +247,16 @@ int ct_scene_available(void);
    Returns 0, or -1 when there is none (no source, or the module has none
    to give); out->mode is then CT_SCENE_OTHER. */
 int ct_scene_capture(ct_scene *out);
+
+/* Music and text sources: set like the scene's. ct_music_watch(1) passes
+   the CPU's APU port writes to the module (snes_apu_port_hook); 0 stops.
+   ct_music_events and ct_text_capture return -1 when there is no source. */
+void ct_music_set_source(const ct_music_hooks *hooks);
+const ct_music_hooks *ct_music_source(void);
+void ct_music_watch(int on);
+int ct_music_events(ct_music_event *out, int max);
+void ct_text_set_source(ct_module_text_fn fn);
+int ct_text_available(void);
+int ct_text_capture(ct_text *out);
 
 #endif

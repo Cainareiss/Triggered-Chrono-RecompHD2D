@@ -33,7 +33,8 @@
  * Format: an 8-byte magic, then little-endian fields: format version,
  * CT_MODULE_ABI, the ROM's SHA-1 (20 bytes), the frame count, then tagged
  * sections (4-byte tag, 4-byte length, payload) in a fixed order. A load
- * refuses another format version, module ABI or ROM, and any section whose
+ * refuses another format version, module ABI (one older than
+ * SAVESTATE_ABI_MIN, savestate.c, or newer) or ROM, and any section whose
  * length differs from this build's (the vendored structs are stored as
  * they are in memory, minus their pointers). */
 #ifndef CT_SAVESTATE_H

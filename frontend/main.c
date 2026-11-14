@@ -4,7 +4,7 @@
  *
  * usage: ct_sdl [--scale N] [--frames N] [--dump DIR] [--needed-hw FILE] [--fast]
  *               [--require-render] [--log-input] [--interp-only]
- *               [--record FILE] [--script FILE] [--log-audio]
+ *               [--record FILE] [--script FILE] [--log-audio] [--music-log]
  *               [--require-no-underrun]
  *
  * 256x224, integer scaled (--scale, default 3); paced to 60.0988 Hz
@@ -29,7 +29,8 @@
  * sound card's clock can't drift apart. An empty queue at a frame is an
  * underrun; each exit prints the count. --log-audio prints the queue
  * level and rate factor every frame; --require-no-underrun exits 1 if any
- * happened.
+ * happened. --music-log prints the songs the game asks for (port: audio
+ * packs, music.h), with the pack file that replaces each.
  *
  * Every exit prints its reason ("ct_sdl: exit: ..."); startup prints each
  * joystick and the button mapping. --log-input prints every key and
@@ -187,6 +188,7 @@
 #include "input.h"
 #include "interp.h"
 #include "packs.h"    /* port: asset packs (docs/ASSET-PACKS.md) */
+#include "music.h"    /* port: audio packs: [[music]] in the same packs */
 #include "png.h"
 #include "replay.h"
 #include "resample.h"
@@ -350,7 +352,7 @@ static double level_avg = AUDIO_TARGET;
 static key_filter keys;
 static uint16_t live_buttons;
 static uint64_t perf_freq, next_frame;
-static int running = 1, fast, log_input, log_audio;
+static int running = 1, fast, log_input, log_audio, log_music;
 
 /* port: asset packs (frontend/packs, docs/ASSET-PACKS.md). They live in
    the per-game data folder, <pref path>/packs/NAME; a NAME with a slash
@@ -400,20 +402,23 @@ static char *pack_dir(const char *game_id, const char *name)
     return p;
 }
 
-/* Load the named packs; returns how many replacements. */
-static int packs_setup(const char *game_id)
+/* Load the named packs (their art only when `art`; their [[music]]
+   always: it needs no GL); returns how many art replacements. */
+static int packs_setup_ex(const char *game_id, int art)
 {
-    const char *dirs[MAX_PACK_NAMES];
+    const char *dirs[MAX_PACK_NAMES] = {0};
     char *owned[MAX_PACK_NAMES];
     int n = 0;
     for (int k = 0; k < n_pack_names; k++)
         if ((owned[n] = pack_dir(game_id, pack_names[k])))
             dirs[n] = owned[n], n++;
-    int r = n ? packs_load(dirs, n) : 0;
+    int r = n && art ? packs_load(dirs, n) : 0;
+    music_load(dirs, n);   /* port: audio packs */
     for (int k = 0; k < n; k++)
         free(owned[k]);
     return r;
 }
+static int packs_setup(const char *game_id) { return packs_setup_ex(game_id, 1); }
 
 /* The 3D diorama's tiles -> atlas entries (hd2d_pack_tiles). */
 static int pack_tile_lookup(void *user, unsigned chr, int pal, int bpp, const uint16_t *vram,
@@ -861,6 +866,7 @@ static int hd2d_key(SDL_Scancode sc)
         return 0;
     if (sc == SDL_SCANCODE_F5 && n_pack_names) {   /* port: reload the packs */
         int n = packs_reload();
+        music_reload();
         packs_upload();
         sched_set_prov(packs_active() || pack_dump);
         static char msg[48];
@@ -1394,6 +1400,7 @@ static void run_pack_reload(void *u)
 {
     (void)u;
     int n = packs_reload();
+    music_reload();
     packs_upload();
     sched_set_prov(packs_active() || pack_dump);
     char msg[48];
@@ -2042,6 +2049,34 @@ static void set_input(long f)
     }
 }
 
+/* port: audio packs (music.h): the game module's music events of this
+   frame to the player, and the console's music voices muted while a
+   replacement plays (the sound effects' voices stay). The module starts
+   watching the APU ports once there is a song to replace or a log to
+   write. A jump in the frame count (a save state loaded) stops the
+   replacement: the game's song may be another one now. */
+static void music_frame(long f)
+{
+    static int watching;
+    static long last = -1;
+    if (!watching && (music_count() || log_music) && ct_music_source()) {
+        ct_music_watch(1);
+        watching = 1;
+    }
+    if (!watching)
+        return;
+    long now = sched_frame_count();
+    if (last >= 0 && now != last + 1)
+        music_stop();
+    last = now;
+    ct_music_event ev[16];
+    int n = ct_music_events(ev, 16);
+    for (int k = 0; k < n; k++)
+        music_event(&ev[k], f);
+    const ct_music_hooks *h = ct_music_source();
+    sched_set_voice_mute(music_replacing() ? 0xFF : 0, h ? h->sfx_voices_aram : -1);
+}
+
 /* This frame's DSP output through the resampler into the SDL queue, with
    rate control toward AUDIO_TARGET. */
 static void queue_audio(long f)
@@ -2058,6 +2093,8 @@ static void queue_audio(long f)
     double adjust = rs_rate_control(level_avg, AUDIO_TARGET, AUDIO_MAX_DEV);
     rs_set_adjust(&rs, adjust);
     int n_out = rs_process(&rs, in, n_in, out, 8192);
+    if (n_out > 0)
+        music_mix(out, n_out);   /* port: audio packs */
     if (log_audio)
         fprintf(stderr, "ct_sdl: frame %ld audio queued %u avg %.0f rate x%.4f in %d out %d%s\n",
                 f, level, level_avg, adjust, n_in, n_out, playing && !level ? " UNDERRUN" : "");
@@ -2452,6 +2489,7 @@ static void on_frame(long f)
     if (hash_log)   /* port */
         write_hash(f);
     int show = qol_frame(f);   /* port: QOL: fast-forward and the battery's 30 Hz skip some */
+    music_frame(f);   /* port: audio packs */
     queue_audio(f);
     {   /* port: simulated rumble on the pads in play; none while fast-forwarding */
         SDL_GameController *const pads[RUMBLE_PADS] = {
@@ -2709,7 +2747,7 @@ static void usage(FILE *out)
 {
     fprintf(out, "usage: ct_sdl [--scale N] [--frames N] [--dump DIR]\n         "
             "[--needed-hw FILE] [--fast] [--require-render] [--log-input]\n         "
-            "[--interp-only] [--record FILE] [--script FILE] [--log-audio]\n         "
+            "[--interp-only] [--record FILE] [--script FILE] [--log-audio] [--music-log]\n         "
             "[--require-no-underrun] [--hd2d] [--no-hd2d]\n         "
             "[--preset off|subtle|hd2d|deck|hd2d3d|deck3d] [--render-scale 50-100|auto]\n         "
             "[--sharpen 0-1|auto] [--ao 0-1|auto]\n         "
@@ -2833,6 +2871,10 @@ int main(int argc, char **argv)
             log_input = 1;
         else if (!strcmp(argv[k], "--log-audio"))
             log_audio = 1;
+        else if (!strcmp(argv[k], "--music-log")) {   /* port: audio packs */
+            log_music = 1;
+            music_set_log(stdout);
+        }
         else if (!strcmp(argv[k], "--require-no-underrun"))
             require_no_underrun = 1;
         else if (!strcmp(argv[k], "--interp-only")) {
@@ -3040,7 +3082,9 @@ int main(int argc, char **argv)
         /* port: asset packs replace art in the GL renderer: with packs and
            the plain look, draw through it with the original look. */
         if (n_pack_names && no_hd2d) {
-            fprintf(stderr, "ct_sdl: --no-hd2d: asset packs not loaded (they need the GL renderer)\n");
+            fprintf(stderr, "ct_sdl: --no-hd2d: asset packs' art not loaded (it needs the GL "
+                            "renderer); their music is\n");
+            packs_setup_ex(game_id, 0);
         } else if (n_pack_names) {
             int r = packs_setup(game_id);
             if (r < 0)
@@ -3176,6 +3220,7 @@ int main(int argc, char **argv)
     if (!audio)
         fprintf(stderr, "ct_sdl: no audio: %s\n", SDL_GetError());
     rs_init(&rs, SCHED_AUDIO_HZ, RATE);
+    music_set_rate(RATE);   /* port: audio packs mix at the output rate */
     print_controllers();
     pad = open_controller();
     if (pad)

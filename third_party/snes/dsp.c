@@ -68,6 +68,8 @@ static void dsp_handleNoise(Dsp* dsp);
 // less muffled sound. Their history lives here, outside Dsp, so save
 // states and the Gaussian path are as they were.
 int dsp_interp;
+uint8_t dsp_host_mute;
+int dsp_host_keep_addr = -1;
 static int16_t interpRing[8][32];
 static uint32_t interpCount[8];   // samples decoded since key-on
 static float sincTable[256][8];
@@ -215,8 +217,33 @@ void dsp_cycle(Dsp* dsp) {
   dsp_handleNoise(dsp);
   // ct-recomp: every output sample also goes to the host, which takes the
   // exact count per frame (the buffer below holds 534 and reads back 534).
-  if (dsp_output_hook)
-    dsp_output_hook(totalL, totalR);
+  if (dsp_output_hook) {
+    int hostL = totalL, hostR = totalR;
+    // ct-recomp: the host can leave voices out of what it hears
+    // (dsp_host_mute; an audio pack replacing the music), except those the
+    // byte at dsp_host_keep_addr names. Echo, RAM and registers run as
+    // before; only the host's copy changes, and without the echo return.
+    uint8_t m = dsp_host_mute;
+    if(m && dsp_host_keep_addr >= 0)
+      m &= (uint8_t)~dsp->apu_ram[dsp_host_keep_addr & 0xffff];
+    if(m) {
+      hostL = hostR = 0;
+      for(int i = 0; i < 8; i++) {
+        if(m & (1 << i)) continue;
+        hostL += (dsp->channel[i].sampleOut * dsp->channel[i].volumeL) >> 6;
+        hostR += (dsp->channel[i].sampleOut * dsp->channel[i].volumeR) >> 6;
+        hostL = hostL < -0x8000 ? -0x8000 : (hostL > 0x7fff ? 0x7fff : hostL);
+        hostR = hostR < -0x8000 ? -0x8000 : (hostR > 0x7fff ? 0x7fff : hostR);
+      }
+      hostL = (hostL * dsp->masterVolumeL) >> 7;
+      hostR = (hostR * dsp->masterVolumeR) >> 7;
+      hostL = hostL < -0x8000 ? -0x8000 : (hostL > 0x7fff ? 0x7fff : hostL);
+      hostR = hostR < -0x8000 ? -0x8000 : (hostR > 0x7fff ? 0x7fff : hostR);
+      if(dsp->mute)
+        hostL = hostR = 0;
+    }
+    dsp_output_hook(hostL, hostR);
+  }
   // put it in the samplebuffer, if space
   if (dsp->sampleOffset < 534) {
     dsp->sampleBuffer[dsp->sampleOffset * 2] = totalL;

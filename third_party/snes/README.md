@@ -39,7 +39,11 @@ or with an 8-tap Lanczos-windowed sinc two samples later (the taps after
 the point must be decoded already), from a 32-sample history per voice
 kept outside `Dsp` (save states don't change). `dsp_getSample` calls
 `interpOther` when the option isn't Gaussian; `dsp_decodeBrr` and key-on
-feed and clear the history.
+feed and clear the history. `dsp_host_mute` / `dsp_host_keep_addr` (port,
+audio packs): the copy of each sample `dsp_output_hook` hands the host can
+leave some voices out (all but those an APU RAM byte names: a sound
+program's sound-effect voices), and then the echo return too; the DSP's
+own state, the echo buffer and the sample buffer are as before.
 
 ## License
 

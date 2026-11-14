@@ -16,9 +16,13 @@ A file fails the check if
   - its name is a game module's (ct_game*.so) or a generated source's
     (bank*.c, ct_funcs.c, ct_overlays.c);
   - it is part of an asset pack (docs/ASSET-PACKS.md): a pack.toml
-    manifest, or a picture named by a content key (tiles/, sprites/ or
-    objects/ followed by 16 hex digits and .png). Packs dumped from the
-    game hold its art; they are for personal use and never ship;
+    manifest, a picture named by a content key (tiles/, sprites/ or
+    objects/ followed by 16 hex digits and .png), or an audio pack's
+    sound (an .ogg, .oga, .opus, .flac, .wav or .mp3 file in a music/ or
+    packs/ folder, or one whose bytes are Ogg or FLAC there under any
+    name). Packs dumped from the game hold its art, and audio packs most
+    often recordings of its music; they are for personal use and never
+    ship;
   - it is an ELF file that exports ct_module_get: a game module, even
     renamed and stripped (runtime/module.h);
   - it contains a generated function's name (f_XXXXXX_mNxN: the symbols
@@ -62,6 +66,10 @@ SYMBOL_RE = re.compile(rb'f_[0-9A-F]{6}_m[01]x[01]')
 MODULE_ENTRY = b'ct_module_get'   # runtime/module.h
 PACK_MANIFEST = 'pack.toml'       # asset packs (docs/ASSET-PACKS.md)
 PACK_PICTURE_RE = re.compile(r'(^|[/!\\])(tiles|sprites|objects)[/\\][0-9a-f]{16}\.png$', re.I)
+# Audio packs' sound ([[music]]): in a music/ or packs/ folder (any depth below).
+PACK_AUDIO_DIR_RE = re.compile(r'(^|[/!\\])(music|packs)[/\\]', re.I)
+PACK_AUDIO_EXT_RE = re.compile(r'\.(ogg|oga|opus|flac|wav|mp3)$', re.I)
+PACK_AUDIO_MAGIC = (b'OggS', b'fLaC')
 
 
 # Byte tables that are part of no game's data but turn up in many programs
@@ -173,6 +181,10 @@ class Checker:
             self.fail(where, 'an asset pack manifest (packs are personal-use only, never shipped)')
         elif PACK_PICTURE_RE.search(where):
             self.fail(where, 'a picture from an asset pack (named by a content key)')
+        elif PACK_AUDIO_DIR_RE.search(where) and (PACK_AUDIO_EXT_RE.search(base) or
+                                                  data[:4] in PACK_AUDIO_MAGIC):
+            self.fail(where, 'sound from an audio pack (packs are personal-use only, never '
+                             'shipped)')
         if elf_defines(data, MODULE_ENTRY):
             self.fail(where, f'a game module (exports {MODULE_ENTRY.decode()})')
         m = SYMBOL_RE.search(data)

@@ -121,6 +121,11 @@
  * --require-audio  exit 1 if every audio sample of the run is zero
  * --audio-interp M port: the DSP's voice interpolation, gaussian (the
  *                  console's, default), cubic or sinc (sched.h)
+ * --music-pack DIR port: the [[music]] of the asset pack in DIR replaces
+ *                  the game's songs in the --wav output (music.h;
+ *                  repeatable, first wins), as ct_sdl's --pack does
+ * --music-log      port: print each song, fade and stop the game asks its
+ *                  sound program for (the game module's music watcher)
  * --behind         also draw the PPU's behind G-buffer (sched_behind), as
  *                  the HD-2D renderer does, to measure what it costs
  * --prov           also draw the PPU's provenance G-buffer (sched_prov), as
@@ -159,6 +164,7 @@
 #include "dsp.h"
 #include "wav.h"
 #include "module.h"   /* port: --module */
+#include "music.h"    /* port: --music-pack, --music-log */
 #include "savestate.h"   /* port: --save-state, --load-state */
 #include "tas_resync.h"
 #include "rumble.h"   /* port: --log-rumble */
@@ -534,6 +540,21 @@ static void dump_scene(void)
 }
 
 static long dumped, audible;
+static const char *music_dirs[8];   /* port: --music-pack */
+static int n_music_dirs, music_log;
+
+/* port: the game module's music events to the audio pack player, and the
+   console's music voices muted while it replaces a song (ct_sdl's
+   music_frame does the same). */
+static void music_edge(long f)
+{
+    ct_music_event ev[16];
+    int n = ct_music_events(ev, 16);
+    for (int k = 0; k < n; k++)
+        music_event(&ev[k], f);
+    const ct_music_hooks *h = ct_music_source();
+    sched_set_voice_mute(music_replacing() ? 0xFF : 0, h ? h->sfx_voices_aram : -1);
+}
 #define MAX_SHOTS 64
 static struct { long frame; const char *path; } shots[MAX_SHOTS];   /* --shot */
 static int n_shots;
@@ -573,6 +594,10 @@ static void on_frame(long f)
                 fprintf(stderr, "ct_boot: cannot write %s\n", p2);
         }
     int n = sched_audio_take(audio, 2048);
+    if (n_music_dirs || music_log) {   /* port: audio packs */
+        music_edge(f);
+        music_mix(audio, n);
+    }
     for (int k = 0; k < n * 2; k++)
         if (audio[k]) {
             audible++;
@@ -660,6 +685,10 @@ int main(int argc, char **argv)
             require_audio = 1;
         else if (!strcmp(argv[k], "--wav") && k + 1 < argc)
             wav_path = argv[++k];
+        else if (!strcmp(argv[k], "--music-pack") && k + 1 < argc && n_music_dirs < 8)
+            music_dirs[n_music_dirs++] = argv[++k];   /* port: audio packs */
+        else if (!strcmp(argv[k], "--music-log"))
+            music_log = 1;
         else if (!strcmp(argv[k], "--audio-interp") && k + 1 < argc) {   /* port */
             const char *m = argv[++k];
             sched_set_audio_interp(!strcmp(m, "cubic") ? SCHED_INTERP_CUBIC
@@ -847,7 +876,7 @@ int main(int argc, char **argv)
             expect_pc[n_expect++] = (uint32_t)strtoul(argv[++k], NULL, 16);
         else {
             fprintf(stderr, "usage: ct_boot [--frames N] [--dump DIR] [--shot-every N DIR] [--thumbs FILE] [--resync REF LAG OUT] [--needed-hw FILE] "
-                            "[--min-nmis K] [--require-render] [--wav FILE] [--audio-interp gaussian|cubic|sinc] "
+                            "[--min-nmis K] [--require-render] [--wav FILE] [--audio-interp gaussian|cubic|sinc] [--music-pack DIR] [--music-log] "
                             "[--require-audio] [--input F1-F2:BUTTONS] [--script FILE] "
                             "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--scene FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE] [--behind] [--coop] [--coop-chars L] [--coop-chars3 L] [--coop-split] [--always-run] [--log-rumble FILE] [--rumble-sound] [--shot F:PATH] [--prov] [--save-state F:PATH] [--load-state PATH] [--state-roundtrip N]\n");
             return 2;
@@ -863,6 +892,15 @@ int main(int argc, char **argv)
             return 2;
         }
         fprintf(stderr, "ct_boot: game module %s: %u functions\n", module_path, ct_func_count);
+    }
+    if (n_music_dirs || music_log) {   /* port: audio packs */
+        music_set_rate(SCHED_AUDIO_HZ);
+        music_set_log(music_log ? stdout : NULL);
+        if (n_music_dirs && music_load(music_dirs, n_music_dirs) <= 0)
+            fprintf(stderr, "ct_boot: --music-pack: no [[music]] entries\n");
+        if (!ct_music_source())
+            fprintf(stderr, "ct_boot: no music watcher (needs the game: --module)\n");
+        ct_music_watch(1);
     }
     interp_reset(&cpu);
     sched_init(&cpu);

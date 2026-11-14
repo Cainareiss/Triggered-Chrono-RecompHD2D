@@ -62,6 +62,23 @@ precedence = "closest"
 SPDX-FileCopyrightText = "2018-2021 Johannes Kuhlmann"
 SPDX-License-Identifier = "MIT"
 
+# stb_vorbis and stb_truetype (Sean Barrett), vendored unmodified for audio
+# packs and HD text: public domain (Unlicense) or MIT, the reader's choice
+# (third_party/stb/README.md).
+[[annotations]]
+path = ["third_party/stb/stb_vorbis.c", "third_party/stb/stb_truetype.h"]
+precedence = "closest"
+SPDX-FileCopyrightText = "2017 Sean Barrett"
+SPDX-License-Identifier = "MIT OR Unlicense"
+
+# dr_flac and dr_wav (David Reid), vendored unmodified for audio packs:
+# public domain (Unlicense) or MIT-0 (third_party/dr_libs/README.md).
+[[annotations]]
+path = ["third_party/dr_libs/dr_flac.h", "third_party/dr_libs/dr_wav.h"]
+precedence = "closest"
+SPDX-FileCopyrightText = "2023 David Reid"
+SPDX-License-Identifier = "Unlicense OR MIT-0"
+
 # AMD FidelityFX FSR 1 (v1.0.2) and CAS (v1.0.2) headers and licenses,
 # vendored unmodified, and our GLSL 3.30 / ES 3.00 port of them (MIT, with
 # its own SPDX header); third_party/fidelityfx/README.md.
@@ -89,8 +106,9 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 # engine-only first run, the ROM SHA-1 check, save files, the touch overlay
 # hookup, the Android (CT_ANDROID) build, the portable context switch and
 # overlay jump (arm64, docs/ANDROID.md), the handheld quit combo
-# (docs/HANDHELD.md), decimal-mode ADC/SBC, and co-op (game patches in the
-# translator, pad 2 in replay scripts).
+# (docs/HANDHELD.md), decimal-mode ADC/SBC, co-op (game patches in the
+# translator, pad 2 in replay scripts), and the audio packs' and sample
+# interpolation's hooks in the DSP, the APU ports and the resampler.
 [[annotations]]
 path = [
   "recomp/emit.py",
@@ -119,6 +137,12 @@ path = [
   "test/test_interp_modes.c",
   "test/test_runtime.c",
   "test/test_snes_bus.c",
+  "third_party/snes/dsp.c",
+  "third_party/snes/dsp.h",
+  "runtime/resample.c",
+  "runtime/snes_adapter.c",
+  "runtime/snes_adapter.h",
+  "test/test_dsp.c",
 ]
 precedence = "closest"
 SPDX-FileCopyrightText = ["2022 snesrev", "2021 elzo_d", "2026 Akhil Moola", "2026 jerbanpls"]
