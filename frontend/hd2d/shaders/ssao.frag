@@ -17,16 +17,17 @@
 // their own, and their flat billboards would darken the floor behind them.
 // All of it comes from aoprep.frag's texture, at this pass's size.
 //
-// Output: r = openness (1: unoccluded), g = the depth of field's depth
-// (what the blur and the upsample compare), b = 1 where this is a surface
-// that gets occlusion, 0 where it gets none (they skip those).
-uniform highp sampler2D uPrep;    // aoprep.frag's: view depth - focus, normal + 1, sprite, depth
+// Output (RG16F): r = openness (1: unoccluded), or -1 where this gets
+// none (the blur and the upsample skip those); g = the depth of field's
+// depth (scene3d.frag's: what they compare).
+uniform highp sampler2D uPrep;    // aoprep.frag's: view depth - focus, normal + 1 (+ 8: sprite)
 uniform mat4 uView;
 uniform vec4 uProj;               // P[0][0], P[1][1], near, far
 uniform vec3 uRadius;             // radius (map px), samples, the focus distance
+uniform float uRange;             // the depth of field's depth range
 uniform vec3 uKernel[16];         // the samples, in radii (tangent, bitangent, normal)
 in vec2 vUV;
-out vec4 oAo;
+out vec2 oAo;
 
 const vec3 NORMALS[6] = vec3[6](vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(1.0, 0.0, 0.0),
                                 vec3(-1.0, 0.0, 0.0), vec3(0.0, 0.0, -1.0),
@@ -50,14 +51,15 @@ float pattern(ivec2 p)
 
 void main()
 {
-    vec4 c = texture(uPrep, vUV);
+    vec2 c = texture(uPrep, vUV).rg;
     int ni = int(c.g + 0.5) - 1;
     float w = c.r + uRadius.z;
+    vec3 P = viewPos(vUV, w);
+    float depth = clamp(0.5 + (length(P) - uRadius.z) / uRange, 0.0, 1.0);
     if (ni < 0 || ni > 5) {
-        oAo = vec4(1.0, c.a, 0.0, 1.0);
+        oAo = vec2(-1.0, depth);
         return;
     }
-    vec3 P = viewPos(vUV, w);
     vec3 n = normalize(mat3(uView) * NORMALS[ni]);
     // Lift the origin off the surface a little: the depth buffer's own
     // quantization then doesn't read as occlusion.
@@ -83,13 +85,13 @@ void main()
         vec2 uv = vec2(s.x * uProj.x, s.y * uProj.y) / -s.z * 0.5 + 0.5;
         if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
             continue;
-        vec4 at = texture(uPrep, uv);
-        if (at.b > 0.5)   // sprites stand on the floor but don't occlude it
+        vec2 at = texture(uPrep, uv).rg;
+        if (at.g > 7.5)   // sprites stand on the floor but don't occlude it
             continue;
         float sw = at.r + uRadius.z;
         float in_front = -s.z - sw;   // > 0: the scene is nearer than the sample
         float range = smoothstep(0.0, 1.0, radius / max(abs(w - sw), 1e-3));
         occ += step(0.02 * radius, in_front) * range;
     }
-    oAo = vec4(1.0 - occ / float(count), c.a, 1.0, 1.0);
+    oAo = vec2(1.0 - occ / float(count), depth);
 }

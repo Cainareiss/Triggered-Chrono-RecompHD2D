@@ -20,14 +20,14 @@
 uniform highp sampler2D uSrc;   // render size: rgb, a = depth of field depth
 uniform sampler2D uSrcMat;      // render size, nearest: the material (a: normal, for the occlusion)
 uniform vec4 uCon0;             // FsrEasuCon's con0: input / output size, and the offset
-uniform sampler2D uAoTex;       // ssao.frag's, blurred: r = openness, g = depth, b = surface
+uniform sampler2D uAoTex;       // ssao.frag's, blurred: r = openness (-1: none), g = depth
 uniform float uAo;              // strength (0: off)
 in vec2 vUV;
 out vec4 oLit;
 
 ivec2 lim;
 
-vec3 tap(ivec2 p) { return texelFetch(uSrc, clamp(p, ivec2(0), lim), 0).rgb; }
+vec4 tap(ivec2 p) { return texelFetch(uSrc, clamp(p, ivec2(0), lim), 0); }
 
 // As scene3d_pic.frag's aoAt.
 float aoAt(vec2 uv, float w)
@@ -42,7 +42,7 @@ float aoAt(vec2 uv, float w)
         vec4 s = texelFetch(uAoTex, clamp(b + o, ivec2(0), size - 1), 0);
         float bil = (o.x == 1 ? fr.x : 1.0 - fr.x) * (o.y == 1 ? fr.y : 1.0 - fr.y);
         float dz = (s.g - w) * 80.0;
-        float wt = (bil + 1e-3) * s.b / (1.0 + dz * dz);
+        float wt = s.r < 0.0 ? 0.0 : (bil + 1e-3) / (1.0 + dz * dz);
         sum += s.r * wt;
         wsum += wt;
     }
@@ -55,16 +55,19 @@ void main()
     vec2 pp = floor(gl_FragCoord.xy) * uCon0.xy + uCon0.zw;
     vec2 fp = floor(pp);
     ivec2 f = ivec2(fp);
-    vec3 c = FsrEasuF(pp - fp,
-                      tap(f + ivec2(0, -1)), tap(f + ivec2(1, -1)),
-                      tap(f + ivec2(-1, 0)), tap(f), tap(f + ivec2(1, 0)), tap(f + ivec2(2, 0)),
-                      tap(f + ivec2(-1, 1)), tap(f + ivec2(0, 1)), tap(f + ivec2(1, 1)),
-                      tap(f + ivec2(2, 1)),
-                      tap(f + ivec2(0, 2)), tap(f + ivec2(1, 2)));
+    vec2 fr = pp - fp;
+    vec4 tf = tap(f), tg = tap(f + ivec2(1, 0)), tj = tap(f + ivec2(0, 1)), tk = tap(f + ivec2(1, 1));
+    vec3 c = FsrEasuF(fr,
+                      tap(f + ivec2(0, -1)).rgb, tap(f + ivec2(1, -1)).rgb,
+                      tap(f + ivec2(-1, 0)).rgb, tf.rgb, tg.rgb, tap(f + ivec2(2, 0)).rgb,
+                      tap(f + ivec2(-1, 1)).rgb, tj.rgb, tk.rgb, tap(f + ivec2(2, 1)).rgb,
+                      tap(f + ivec2(0, 2)).rgb, tap(f + ivec2(1, 2)).rgb);
     if (uAo > 0.0) {
         float na = texture(uSrcMat, vUV).a;
+        // The depth, bilinear from the four centre taps (no fetch of its own).
+        float depth = mix(mix(tf.a, tg.a, fr.x), mix(tj.a, tk.a, fr.x), fr.y);
         if (na > 0.06 && na < 0.8)
-            c *= mix(1.0, aoAt(vUV, texture(uSrc, vUV).a), uAo);
+            c *= mix(1.0, aoAt(vUV, depth), uAo);
     }
     oLit = vec4(FsrSrtmF(c), 0.0);
 }

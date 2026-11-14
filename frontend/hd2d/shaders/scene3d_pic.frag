@@ -31,7 +31,8 @@ uniform vec2 uScale;         // (unused here)
 uniform vec2 uPic;           // picture size in output pixels
 uniform vec3 uTilt;          // (unused here)
 uniform int uUp;             // 1: below a render scale of 1 (EASU's picture)
-uniform sampler2D uAoTex;    // ssao.frag's, blurred: r = openness, g = depth, b = surface
+uniform int uPicDepth;       // with uUp: planes() fills in scene.a (the depth debug view)
+uniform sampler2D uAoTex;    // ssao.frag's, blurred: r = openness (-1: none), g = depth
 uniform float uAo;           // strength (0: off)
 uniform vec2 uSharp;         // mode (0: none, 1: CAS, 2: RCAS), CAS peak or RCAS strength
 
@@ -66,7 +67,7 @@ float aoAt(vec2 uv, float w)
         vec4 s = texelFetch(uAoTex, clamp(b + o, ivec2(0), size - 1), 0);
         float bil = (o.x == 1 ? fr.x : 1.0 - fr.x) * (o.y == 1 ? fr.y : 1.0 - fr.y);
         float dz = (s.g - w) * 80.0;   // weight halved 2% of the view distance apart
-        float wt = (bil + 1e-3) * s.b / (1.0 + dz * dz);
+        float wt = s.r < 0.0 ? 0.0 : (bil + 1e-3) / (1.0 + dz * dz);
         sum += s.r * wt;
         wsum += wt;
     }
@@ -111,7 +112,7 @@ void planes(vec2 uv, out vec4 scene, out vec4 back, out vec4 here)
     if (uUp == 1 || sharp)
         scene.rgb = FsrSrtmInvF(min(m, vec3(SRTM_MAX)));
     if (uUp == 1)
-        scene.a = texture(uLitBack, uv).a;
+        scene.a = uPicDepth == 1 ? texture(uLitBack, uv).a : 0.5;
     else if (uAo > 0.0 && here.a > 0.06 && here.a < 0.8)   // (below 1, EASU applied it)
         scene.rgb *= mix(1.0, aoAt(uv, scene.a), uAo);
     back = vec4(scene.rgb, 0.0);

@@ -61,6 +61,8 @@ typedef char GLchar;
 #define GL_FLOAT                    0x1406
 #define GL_HALF_FLOAT               0x140B
 #define GL_RED                      0x1903
+#define GL_RG                       0x8227
+#define GL_RG16F                    0x822F
 #define GL_RGBA                     0x1908
 #define GL_VENDOR                   0x1F00
 #define GL_RENDERER                 0x1F01
@@ -1025,6 +1027,7 @@ static void bind_picture(int prog, int pw, int ph, float tilt)
                       EASU applied it), not for the bloom source; sharpening off
                       (the final pass turns it on) */
         p_glUniform1i(U(prog, "uUp"), g.s3.scaled);
+        p_glUniform1i(U(prog, "uPicDepth"), debug_view == HD2D_DEBUG_DEPTH);
         p_glUniform1i(U(prog, "uAoTex"), 14);
         p_glUniform1f(U(prog, "uAo"), g.s3.scaled || prog == P3_BRIGHT ? 0.0f : g.s3.ao_amt);
         p_glUniform2f(U(prog, "uSharp"), 0.0f, 0.0f);
@@ -1450,12 +1453,14 @@ static int s3d_resize(int rw, int rh, int pw, int ph, int aw, int ah)
                              GL_LINEAR);
         ok &= !fbo_for(&g.s3.fbo_up, &g.s3.t_up, 1);
     }
-    for (int k = 0; ok && aw > 0 && k < 3; k++)
-        ok &= !target_make(&g.s3.ao[k], aw, ah, 1);
-    if (ok && aw > 0) {   /* the input is read as it is, never blended */
-        bind_tex(0, g.s3.ao[2].tex);
-        p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    /* The occlusion's: RG16F (two values each), its input read as it is
+       (nearest), never blended. */
+    for (int k = 0; ok && aw > 0 && k < 3; k++) {
+        target *t = &g.s3.ao[k];
+        t->w = aw;
+        t->h = ah;
+        t->tex = make_tex(aw, ah, GL_RG16F, GL_RG, GL_HALF_FLOAT, k == 2 ? GL_NEAREST : GL_LINEAR);
+        ok &= !fbo_for(&t->fbo, &t->tex, 1);
     }
     if (!ok) {
         fprintf(stderr, "hd2d: cannot make the %dx%d 3D targets\n", pw, ph);
@@ -1793,7 +1798,7 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
         bind_tex(0, g.s3.t_depth);
         bind_tex(1, g.s3.t_mat);
         p_glUniform4f(U(P3_AOPREP, "uProj"), proj[0], proj[5], near_, far_);
-        p_glUniform2f(U(P3_AOPREP, "uFocus"), dist, dist * 1.6f);   /* scene3d.frag's uDepth */
+        p_glUniform1f(U(P3_AOPREP, "uFocus"), dist);
         draw_to(g.s3.ao[2].fbo, g.s3.ao[2].w, g.s3.ao[2].h);
         prof_mark("s3d_aoprep");
         p_glUseProgram(g.prog[P3_AO]);
@@ -1806,6 +1811,7 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
         s3d_ao_kernel(kernel, n);
         p_glUniform3fv(U(P3_AO, "uKernel"), n, kernel);
         p_glUniform3f(U(P3_AO, "uRadius"), g.s3.ao_radius, (float)n, dist);
+        p_glUniform1f(U(P3_AO, "uRange"), dist * 1.6f);   /* scene3d.frag's uDepth */
         draw_to(g.s3.ao[0].fbo, g.s3.ao[0].w, g.s3.ao[0].h);
         prof_mark("s3d_ao");
         p_glUseProgram(g.prog[P3_AOBLUR]);
