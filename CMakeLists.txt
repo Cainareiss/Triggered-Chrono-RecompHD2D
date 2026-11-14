@@ -331,6 +331,7 @@ add_test(NAME ctest_cache_report COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DI
 
 # TAS movie converter on synthetic .bk2/.lsmv movies.
 add_test(NAME tas_convert COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_tas_convert.py)
+add_test(NAME pack_upscale COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_pack_upscale.py)   # port: asset packs
 add_test(NAME decode_calls COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_decode_calls.py)
 add_test(NAME funcs_meta COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_funcs_meta.py)
 add_test(NAME replay_gen COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_replay_gen.py)   # port: tools/replay_gen.py
