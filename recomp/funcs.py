@@ -26,6 +26,11 @@ class FuncMeta:
     # exactly. profile_states: states added that way to any entry.
     source: str | None = None
     profile_states: tuple[str, ...] = ()
+    # port: a game patch, C function `int ct_patch_<patch>(CPU *)` called on
+    # entry to the compiled function (each entry state). Nonzero: it did the
+    # work and the return (RTS/RTL) itself, and the body is skipped; zero:
+    # the body runs as translated. The interpreter doesn't call it.
+    patch: str | None = None
 
     def entry_states(self) -> list[State]:
         return [parse_state(s, e=bool(self.e)) for s in self.states]
@@ -87,12 +92,14 @@ def load(path: str) -> list[FuncMeta]:
             raise DecodeError(f'funcs.toml: {t["name"]}: emulation-mode entry not supported')
         if t.get('source') not in (None, 'profile'):
             raise DecodeError(f'funcs.toml: {t["name"]}: unknown source {t["source"]!r}')
+        if t.get('patch') is not None and not str(t['patch']).isidentifier():
+            raise DecodeError(f'funcs.toml: {t["name"]}: bad patch name {t["patch"]!r}')
         extra = tuple(t.get('profile_states', ()))
         if not set(extra) <= set(t['states']):
             raise DecodeError(f'funcs.toml: {t["name"]}: profile_states not all in states')
         out.append(FuncMeta(t['name'], t['addr'], tuple(t['states']), t['e'],
                             t.get('dp'), t.get('db'), t['module'], bool(t.get('manual')),
-                            t.get('source'), extra))
+                            t.get('source'), extra, t.get('patch')))
     return out
 
 

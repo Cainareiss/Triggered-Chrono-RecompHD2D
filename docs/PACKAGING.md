@@ -20,7 +20,7 @@ libexec/ct-recomp/zig-cc             runs the bundled zig as a C compiler
 share/ct-recomp/                     read-only data for tools/build_module.py:
     tools/*.py  recomp/*.py
     runtime/*.h  runtime/module_entry.c
-    game/<id>/*.toml  game/<id>/hooks.c  game/<id>/tools/*.py
+    game/<id>/*.toml  game/<id>/*.c  game/<id>/tools/*.py
 share/applications/io.github.jerbanpls.CtRecomp.desktop
 share/icons/hicolor/scalable/apps/io.github.jerbanpls.CtRecomp.svg
 share/metainfo/io.github.jerbanpls.CtRecomp.metainfo.xml

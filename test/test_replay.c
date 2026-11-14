@@ -48,6 +48,32 @@ int main(int argc, char **argv)
     CHECK(r.n == 4, "one span per run: %d", r.n);
     replay_free(&r);
 
+    /* port: "pN " prefixes address other pads; unprefixed spans stay pad 1. */
+    CHECK(!replay_add(&r, "5-7:a") && !replay_add(&r, "p2 6-8:b+left") &&
+              !replay_add(&r, "p1 9-9:x"),
+          "port prefixes");
+    CHECK(replay_buttons(&r, 6) == 0x0080 && replay_port_buttons(&r, 1, 6) == 0x8200 &&
+              replay_port_buttons(&r, 1, 5) == 0 && replay_buttons(&r, 9) == 0x0040 &&
+              replay_port_buttons(&r, 1, 9) == 0 && replay_multi(&r),
+          "pad 2 spans read apart from pad 1");
+    CHECK(replay_add(&r, "p5 1-2:a") && replay_add(&r, "p2 1-2:jump") && replay_add(&r, "p2"),
+          "bad port spans rejected");
+    replay_free(&r);
+    CHECK(!replay_add(&r, "1-2:a") && !replay_multi(&r), "pad 1 only");
+    replay_free(&r);
+    CHECK(!replay_rec_open(&w, path, "test_replay"), "recorder opens for two pads");
+    for (long f = 1; f <= 50; f++) {
+        replay_rec_frame(&w, f, pattern(f));
+        replay_rec_port(&w, 1, f, pattern(f + 5));
+    }
+    replay_rec_close(&w);
+    CHECK(!replay_load(&r, path), "two-pad recording loads");
+    same = 1;
+    for (long f = 1; f <= 50; f++)
+        same &= replay_buttons(&r, f) == pattern(f) && replay_port_buttons(&r, 1, f) == pattern(f + 5);
+    CHECK(same, "two-pad recording reads back frame for frame");
+    replay_free(&r);
+
     /* "reset F" lines, comments allowed after them. */
     FILE *f = fopen(path, "w");
     CHECK(f != NULL, "script written");

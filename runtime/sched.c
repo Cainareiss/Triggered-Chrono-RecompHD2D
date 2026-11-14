@@ -324,6 +324,16 @@ void sched_set_joypad(int port, uint16_t buttons)
         pad[port] = buttons;
 }
 
+static int players = 1;   /* port: sched_set_players */
+
+void sched_set_players(int n) { players = n < 1 ? 1 : n > 4 ? 4 : n; }
+int sched_players(void) { return players; }
+
+uint16_t sched_joypad_read(int port)
+{
+    return port >= 0 && port < 4 ? joy[port] : 0;
+}
+
 /* RDNMI: the VBlank NMI flag is set at clock 2 of line 225 and cleared at
    clock 2 of line 0 (Mesen 2), at the read's own clock, which can be past
    the line its instruction started in. Reading clears it, except in the

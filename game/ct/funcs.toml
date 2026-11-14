@@ -9710,6 +9710,7 @@ states = ["m1x0"]
 e = 0
 module = "bankcd"
 source = "profile"
+patch = "coop_battle_pad"   # port: co-op (game/ct/coop.c)
 
 [[func]]
 name = "BattleSys_HdmaSplitStepClose"

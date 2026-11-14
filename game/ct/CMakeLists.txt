@@ -52,8 +52,10 @@ add_custom_command(
     COMMENT "emit ${CT_MODULES}"
     VERBATIM)
 
-# Recompiled functions plus this game's extern hooks.
-add_library(ct_gen STATIC ${CT_GEN_SOURCES} hooks.c)
+# Recompiled functions plus this game's own C: extern hooks, and the patches
+# funcs.toml names (port: co-op). build_module.py compiles the same *.c.
+file(GLOB CT_GAME_C ${GAME_DIR}/*.c)
+add_library(ct_gen STATIC ${CT_GEN_SOURCES} ${CT_GAME_C})
 target_include_directories(ct_gen PUBLIC ${CT_OUT})
 target_link_libraries(ct_gen PUBLIC ct_runtime ct_sched)
 target_compile_options(ct_gen PRIVATE ${CT_WARN} -Wno-unused-label)
@@ -98,7 +100,7 @@ endif()
 # port: the same game code as a loadable module (runtime/module.h), and
 # engine-only programs that load it with --module. The engine programs
 # contain no game code: built from the runtime and the empty tables only.
-add_library(ct_game_module MODULE ${CT_GEN_SOURCES} hooks.c scene.c ${CT_OUT}/ct_funcs.c
+add_library(ct_game_module MODULE ${CT_GEN_SOURCES} ${CT_GAME_C} ${CT_OUT}/ct_funcs.c
     ${CMAKE_SOURCE_DIR}/runtime/module_entry.c)
 target_include_directories(ct_game_module PRIVATE ${CT_OUT} ${CMAKE_SOURCE_DIR}/runtime)
 target_compile_definitions(ct_game_module PRIVATE CT_TEST_BUILD CT_TABLES_DEFINE)
@@ -268,6 +270,22 @@ list(APPEND ct_game_tests battle_no_flicker)
 add_test(NAME native_coverage COMMAND ct_boot --frames 11000 --min-native 49
     --script ${GAME_DIR}/test/replay/gato_battle.txt)
 list(APPEND ct_game_tests native_coverage)
+
+# port: co-op (game/ct/coop.c, replay/coop_battle.txt): Gato's fight with
+# the girl in the party. With --coop her command menu ($7E95D5 = 1) takes
+# pad 2 only: pad 1's A presses and a pad 2 A held across the hand-off pick
+# nothing (still open at 14720), pad 2's presses close it (14741). Without
+# --coop the same script is a one-player run: pad 1 closes it by 14563. The
+# module build takes the same patches.
+set(ct_coop_battle --frames 14750 --script ${GAME_DIR}/test/replay/coop_battle.txt)
+add_test(NAME coop_battle COMMAND ct_boot ${ct_coop_battle} --coop --expect-wram 14462:95D5=1
+    --expect-wram 14720:95D5=1 --expect-wram 14745:95D5=FF)
+add_test(NAME coop_battle_off COMMAND ct_boot ${ct_coop_battle} --expect-wram 14462:95D5=1
+    --expect-wram 14600:95D5=FF)
+add_test(NAME coop_battle_module COMMAND $<TARGET_FILE:ct_boot_engine>
+    --module $<TARGET_FILE:ct_game_module> ${ct_coop_battle} --coop
+    --expect-wram 14720:95D5=1 --expect-wram 14745:95D5=FF)
+list(APPEND ct_game_tests coop_battle coop_battle_off coop_battle_module)
 
 if(SDL2_FOUND)
     # The frontend itself, headless (SDL dummy drivers), unpaced. port: every

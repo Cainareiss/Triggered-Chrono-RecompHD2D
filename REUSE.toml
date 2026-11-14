@@ -59,9 +59,16 @@ SPDX-License-Identifier = "ISC"
 # engine-only first run, the ROM SHA-1 check, save files, the touch overlay
 # hookup, the Android (CT_ANDROID) build, the portable context switch and
 # overlay jump (arm64, docs/ANDROID.md), the handheld quit combo
-# (docs/HANDHELD.md), and decimal-mode ADC/SBC.
+# (docs/HANDHELD.md), decimal-mode ADC/SBC, and co-op (game patches in the
+# translator, pad 2 in replay scripts).
 [[annotations]]
 path = [
+  "recomp/emit.py",
+  "recomp/funcs.py",
+  "runtime/replay.c",
+  "runtime/replay.h",
+  "test/test_replay.c",
+  "game/ct/funcs.toml",
   "third_party/snes/ppu.c",
   "third_party/snes/ppu.h",
   "runtime/sched.c",

@@ -111,6 +111,17 @@ const sched_ppu_state *sched_ppu_state_get(void);
    11 Up, 10 Down, 9 Left, 8 Right, 7 A, 6 X, 5 L, 4 R. Default 0. */
 void sched_set_joypad(int port, uint16_t buttons);
 
+/* port: local multiplayer. The frontend says how many players are on
+   (1 by default; 2 when a second player has a controller on port 2), and
+   a game module's patches (funcs.toml `patch`) read it, with each port's
+   last auto-read result, to share the game between them. Nothing in the
+   engine changes with it. */
+void sched_set_players(int n);
+int sched_players(void);
+/* The buttons port 0-3 returned at the last auto-joypad read ($4218-$421F
+   as a word, sched_set_joypad's layout), without a bus access. */
+uint16_t sched_joypad_read(int port);
+
 long sched_frame_count(void);
 /* Called at each frame edge (line 261 ends), inside the frame run, with
    the number of frames completed: sched_frame() holds that frame, the

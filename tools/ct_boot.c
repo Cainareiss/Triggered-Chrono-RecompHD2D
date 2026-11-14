@@ -94,6 +94,11 @@
  *                  starting at master clock LO-HI (from frame N on: a reset
  *                  restarts the clock), for trace diffs against a reference
  * --interp-only    run everything in the interpreter (no native dispatch)
+ * --coop           port: two players (sched_set_players): the game module's
+ *                  co-op patches share the game with pad 2, which a
+ *                  script's "p2 F1-F2:BUTTONS" lines drive (they reach port
+ *                  2 with or without --coop)
+ * --shot F:PATH    write frame F as a PNG to PATH (repeatable)
  * --ref-quirk NAME reproduce a reference emulator's quirk, for comparisons
  *                  only (tools/ref_compare.py): mesen-dma-count8
  *
@@ -460,6 +465,9 @@ static void dump_scene(void)
 }
 
 static long dumped, audible;
+#define MAX_SHOTS 64
+static struct { long frame; const char *path; } shots[MAX_SHOTS];   /* --shot */
+static int n_shots;
 
 /* Frame edge: input for the next frame, then this frame's audio, dump
    and hash. */
@@ -482,6 +490,12 @@ static void on_frame(long f)
     resync_frame(f, sched_frame());
     sched_set_joypad(0, resync_active() ? resync_buttons(&input, f + 1)
                                         : replay_buttons(&input, f + 1));
+    for (int p = 1; p < REPLAY_PORTS; p++)   /* port: "pN" script lines */
+        sched_set_joypad(p, replay_port_buttons(&input, p, f + 1));
+    for (int k = 0; k < n_shots; k++)
+        if (shots[k].frame == f && png_write_bgrx(shots[k].path, sched_frame(), SCHED_WIDTH,
+                                                  SCHED_HEIGHT))
+            fprintf(stderr, "ct_boot: cannot write %s\n", shots[k].path);
     int n = sched_audio_take(audio, 2048);
     for (int k = 0; k < n * 2; k++)
         if (audio[k]) {
@@ -643,6 +657,16 @@ int main(int argc, char **argv)
             sched_set_behind(1);   /* port */
         } else if (!strcmp(argv[k], "--interp-only")) {
             sched_set_native(0);
+        } else if (!strcmp(argv[k], "--coop")) {
+            sched_set_players(2);   /* port */
+        } else if (!strcmp(argv[k], "--shot") && k + 1 < argc && n_shots < MAX_SHOTS) {
+            char *end;
+            shots[n_shots].frame = strtol(argv[++k], &end, 10);
+            if (*end != ':' || !end[1]) {
+                fprintf(stderr, "ct_boot: bad --shot %s\n", argv[k]);
+                return 2;
+            }
+            shots[n_shots++].path = end + 1;
         } else if (!strcmp(argv[k], "--module") && k + 1 < argc) {
             module_path = argv[++k];   /* port: game code from a module */
         } else if (!strcmp(argv[k], "--expect-wram") && k + 1 < argc && n_expect_wram < MAX_EXPECT) {
@@ -687,7 +711,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "usage: ct_boot [--frames N] [--dump DIR] [--shot-every N DIR] [--thumbs FILE] [--resync REF LAG OUT] [--needed-hw FILE] "
                             "[--min-nmis K] [--require-render] [--wav FILE] "
                             "[--require-audio] [--input F1-F2:BUTTONS] [--script FILE] "
-                            "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--scene FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE] [--behind]\n");
+                            "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--scene FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE] [--behind] [--coop] [--shot F:PATH]\n");
             return 2;
         }
     }
@@ -739,6 +763,8 @@ int main(int argc, char **argv)
     last_frame = frames;
     sched_set_frame_hook(on_frame);
     sched_set_joypad(0, replay_buttons(&input, 1));
+    for (int p = 1; p < REPLAY_PORTS; p++)
+        sched_set_joypad(p, replay_port_buttons(&input, p, 1));
     sched_set_reset_hook(script_reset);
     while (sched_frame_count() < frames)
         sched_run_frame();
