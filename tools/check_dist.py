@@ -61,7 +61,8 @@ GENERATED_NAMES = ('ct_game*.so', 'ct_game*.so.*', 'bank*.c', 'ct_funcs.c', 'ct_
 SYMBOL_RE = re.compile(rb'f_[0-9A-F]{6}_m[01]x[01]')
 MODULE_ENTRY = b'ct_module_get'   # runtime/module.h
 PACK_MANIFEST = 'pack.toml'       # asset packs (docs/ASSET-PACKS.md)
-PACK_PICTURE_RE = re.compile(r'(^|[/!\\])(tiles|sprites|objects)[/\\][0-9a-f]{16}\.png$', re.I)
+PACK_PICTURE_RE = re.compile(r'(^|[/!\\])((tiles|sprites|objects)[/\\][0-9a-f]{16}'
+                             r'|poses[/\\][0-9a-f]{8}|sheet_[a-z0-9_]+_\d+x)\.png$', re.I)
 
 
 # Byte tables that are part of no game's data but turn up in many programs
@@ -172,7 +173,8 @@ class Checker:
         if base.lower() == PACK_MANIFEST:
             self.fail(where, 'an asset pack manifest (packs are personal-use only, never shipped)')
         elif PACK_PICTURE_RE.search(where):
-            self.fail(where, 'a picture from an asset pack (named by a content key)')
+            self.fail(where, 'a picture from an asset pack or a sprite sheet export '
+                             '(named by a content or pose key)')
         if elf_defines(data, MODULE_ENTRY):
             self.fail(where, f'a game module (exports {MODULE_ENTRY.decode()})')
         m = SYMBOL_RE.search(data)

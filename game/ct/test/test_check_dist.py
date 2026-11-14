@@ -85,6 +85,12 @@ def main(argv: list[str]) -> int:
             info.size = len(body)
             t.addfile(info, io.BytesIO(body))
         expect([pictar], 1, 'a key-named pack picture in a tar')
+        for name in ('ct/packs/mine/poses/01000002.png', 'ct/sheets/x/sheet_pc00_4x.png'):
+            posezip = os.path.join(d, 'with_pose.zip')
+            with zipfile.ZipFile(posezip, 'w') as z:
+                z.writestr(name, b'\x89PNG\r\n\x1a\n' + os.urandom(64))
+            expect([posezip], 1, f'a pose picture or sheet export in a zip ({name})')
+            os.remove(posezip)
         expect([d], 1, 'a directory holding them')
     return 1 if bad else 0
 
