@@ -33,7 +33,7 @@ ROM-derived: keep it in the build dir and never commit it.
 | OAM | **Culled** to the camera window (+4 tiles); one VRAM sprite slot per active object. Only the current frame is uploaded. |
 | Any object's sprite frame without OAM? | **Yes** (A1): from ROM and WRAM, for 4- and 8-piece frames (`game/ct/sprites.c`), checked pixel for pixel against the PPU. |
 | (A) 3D rebuild of the field | **Yes.** All inputs are resident. A height map has to be *inferred*, because the game has none (see A0.9). |
-| 3D world map (1000 A.D., `$1F0`)? | **Yes.** Mode 1, no HDMA, whole 1536x1024 px map and 8 px terrain classes in WRAM (W1-W3, W9). Mountain vs forest needs the picture. Vehicles and mode 7 scenes unverified. |
+| 3D world map (1000 A.D., `$1F0`)? | **Yes.** Mode 1, no HDMA, whole 1536x1024 px map and 8 px terrain classes in WRAM (W1-W3, W9). Mountain vs forest needs the picture. All eight overworlds load and are mode 1 (W13); the Epoch is not found (W12). Mode 7 is a separate cutscene engine, two of its ten scenes (a bike race, the Epoch cockpit) use it (W11). |
 | (B1) battle co-op | **Yes.** One hook on the battle's pad word, keyed by the active-menu byte. |
 | (B2) P2 steers a follower | **Partial.** Hook the follower routine. Proper wall collision needs the leader's collision code, which is tied to the camera. |
 | (B3) true split screen | **Partial (feasible with module work).** Background: yes, from WRAM/VRAM alone. Sprites: no from VRAM. They need a module-side sprite renderer, or a hook that widens the activation window. Map exits, triggers and battles stay tied to the leader. |
@@ -634,11 +634,10 @@ below `$90`. It decompresses a 34,175-byte overlay from `$C31313` into `$7E3000`
 `$211B-$2120` at 30+ sites (e.g. `$7E3096`, `$7E565A`, `$7E5C59`, `$7E73D5`, `$7E9E31`),
 writes `$420C` at seven (`$7E879E`, `$7E87DA`, `$7E8A18`, `$7E8B0C`, `$7E8BC0`, `$7E8C25`,
 `$7E8CDD`) and sets HDMA channel registers at 13, so it does use per-scanline matrices.
-**No replay reaches one of these scenes.** The only time that engine ran
-(frames 65-1516, the opening) the frame logged had no BGMODE write at all (a pendulum
-on black, CGRAM and VRAM uploads only). So which scenes use mode 7 (Epoch flight? the
-end cutscenes?) and what their tables look like are **not verified**. docs/PRIOR-ART.md's
-"the world map is partly mode 7" does not hold for the 1000 A.D. overworld.
+**No replay reaches one of these scenes** except the title (frames 65-1516: the pendulum
+and logo, no mode 7). A one-byte poke does reach the others: see W11 for the scene list,
+which two scenes use mode 7 (a bike race, the Epoch cockpit), and their per-line tables. docs/PRIOR-ART.md's
+"the world map is partly mode 7" does not hold for any of the eight overworlds (W13: all are mode 1).
 
 ### W2. Where the map and its graphics live
 
@@ -752,7 +751,7 @@ metatile index (which picture it is) for that.
   its position in a 16-entry ring, x at `$7E1B5B`, y at `$7E1B7B`, head byte offset
   `$7E1B5A` (Overworld_PushPosHistory C23934, init C2391C). Magus (PC id 6) has his own
   animation offset (+12, C23974).
-- **Vehicles (Epoch): not found.** The 1000 A.D. dump has no vehicle but the ferry, and no
+- **Vehicles (Epoch): not found** (W12 has what was checked since). The 1000 A.D. dump has no vehicle but the ferry, and no
   vehicle state byte was identified. World event flags are cached from `$7F01F0` (16
   bytes) to `$7E1BA7` (Overworld_CacheEventFlags C226D6; `$7F0000` goes to `$1BA6`), so
   the Epoch is probably a flag there plus its own sprite, or a mode 7 scene (W1). Reaching
@@ -869,18 +868,16 @@ What the renderer does with it:
 Risks: classes do not separate mountains from forests (above); vehicles and flight are
 unknown and flight may be the mode 7 engine (W1); the 2D picture's per-tile priority (the
 "cover" look, trees over the sprite) has no direct mesh equivalent; water and palette
-animation are not examined; only `$1F0` was run (the others share the layout but were not
-drawn).
+animation are palette cycling only (W14); the other seven maps load and differ in what
+class 2 means (W13).
 
 ### W10. For an HD mode 7 renderer (bsnes-hd style)
 
 - The **1000 A.D. overworld never uses mode 7**, so no HD mode 7 path is needed for it:
   draw it from W2-W4 in 3D or as the plain mode 1 picture.
 - Per-scanline matrix: none on `$1F0` (no HDMA, W1). The mode 7 engine overlay (W1) holds
-  the matrix stores and HDMA tables; none of its scenes was reached. A later spike needs a
-  replay or a state poke that reaches one, then `--log-ppu 2105:2133` and
-  `--log-ppu 211A:2120` over one frame to get the per-line writes (HDMA writes are
-  logged with their line), and `--trace` on the overlay to find the table the HDMA reads.
+  the matrix stores and HDMA tables; W11 reaches its scenes, logs the per-line matrix and
+  finds the tables (`$7EF100` A,B and `$7EF488` C,D).
 - Sprites over mode 7: the engine's own NMI is a different handler (`$C30548`); whether it
   also DMAs `$0700` to OAM was not checked.
 
@@ -896,6 +893,286 @@ python3 ../game/ct/tools/worldmap_probe.py spike/w.wram --vram spike/w.vram \
 It prints whether the dump is the world map (vector and id), the party, the camera, the BG
 scroll, the active exits and the OAM entries as screen and world positions. The PNGs are
 ROM-derived: build dir only.
+
+### W11. The mode 7 engine: which scenes, how to reach one, its per-line tables
+
+Everything here was run with `ct_boot` from `build-mod` (static, no `--module`) on
+`world_map_save.txt`'s first frames. **Verified** = a run or a dump agrees; **code** = read
+from the disassembly (`ldis.py`, with the new `--overlay FILE@ADDR` to list WRAM overlay code
+from a `ct_decompress.py` output). The probes are `scene_reach.sh`, `m7_matrix.py`,
+`m7_tables.py` and `m7_scan.py` (end of this section).
+
+**It is the game's cutscene engine, and only some of its scenes are mode 7.** The overlay
+at `$7E3000` (W1) holds ten scene handlers: the title, the credits and ending cutscenes,
+and two real mode 7 scenes. Free flight on the world map is not among them.
+
+*How it is entered.* The event command table `$C05D6E` (256 words, `jumptable` in
+funcs.toml) has `EventCmd_Mode7Scene` ($C03FAF) at index **`$FF`** (`$C05D6E + 2*$FF =
+$C05F6C`, verified against the table bytes). Its argument byte (`$7F2001,X`, stored to
+`$DF`) picks the case: `< $80` = this engine; `$80` Warp_TransitionStub, `$81`
+Warp_GateEntryStub, `$82` Warp_TransitionShortStub, `$83-$8F` Sub_FDFFE5 (all four are bank
+$FD stubs, code); `$90-$9F` = a 16-word table at `$C0400E` of screen-state commands (they set
+`$39` and wait on `$0350`; **not** this engine; code). So "mode 7 scene ids" are `$00-$7F`
+and the engine uses only `id & $1F`. Mode7Engine_Entry ($C30000) gets the id in A, stores it
+at **`$0384`**, installs the NMI `$C30548`, decompresses the overlay (W1) and jumps to
+`$7E3000`, which clears `$0380-$0396`, sets DP to `$4300` for the DMA setup (so the HDMA
+channel stores are DP-relative `STA $70` etc.; a scan for `STA $43xx` finds only channel 7),
+runs the handler `JSR ($3043,X)` with X = `(id & $1F) * 2`, and at the end jumps to
+`$C00000` ReentryVectors. The engine's NMI (`$C308C9`) writes `$420C` from the shadow
+**`$038C`**, INIDISP from `$038D`, and calls the overlay's frame routine `$7E39BE`;
+`$0392` nonzero means the scene is over. The table at `$7E3043` has 16 words, so ids 16-31
+index into the code after it and are invalid (they end at once: ids 16-31 logged 13,891-13,892 PPU writes
+each in the sweep).
+
+| id (`$0384 & $0F`) | Handler | What it shows (seen on screen) | Mode 7? |
+| --- | --- | --- | --- |
+| 0, 9 | `$7E3B48` | **a bike race on a road**, with `1000 REST` and a rank panel (the 2300 A.D. highway race, by the look) | **yes**: mode 1 sky/city above line 57, mode 7 road below, rotating matrix. Variant: `$44` is incremented when `id & $0F` is not 0 |
+| 1 | `$7E6B04` | the end credits cutscene: staff text on black, then Zeal's floating continent over a sea of clouds, the Blackbird flying past, a scene on a rampart, the throne room | no mode 7 in the 600 frames logged (modes 0, 1); screenshots to frame 1,500 |
+| 2 | `$7E5978` | **the title screen**: the pendulum, `CHRONO TRIGGER` logo, copyright | no (mode 1) |
+| 3 | `$7E671F` | black for 800 frames, then the same cloud/continent fly-over as in 1 | no (modes 0-2) |
+| 4 | `$7E53BB` | stars, a fire-ball (Lavos) shrinking toward a planet | no (mode 1; HDMA frames: none) |
+| 5 | `$7E7092` | all the NPC sprites scattered over a black screen (the ending's character parade, backgrounds missing) | no |
+| 6 | `$7E78DD` | **the Epoch cockpit** looking out over clouds, then a flight into a tunnel of fire with a white flash | **yes**: mode 7 sky above line 168, mode 1 cockpit panel below |
+| 7, 8 | `$7E6248` | the planet turning (8: grey, with the words "BUT... THE FUTURE REFUSED TO CHANGE.") | no |
+| 10, 11, 14, 15 | `$7E8538` | ends at once | - |
+| 12 | `$7E8E95` | credits text rolling over stars | no |
+| 13 | `$7E8EA8` | `CHRONO TRIGGER  The End` | no |
+
+Flags in the id byte (code: the overlay tests them with `BIT`): `$80` = enable IRQ/NMI path at
+entry (C30038), `$20` skips the song start in the id-0/9 handler (`$7E3B51`), `$40` is read by
+scenes 0/9, 6 and elsewhere (`$7E3C54`, `$7E4F82`, `$7E677D`); what they select was not
+traced. The sweep saw that ids 32+n (bit 5) draw the same as n, and 64+n / 96+n differ
+(the race showed 37 frames of HDMA, 142-178, in place of 84 before the interpreter stopped).
+
+*How to reach a scene headlessly (verified).* No replay reaches one apart from the title,
+but the boot's own `FF 02` can be edited: the event script of the first frames is in WRAM
+(`$7F2000`: the byte count, then commands from `$7F2001`), `EventCmd_Mode7Scene` runs at
+**frame 60** and the argument byte is `$7F2061` (`--wram` at frame 60 shows `... ea 00 ff 02`;
+`--log-entry C03FAF` says A=`$01FE`, Y=`$5F` there, `C30000` is entered at frame 65 with
+A=`$0002`). `--poke-wram 59:12061^XX` XORs it before it is read, so XX = `2 ^ id` makes the
+same boot start scene `id`. Checked: `^01` enters `C30000` with id 3 (frame 65), and each of
+ids 0-127 ran for 600 frames (`scene_reach.sh m7 ID FRAMES OUT`). The location's event script
+is compressed (so patching the ROM image would not do; the recompiled code is also not
+affected by ROM edits, only data), which is why the one-byte poke is the route. Limits:
+scenes 0/9 stop at frame 225 with `overlay: more than 64 nested overlay functions` at
+`$7E3749` (the interpreter's overlay depth limit; whether the real race runs past it, or this
+entry lacks state the game sets before it, is **open**), scene 1 runs 1,500+ frames, and the
+others run to their end.
+
+*Callers in the event scripts: not enumerated.* A location's script is a compressed stream:
+location record (14 bytes at `$F60000 + 14*loc`) `+8` is an index into 3-byte pointers at
+`$FCF9F0`, NewGameSave_DecompressToWork ($C056D4) decompresses it to `$7F2000`.
+`m7_scan.py` decompresses every one (`ct_decompress.py`) and lists `FF xx` with `xx < $80`,
+but the scripts have no length table in the repo, so the scan can not tell an operand from a
+command: it reports 1,087 hits, most of them operands. Treat its output as a candidate list
+(to be confirmed by running the location), not as data. The scenes that are certainly
+called are the title (id 2, the boot script) and, by what they show, the ending
+sequence (credits, parade, planet, `The End`); the race and the Epoch cockpit are entered
+from field locations that no replay visits.
+
+*Per-scanline state (verified).* `m7_matrix.py LOG FRAME` rebuilds, per scanline, BGMODE, the
+matrix A B C D (8.8 signed, each a write-twice pair), the centre X0/Y0 and the BG1 scroll from
+`--log-ppu 2105:2133@F` (it needs the previous frame in the log too for the carried values).
+HDMA writes are logged with the line they happened on: all land at **dot 278-331 of the line
+before the one they shape** (the first write of a frame is at line 0, the first visible line is 1;
+the logged line L shapes line L+1; checked on mode switches, `2105` at logged line 168 and the
+panel starting at line 169, and not against a reference emulator).
+
+- **Scene 6, sky (frames 98-457 of the sweep):** `$038C` = `$3F` (HDMA channels 0-5; set at
+  frame 97 at `$7E7A62`), 225 entries each of `$211B` and `$211C` (A, B) and of `$211D`/`$211E`
+  (C, D) per frame, none rotated: **A = D = s(line), B = C = 0**. s is 128 (0.5) at line 0,
+  rises hyperbolically to 836 at line 108 and is 0 at **line 120 (the horizon)**; below it
+  816 at line 132, 370 at line 156 (the floor mirrors the sky). `$2105` = 7 until logged line
+  167 and 1 from 168 (the cockpit panel; BG1 scroll `$210D/E` = 256, 87 there, 0, 565-578 above).
+  X0 = 128 and Y0 move every frame (436, 351, 112 at frames 298, 449, 559), the camera
+  advancing. `$2132` (fixed colour, 67 lines) draws the glow. From **frame 458** (`$038C` =
+  `$1F`) the tunnel: A, D up to 508, B = C = 0 as well (radial zoom, no rotation); the
+  frame has no `$2105` write (mode 7 stays).
+- **Scene 0/9, the race (frames 142-225):** `$038C` = `$3E` (channels 1-5, at frame 139).
+  Mode 1 up to line 56 (logged), then mode 7 with `$210D/E` = (1015, 24) written at the
+  switch, **A = D = 0 on the straight and B = -C = 24480 / (line - 32)** (the horizon at line
+  32, hidden under the mode 1 part): B = 1020 at line 56, 765 at 64, 612 at 72, 382 at 96, 128 at 224
+  (fits the integers printed). X0 = 1032..1152 (30 per 15 frames, the road advances), Y0 = 248.
+  In a bend (frame 222, the last full frame before the stop) the matrix is rotated:
+  (A, B, C, D) = (432, -218, 218, 432) at line 100 and (249, -125, 125, 249) at 150, i.e.
+  A = D = k cos t, B = -C = -k sin t with the same 1/(line - 32) k and t about 26.8 degrees
+  (tan t = 0.505 at every line); X0, Y0 = (962, 366), BG1 scroll (849, 147).
+- **HDMA sources (verified, `m7_tables.py`):** per-line tables in bank `$7E`, 4 bytes a line
+  (two words), 225 lines: **`$7EF100`: A, B** and **`$7EF488`: C, D** (mode 3 style: the writes
+  per line are `$211B` lo/hi, `$211C` lo/hi and `$211D`/`$211E` likewise). In scene 6 the second table's D word is at `$7EF48A` (it equals A) and C at
+  `$7EF488` (zero, as B); in the race B is at `$7EF102` and C at `$7EF488`. The matrix therefore can be read from WRAM at any frame
+  without the PPU log. `$211F/$2120` (X0, Y0) and `$210D/E` are written once per frame at
+  line 234 (the NMI) and again by HDMA at the mode switches.
+- **For an HD mode 7 renderer:** the race and the sky both fit "a plane viewed with a
+  per-line scale": scale(line) from the table, a rotation about the centre from the (A, B)
+  ratio, X0/Y0 as the centre and BG1 H/V as the scroll; the mode 1 parts (sky, panel) are
+  ordinary layers split at the logged line. The mode 7 map and character data in VRAM (interleaved
+  low/high bytes) were not read out. Sprites over scenes
+  0/9 (the two bikes, `1000 REST`) are in OAM; whether the engine's NMI DMAs OAM from
+  `$0700` like the shell was not checked (frame 200 shows them drawn, so something does).
+
+Probes: `scene_reach.sh m7 6 600 spike 299` (scene 6 from frame 299 on), then
+`m7_matrix.py spike/scene6.log 300 --every 15 --to 225`, `m7_tables.py spike/scene6.log 300
+spike/scene6.wram --first 100`; `m7_scan.py --ids 0,1` for the script scan.
+
+### W12. The Epoch and vehicles on the world map: not found; what is known
+
+No replay or poke reached an Epoch on a world map. What was established:
+
+- **All eight world maps are mode 1.** `$2105` is `$09` on every one of `$1F0-$1F7`
+  (the probe's `BGMODE 09` line for each dump, W13), so ordinary flying on a world map would be
+  mode 1 with a sprite, not mode 7. The mode 7 engine (W11) has an **Epoch cockpit** scene
+  (id 6, seen), but it is a cutscene entered by event command `$FF`; it is not the world map.
+- **The world map has no vehicle state byte of its own that was found.** The only vehicle on
+  `$1F0` is the ferry: four 16x16 OAM pieces, tiles `$2C, $2E, $4C, $4E`, palette 2 (W5), an
+  ordinary sprite node. The OBJ sheet on `$1F0` (VRAM words `$0000-$1FFF`, rendered for this
+  spike) holds, besides the party frames: clouds, balloons, a ship in six turning frames
+  (the ferry's art), sparkles, and the caption plates (`12000`, `600`, `1000`, `1999`, `2300`,
+  `65000000`, `B.C.`, `A.D.`, `?`), but **no Epoch frames**.
+- **Flags.** Overworld_CacheEventFlags (C226D6) copies `$7F01F0-$7F01FF` to `$7E1BA7-$1BB6`
+  and `$7F0000` (the story counter) to `$1BA6`; Overworld_WritebackEventFlags (C226F0)
+  writes them back. Readers in bank $C2 (search of the code, not run): `$1BA7` bit 4,
+  `$1BAA` bit 5 and `$1BAF` bit 1 stop the BG3 cloud layer scrolling with the party
+  (C21694-C216E4: the scroll `$24`/`$2A` is only advanced when all three are clear);
+  `$1BA9` is tested at C295B2/C2E807 and `$1BAD` at C26994 (menu code); `$1BA6` is
+  compared with `$36` and `$CC` (menu text, C26985, C27463) and the story counter `$7F0000`
+  with `$D4` by Overworld_ApplyStorylineGfx (C22D91: from `$D4` on, maps `$1F0`, `$1F1`
+  and `$1F2` get `$800` bytes from the `$9000` buffer put in VRAM word `$0C00`, and `$1F6` the same
+  at word `$0000`; code only) and with `$D2`
+  at C2311F, in a routine keyed on a destination id at `$029F` with coordinates `$0290/$0292`
+  (and a second at `$029E/$029A/$029C`): scripted spots on the map, not a vehicle.
+  So the flags that bring the Epoch in are probably in the per-map trigger scripts
+  (descriptor byte `+$16`, `$C6FFE0`, decompressed to `$7F0400` by
+  Overworld_LoadTriggerScripts C22A16), not in bank-C2 code.
+- **`$1F5` is special-cased:** C23BC9 sets the leader node's animation base `+$0F` to `$B0`
+  on `$1F5` and `$A0` elsewhere: the party is drawn with another animation set on the sky map
+  (an airborne party? the map is the cloud sea, W13). Not run with a flag set.
+- **What a test needs:** a save in which the Epoch exists, i.e. a replay past the point where
+  the game gives it (not in the repo), or the trigger-script bytes of a map (`$7F0400` on the
+  loaded map: untried) to see which flag a script tests. The one-byte `--poke-wram` can set one flag per
+  run (`$7F01F0+n` XOR a bit before frame 7252, the map entry's cache at `$C226D6`); 128
+  candidate bits were not swept. **Open.**
+
+### W13. Other eras: the eight maps load (verified), with their classes
+
+**How (verified).** The replay writes `$0100 = $1F0` at frame 7252 line 239 and Overworld_SetMapDescPtr
+(C2274D) reads it at frame 7254, so `--poke-wram 7253:100^N` (N = 1-7) makes the same run load
+`$1F0+N`: the NMI vector stays `$C2015E`, `$0100` reads `$1F0+N`, the exit, region and
+trigger tables and the BG tiles are those of the new map, and `worldmap_probe.py --png` redraws it
+(`scene_reach.sh world N OUT`). The party is put at the tile the `$1F0` exit gave (55,35 = px 440,280),
+which is walkable on `$1F1` and `$1F2`, blocked on `$1F3`, and on water on `$1F4` and `$1F6`: fine for
+looking, not for walking. Each loaded in 7,450 frames (about 25 s).
+
+| id | What (verified by the picture, the caption in the shot, or the caption's OAM pieces) | Active exits | Cell nibbles 0 / 1 / 2 / 4 | BG1 cells |
+| --- | --- | --- | --- | --- |
+| `$1F0` | 1000 A.D.: green islands, hex-pattern sea | 77 of 80 | 3,675 / 2,491 / 18,216 / 194 | 864 |
+| `$1F1` | a green archipelago, same hex sea (caption plate is 2 pieces `$1AC,$1AE`; by the look the 600 A.D. map, not confirmed by a caption screenshot) | 67 of 74 | 3,302 / 2,678 / 18,429 / 167 | 756 |
+| `$1F2` | a dark brown ruined land, caption `?` (the 2300 A.D. map, by the look) | 20 of 20 | 2,292 / 1,566 / 20,686 / 32 | 574 |
+| `$1F3` | desert, jungle and a lava field, deep blue sea; caption plate has 4 pieces (`$18C,$18E,$188`: the long year and `B.C.`): 65,000,000 B.C. by the look | 21 of 25 | 3,457 / 1,917 / 19,160 / 42 | 4,750 |
+| `$1F4` | **12000 B.C.** (the caption in the screenshot): snow and ice floes on a dark sea; also a scripted object of 12 OAM pieces (tiles `$40-$64`, palette 1: a dark shape hung on a chain, south of the party in the shot) and a 9-piece trail (tile `$8E`), OAM 3-23 | 7 of 7 | 3,351 / 54 / 21,145 / 18 (+8 of nibble 5) | 624 |
+| `$1F5` | a plain sky above a sea of clouds, no caption, no terrain: 98% of the cells are nibble 0 over an empty ground metatile and **BG1 covers the whole map** (one overlay metatile, `#32`, in all 6,144 cells); BG1's scroll is `342` against BG2's `312` in the dump | 14 of 14 | 23,700 / 848 / 0 / 28 | 6,144 |
+| `$1F6` | dark sea with ice floes, sparser than `$1F4`, no caption | 7 of 7 | 517 / 30 / 24,015 / 14 | 494 |
+| `$1F7` | **1999 A.D.** (the caption in the screenshot): a small map (a domed city, grey roads) in metatiles 14-50 x 2-36 of the 96x64 grid, the rest blank | 0 active of 1 | 22,454 / 525 / 1,584 / 13 | 367 |
+
+All eight have BGMODE `$09`, BG1/BG2 tiles at word `$2000` (the probe's `--chr 2000` works for
+all), the same decompressed sizes and the same `$7E3000-$7E8300` layout (W2). `$1F5`'s party
+sprite has priority 3 where the others have 2 (OAM entry, W5; consistent with the `$1F5` case in
+W12).
+
+**What differs for the height guess** (`worldmap_classes.py`: per class, what the ground tile
+looks like, so "2 = sea" can be checked per map). The numbers are the share of the class's
+cells whose ground metatile mean colour reads as water/forest/ice/rock:
+
+- **`$1F0`, `$1F1`**: class 2 is 91% water-coloured (`#205` and `#7`, the hex sea); the rest of
+  class 2 is mountain tops. Class 1 is forest (`#136, #137, #123, #135, #223`, about 80%) and
+  rock (`#66`, with 1/2 mixed: the cliff band, 64 + 64 cells on `$1F0`, 72 + 72 on `$1F1`). On
+  `$1F1` `#185` (dark, 176 cells, class 1, an overlay on 33) is deep water near the coast. The
+  current `relief[]` (castle metatiles, `$1F0`) does not apply to `$1F1`: its castle and towns
+  are other metatiles.
+- **`$1F2`**: **there is no blue.** The ground is all rock-coloured (100% of every class);
+  the "sea" is a dark ground tile `#7` (mean about 33,37,45, 17,740 cells of class 2) that
+  is **void, not water**; class 1 is ruined buildings (`#229` 412 cells, 102 with an overlay;
+  `#33`, `#38`) and `#66`-like pairs (`#67, #68`: 1/2 mixed). A water shimmer would be wrong
+  here: treat class 2 as a lowered dark plain.
+- **`$1F3`**: the sea is class 2 on **tan** ground (`#64`, 13,724 cells, mean 139,115,50) with
+  a BG1 overlay on 3,431 of the cells (4,750 overlay cells in all): the blue sea you see is
+  drawn by BG1, so the ground tile's pixels lie. The picture of the composite (what the
+  renderer already uses) says water; a per-index table keyed on the ground tile would not.
+  Class 1 is jungle (`#6, #7, #5, #21, #23`, forest colours, 89%).
+- **`$1F4`, `$1F6`**: ice. Class 0 is 96% ice/white ground; class 2 is the dark sea (`#188` on
+  `$1F4`, 8,228 cells, `#174` on `$1F6`, 4,016, mean 29,28,37) and 42% of the class on `$1F4`
+  reads blue; class 1 is rare (54 and 30 cells) and `$1F4` has 8 cells of nibble **5**
+  (blocked + cover): a combination `$1F0` does not have. Ice floes are islands of ground
+  tiles in the dark sea.
+- **`$1F5`**: flat: no heights; the clouds are the BG1 overlay everywhere (the sea of clouds
+  pattern); a cloud layer plus a sky backdrop, nothing to lift. Class 1 (848 cells) is the
+  few things standing in it (rocks, trees: `#180, #196, #21, #33, #38`).
+- **`$1F7`**: the map is 37 x 35 metatiles (x 14-50, y 2-36); outside it
+  nibble 0 over empty ground: a renderer should clamp to the used rectangle or the 3D map
+  shows a green plain the size of the grid. The sea tile is `#7` as on `$1F0`.
+
+Colours in each dump are the era's own (the dark `$1F2`, the pale `$1F5`, the blue `$1F3`), so
+a shimmer or a height tint from the water colour has to read it from CGRAM per map.
+
+### W14. Animation: what moves on the world map and in the field
+
+**World map: palette cycling, no tile animation (verified).** A 220-frame log of every VRAM
+and CGRAM write on `$1F0` (`--log-ppu 2115:2122@7480`, `vram_uploads.py`) has **no VRAM upload
+that repeats** (the tile art is static: the whole map redraws from one VRAM dump, W2) and a
+full 256-colour CGRAM upload every **10 frames** from the shell. Following the contents
+(`vram_uploads.py --cgram-diff`) only these colour indices change, each cycling through 2-4
+values: indices **32 and 36-46** (BG palette row 2, colours 4-14: the sea) every 10 frames
+on `$1F0`. The same runs on the other maps (the poke of W13):
+
+| map | indices that change | every | distinct values |
+| --- | --- | --- | --- |
+| `$1F0`, `$1F1` | 32; 36-46 | 10 frames (32 changes in pairs) | 2; 2-4 |
+| `$1F2` | 32; 36-46 | 30 frames; 10 frames | 2; 2-4 |
+| `$1F3` | 48-63 (5 of them); 64-67 (4) | 8 frames | 4; 3 |
+| `$1F4` | 32; 36-46; 64; 75-76 | 10 frames (64: 10, in bursts) | 3; 2-4; 2; 6 |
+| `$1F5` | 64; 76-78; 112-116 | 16; 8; 8 frames | 2; 3; 3-4 |
+| `$1F6` | 32; 36-46 | 10 frames | 3; 2-4 |
+| `$1F7` | 32; 36-46 | 10 frames | 2; 2-4 |
+
+(The routine that does it on the world map was not located; the NMI at `$C2015E` copies a
+shadow palette, so it is the shell's. The periods above are what a renderer needs: a water
+shimmer is a palette colour change every 8-10 frames, not a tile animation. Which row each
+index range is on: 32-47 is BG palette row 2, 48-63 row 3, 64-79 row 4, 112-127 row 7.)
+
+**Field: BG tile animation by a VRAM DMA service, and a palette animator (the first
+verified, the second code).**
+
+- *Tile animation.* On Leene Square (`$005`, frames 8500-8700 of `leene_square.txt`) the
+  log shows nine 64-word (128 byte = four 4 bpp tiles) uploads, every **4 frames** each
+  (three of them on the even-numbered frames, six more in the other phase), to VRAM words
+  `$30C0, $3290, $3390` and `$4500, $4540, $4600, $4640, $4680, $46C0`, i.e. inside the BG1/2
+  tile area (`$2000-$4FFF`, A0.4), with **3 or 4 distinct contents** each (a 12-16 frame
+  cycle). (The uploads at `$0080-$1980`, 128 words every 7-15 frames, are OBJ frames: sprite
+  animation, not tiles.) The code is `FdCore_VramDmaServiceStub` ($FDFFFD, jump to
+  **`$FDE022`**), which the field NMI calls (`JSL $FDFFFD` at `$C0ED08`, when `$0153` bit 0 is set; when it
+  is clear that NMI runs Vblank_UpdateAnimTileWords `$C0ED15` instead): it increments
+  `$051D`, and on one parity of that count serves six slots (at `$0500 + $B0, $B5, $BA,
+  $BF, $C4, $C9`) and on the other the other six (`$CE ...`). A **slot is five bytes**: a source offset word, the VRAM
+  destination word (bit 15 set = slot off) and the source bank; the frame number is bits 9-11
+  of the offset, and the next offset and the DMA source come from two tables per slot,
+  `$7F0400 + 32*slot + 2*frame` (the step added to the offset) and `$7F0410 + 32*slot +
+  2*frame` (the DMA source address), so a slot walks 3-4 frames and wraps. Each service run moves 128 bytes per slot over
+  DMA channel 7. The tables and slots are filled per location (the map's animation
+  data); **which tiles** a location animates is therefore the slot list (`$0500+$B0..$D8` and
+  `$7F0400-$7F04F0`) after the map is loaded: dump WRAM and read it.
+- *Palette animation (code).* `AnimTile_FrameTickStub` ($FDFFF7, to `$FDE39C`: the name is a
+  misnomer) steps twelve 12-byte slots at `$7E0520-$7E05AF`: byte 0's high nibble is the kind
+  (0 off; 1 and 8 take an extended 9-byte record; others are the 6-byte kind), `+3`/`+4` count
+  frames against the period in `+5`, kind 1 copies `+2` colours from `$F60000 + [+6]` (frame
+  `+3`) into the CGRAM mirror at `$7E2200 + 2*[+1]` (E437); other kinds fade/tint (E4E8,
+  E532, E5A4 brightness, E82C tint to white, E57C, E807, E485 scripted frames). The slot
+  set comes from PalAnim_LoadMapConfig (`$FDFFF4`, to `$FDE292`) by the location record's
+  byte `+3` (`$F60003 + 14*loc`) through the word table at `$FDF9C7` into `$FDFA77`. Not run
+  on a changing field: Leene Square's CGRAM is re-uploaded every frame but the colours do
+  not change (`--cgram-diff` finds nothing). **Open:** a field map with water shimmer
+  (a lake or the sea shore) to read which colours and how fast.
+
+Probes: `vram_uploads.py LOG [--cgram | --cgram-diff]`.
 
 ## Proposed `ct_scene` (generic, for runtime/module.h)
 
@@ -1053,8 +1330,9 @@ What `game/ct/rumble.c` reads for simulated rumble (runtime/rumble.h; USER-GUIDE
   (checked by Player_ApplyPadMoveIntent) is a candidate. It has not been verified.
 - A field / battle / world map / menu mode byte for `ct_scene.mode`.
 - The world map ($1F0-$1F7) is a different engine: see "World map". Open there: vehicles
-  (the Epoch), which scenes use the mode 7 engine and its per-scanline tables, animated
-  water, what the region nibbles drive, the other seven world maps, followers' ring.
+  (the Epoch, W12), what the region nibbles drive, the followers' ring, the callers of the
+  mode 7 scenes in the event scripts and why scenes 0/9 stop at frame 225 (W11), the world
+  map's palette-cycling routine and a field map with water animation (W14).
 - The sprite frame format in bank $E4 and the palette source: answered in A1. Format 2
   (12-piece) frames are still open.
 - Whether Marle (PC 1) can be forced into the party by a poke at the fair. Her object there is

@@ -10,7 +10,10 @@ RTS/RTL/RTI unless --through. Calls and jumps to known entries get their
 funcs.toml name. A research aid (docs/SCENE.md), not part of the build.
 
 usage: ldis.py NAME|ADDR [--state m1x0] [--count N] [--through]
-       (ROM from $CT_ROM)
+                [--overlay FILE@ADDR]
+       (ROM from $CT_ROM). --overlay reads the bytes of FILE as if they sat at
+       ADDR (e.g. a decompressed code blob, ct_decompress.py, at 7E3000), so
+       WRAM overlay code can be listed; addresses outside it read the ROM.
 """
 from __future__ import annotations
 
@@ -54,6 +57,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument('--state')
     ap.add_argument('--count', type=int, default=200)
     ap.add_argument('--through', action='store_true')
+    ap.add_argument('--overlay', help='FILE@ADDR: bytes of FILE mapped at ADDR (hex)')
     a = ap.parse_args(argv)
     names, states = load_names()
     by_name = {v: k for k, v in names.items()}
@@ -62,6 +66,10 @@ def main(argv: list[str]) -> int:
         addr = int(a.where.lstrip('$'), 16)
     st = decode.parse_state(a.state or states.get(addr, 'm1x0'))
     rom = decode.load_rom(None)
+    if a.overlay:
+        path, _, base = a.overlay.rpartition('@')
+        with open(path, 'rb') as f:
+            rom = decode.Image(rom, int(base, 16), f.read())
     for _ in range(a.count):
         lab = names.get(addr)
         if lab:
