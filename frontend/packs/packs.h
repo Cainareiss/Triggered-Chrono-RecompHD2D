@@ -94,7 +94,8 @@ unsigned packs_generation(void);
 
 /* The per-pixel replacement map for one frame, SCHED_WIDTH x SCHED_HEIGHT
    x 4 uint16: entry index + 1 (0: none), texel u | v << 8 (stored
-   orientation), the provenance flags (SCHED_PROV_*), and the 15-bit
+   orientation), the provenance flags (SCHED_PROV_*, plus 32 where color
+   math changed the pixel), and the 15-bit
    CGRAM color the console drew there (before brightness and color
    math), which the renderer compares with the final pixel to carry fades,
    color math and lighting over to the replacement. Returns the number of

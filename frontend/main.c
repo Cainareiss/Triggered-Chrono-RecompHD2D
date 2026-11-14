@@ -240,6 +240,23 @@ static int running = 1, fast, log_input, log_audio;
    the per-game data folder, <pref path>/packs/NAME; a NAME with a slash
    in it is a directory of its own. */
 static const char *pack_dump;   /* --pack-dump NAME */
+#define MAX_PACK_NAMES 16
+static char pack_names[MAX_PACK_NAMES][256];   /* loaded, highest priority first */
+static int n_pack_names, packs_given;          /* --pack seen: beats settings.ini */
+static int preset_forced = -1;   /* the saved look, while packs force the GL path */
+static uint16_t pack_map[SCHED_WIDTH * SCHED_HEIGHT * 4];
+
+/* "a,b": the names, in order. */
+static void pack_names_parse(const char *list)
+{
+    n_pack_names = 0;
+    while (*list && n_pack_names < MAX_PACK_NAMES) {
+        size_t n = strcspn(list, ",");
+        if (n && n < sizeof pack_names[0] && strncmp(list, "none", n))
+            snprintf(pack_names[n_pack_names++], sizeof pack_names[0], "%.*s", (int)n, list);
+        list += n + (list[n] == ',');
+    }
+}
 
 static char *pack_dir(const char *game_id, const char *name)
 {
@@ -254,6 +271,36 @@ static char *pack_dir(const char *game_id, const char *name)
     snprintf(p, 4096, "%spacks/%s", dir ? dir : "./", name);
     SDL_free(dir);
     return p;
+}
+
+/* Load the named packs; returns how many replacements. */
+static int packs_setup(const char *game_id)
+{
+    const char *dirs[MAX_PACK_NAMES];
+    char *owned[MAX_PACK_NAMES];
+    int n = 0;
+    for (int k = 0; k < n_pack_names; k++)
+        if ((owned[n] = pack_dir(game_id, pack_names[k])))
+            dirs[n] = owned[n], n++;
+    int r = n ? packs_load(dirs, n) : 0;
+    for (int k = 0; k < n; k++)
+        free(owned[k]);
+    return r;
+}
+
+/* The loaded packs' atlas to the renderer. */
+static void packs_upload(void)
+{
+    int size, pages, n;
+    const uint8_t *atlas = packs_atlas(&size, &pages);
+    const packs_rect *e = packs_entries(&n);
+    int *rects = n ? malloc((size_t)n * 8 * sizeof *rects) : NULL;
+    for (int k = 0; k < n && rects; k++) {
+        int v[8] = {e[k].page, e[k].x, e[k].y, e[k].w, e[k].h, e[k].src_w, e[k].src_h, 0};
+        memcpy(rects + k * 8, v, sizeof v);
+    }
+    hd2d_pack_atlas(rects ? atlas : NULL, size, pages, rects, rects ? n : 0);
+    free(rects);
 }
 
 static void pack_dump_report(void)
@@ -439,7 +486,18 @@ static int hd2d_key(SDL_Scancode sc)
     }
     if (!hd2d_mode)
         return 0;
+    if (sc == SDL_SCANCODE_F5 && n_pack_names) {   /* port: reload the packs */
+        int n = packs_reload();
+        packs_upload();
+        sched_set_prov(packs_active() || pack_dump);
+        static char msg[48];
+        snprintf(msg, sizeof msg, n < 0 ? "Packs: none readable" : "Packs reloaded: %d", n);
+        fprintf(stderr, "ct_sdl: %s\n", msg);
+        hd2d_osd(msg);
+        return 1;
+    }
     if (sc == SDL_SCANCODE_F1) {
+        preset_forced = -1;   /* port: the user's choice now */
         hd2d_set_preset((hd2d_preset() + 1) % HD2D_PRESETS);
         fprintf(stderr, "ct_sdl: hd2d preset %s\n", hd2d_preset_name(hd2d_preset()));
         static const char *const msg[HD2D_PRESETS] = {"Look: original", "Look: HD-2D subtle",
@@ -495,6 +553,10 @@ static void settings_load(void)
         }
         else if (sscanf(line, "aspect=%d", &n) == 1)
             hd2d_set_aspect(n);
+        else if (!strncmp(line, "packs=", 6) && !packs_given) {   /* port: asset packs */
+            line[strcspn(line, "\r\n")] = 0;
+            pack_names_parse(line + 6);
+        }
         else if (sscanf(line, "window=%dx%d", &wst.w, &wst.h) == 2 && wst.w >= 256 &&
                  wst.h >= 224 && wst.w <= 16384 && wst.h <= 16384)
             wst.have_size = 1;
@@ -513,7 +575,14 @@ static void settings_save(void)
     char *path = settings_path();
     FILE *f = path ? fopen(path, "w") : NULL;
     if (f) {
-        fprintf(f, "preset=%s\naspect=%d\n", hd2d_preset_name(hd2d_preset()), hd2d_aspect());
+        fprintf(f, "preset=%s\naspect=%d\n",
+                hd2d_preset_name(preset_forced >= 0 ? preset_forced : hd2d_preset()), hd2d_aspect());
+        if (n_pack_names) {   /* port: asset packs, in priority order */
+            fputs("packs=", f);
+            for (int k = 0; k < n_pack_names; k++)
+                fprintf(f, "%s%s", k ? "," : "", pack_names[k]);
+            fputc('\n', f);
+        }
         if (wst.have_size)
             fprintf(f, "window=%dx%d\n", wst.w, wst.h);
         if (wst.have_pos)
@@ -769,6 +838,13 @@ static void on_frame(long f)
     }
     const uint8_t *fb = sched_frame();   /* B G R x = ARGB8888 little-endian */
     if (hd2d_mode) {
+        /* port: this frame's asset pack replacements */
+        if (packs_active() && sched_prov()) {
+            packs_map_frame(sched_prov(), sched_prov_mem(), pack_map);
+            hd2d_pack_map(pack_map);
+        } else {
+            hd2d_pack_map(NULL);
+        }
         present_hd2d();
         /* The PPU's behind G-buffer only while the look uses it. */
         sched_set_behind(hd2d_wants_behind());
@@ -962,7 +1038,7 @@ static void usage(FILE *out)
             "[--rom FILE] [--touch] [--touch-hide SECS] [--touch-test FILE]\n         "
             "[--save FILE] [--no-save] [--dump-sram FILE]\n         "
             "[--poke-sram F:ADDR=VAL]... [--pacing auto|timer|vsync] [--log-pacing]\n         "
-            "[--pack-dump NAME]"
+            "[--pack-dump NAME] [--pack NAME|none]..."
 #ifdef CT_FIRSTRUN
             " [--data-dir DIR] [--game ID] [--shot status:PATH] [--build-only]"
 #endif
@@ -1062,6 +1138,15 @@ int main(int argc, char **argv)
             }
         } else if (!strcmp(argv[k], "--pack-dump") && k + 1 < argc) {   /* port */
             pack_dump = argv[++k];
+        } else if (!strcmp(argv[k], "--pack") && k + 1 < argc) {   /* port: asset packs */
+            if (!packs_given)
+                n_pack_names = 0;   /* the command line replaces the saved list */
+            packs_given = 1;
+            const char *v = argv[++k];
+            if (!strcmp(v, "none"))
+                n_pack_names = 0;
+            else if (n_pack_names < MAX_PACK_NAMES && strlen(v) < sizeof pack_names[0])
+                snprintf(pack_names[n_pack_names++], sizeof pack_names[0], "%s", v);
         } else if (!strcmp(argv[k], "--hd2d")) {
             hd2d_mode = 1;
         } else if (!strcmp(argv[k], "--no-hd2d")) {   /* port: beats the Game Mode default */
@@ -1135,8 +1220,26 @@ int main(int argc, char **argv)
                     hd2d_mode >= 0 ? ", HD-2D" : "");
         if (game_mode && !hd2d_mode)
             hd2d_mode = 1;
+        int no_hd2d = hd2d_mode < 0;
         if (hd2d_mode < 0)
             hd2d_mode = 0;
+        /* port: asset packs replace art in the GL renderer: with packs and
+           the plain look, draw through it with the original look. */
+        if (n_pack_names && no_hd2d) {
+            fprintf(stderr, "ct_sdl: --no-hd2d: asset packs not loaded (they need the GL renderer)\n");
+        } else if (n_pack_names) {
+            int r = packs_setup(game_id);
+            if (r < 0)
+                fprintf(stderr, "ct_sdl: no asset pack could be read\n");
+            else if (packs_active() && !hd2d_mode) {
+                hd2d_mode = 1;
+                if (!preset_given) {
+                    preset_forced = hd2d_preset();
+                    hd2d_set_preset(HD2D_OFF);
+                }
+                fprintf(stderr, "ct_sdl: asset packs: drawing through the GL renderer\n");
+            }
+        }
     }
     quit_combo_init(&quitc);
     touch_init(&touch_o);   /* port */
@@ -1231,6 +1334,16 @@ int main(int argc, char **argv)
         hd2d_warmup(ww, wh);
         fprintf(stderr, "ct_sdl: hd2d warm-up %dx%d: %.1f ms\n", ww, wh,
                 (double)(SDL_GetPerformanceCounter() - tw) * 1000.0 / SDL_GetPerformanceFrequency());
+        if (packs_active()) {   /* port: asset packs: the atlas to the GPU */
+            packs_upload();
+            static char msg[48];
+            int n;
+            packs_entries(&n);
+            snprintf(msg, sizeof msg, "Packs: %d replacements - F5 reloads", n);
+            hd2d_osd(msg);
+        }
+        if (packs_given)
+            settings_save();   /* port: remember the packs */
     }
 
     SDL_AudioSpec want = {0}, have;
@@ -1250,6 +1363,7 @@ int main(int argc, char **argv)
     interp_reset(&cpu);
     sched_init(&cpu);
     sched_set_behind(hd2d_mode && hd2d_wants_behind());   /* port: see on_frame */
+    sched_set_prov(packs_active());   /* port: asset packs read it each frame */
     if (pack_dump) {   /* port: asset pack dump (docs/ASSET-PACKS.md) */
         char *dir = pack_dir(game_id, pack_dump);
         const char *base = strrchr(pack_dump, '/') ? strrchr(pack_dump, '/') + 1 : pack_dump;

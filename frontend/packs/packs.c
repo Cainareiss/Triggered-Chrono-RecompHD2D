@@ -837,7 +837,7 @@ long packs_map_frame(const sched_prov_px *prov, const sched_vmem *m, uint16_t *m
         }
         map[0] = (uint16_t)val;
         map[1] = (uint16_t)(p->u | p->v << 8);
-        map[2] = p->flags;
+        map[2] = (uint16_t)(p->flags | (p->layer & 8 ? 32 : 0));   /* 32: color math */
         map[3] = m->cgram[p->cidx] & 0x7fff;
         replaced += val != 0;
     }

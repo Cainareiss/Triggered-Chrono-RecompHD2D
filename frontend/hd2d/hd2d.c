@@ -109,6 +109,13 @@ typedef char GLchar;
 #define GL_STATIC_DRAW              0x88E4
 #define GL_DEPTH_ATTACHMENT         0x8D00
 typedef ptrdiff_t GLsizeiptr;
+/* port: asset packs */
+#define GL_TEXTURE_2D_ARRAY         0x8C1A
+#define GL_RGBA16UI                 0x8D76
+#define GL_RGBA_INTEGER             0x8D99
+#define GL_LINEAR_MIPMAP_LINEAR     0x2703
+#define GL_TEXTURE_MAX_LEVEL        0x813D
+#define GL_MAX_TEXTURE_SIZE         0x0D33
 
 #define GL_FUNCS(X)                                                                           \
     X(const GLubyte *, glGetString, (GLenum name))                                            \
@@ -175,7 +182,14 @@ typedef ptrdiff_t GLsizeiptr;
                                     const void *off))                                         \
     X(void, glVertexAttribIPointer, (GLuint i, GLint n, GLenum t, GLsizei stride, const void *off)) \
     X(void, glDrawElements, (GLenum mode, GLsizei n, GLenum t, const void *off))              \
-    X(void, glUniformMatrix4fv, (GLint loc, GLsizei n, GLboolean transpose, const GLfloat *m))
+    X(void, glUniformMatrix4fv, (GLint loc, GLsizei n, GLboolean transpose, const GLfloat *m)) \
+    X(void, glTexImage3D, (GLenum target, GLint level, GLint ifmt, GLsizei w, GLsizei h,      \
+                           GLsizei d, GLint border, GLenum fmt, GLenum type, const void *data)) \
+    X(void, glTexSubImage3D, (GLenum target, GLint level, GLint x, GLint y, GLint z,          \
+                              GLsizei w, GLsizei h, GLsizei d, GLenum fmt, GLenum type,       \
+                              const void *data))                                              \
+    X(void, glGenerateMipmap, (GLenum target))                                                \
+    X(void, glGetIntegerv, (GLenum pname, GLint *v))
 
 #define X(ret, name, args) typedef ret (*PFN_##name) args; static PFN_##name p_##name;
 GL_FUNCS(X)
@@ -362,7 +376,6 @@ int hd2d_debug(void) { return debug_view; }
 void hd2d_set_aspect(int a) { aspect_mode = a < 0 || a >= HD2D_ASPECTS ? 0 : a; }
 int hd2d_aspect(void) { return aspect_mode; }
 void hd2d_set_timing(int on) { timing = on; }
-int hd2d_wants_behind(void) { return presets[cur_preset].effects; }
 int hd2d_wants_scene(void) { return presets[cur_preset].scene3d; }
 double hd2d_last_ms(void) { return last_ms; }
 
@@ -417,9 +430,85 @@ static struct {
                                              zoom; sprites' height scale */
         int hmax;
     } s3;
+    /* port: asset packs: the atlas (array texture), its entries (two
+       RGBA16UI texels each, 1024 entries a row), the per-pixel map. */
+    GLuint t_pack_atlas, t_pack_rects, t_pack_map;
+    int pack_entries;
+    const uint16_t *pack_map;
+    int pack_on, pack_have_behind;   /* this frame */
     /* Uniform locations, looked up once (key: program, name literal). */
     struct { const char *name; int prog; GLint loc; } uloc[256];
 } g;
+
+/* port: a pack's transparent texels show the behind G-buffer's pixel. */
+int hd2d_wants_behind(void) { return presets[cur_preset].effects || g.pack_entries > 0; }
+
+static GLuint make_tex(int w, int h, GLint ifmt, GLenum fmt, GLenum type, GLint filter);
+
+/* port: asset packs (hd2d.h). */
+static void pack_textures_init(void)
+{
+    static const uint16_t zero[4] = {0, 0, 0, 0};
+    static const uint8_t clear[4] = {0, 0, 0, 0};
+    g.t_pack_map = make_tex(SCHED_WIDTH, SCHED_HEIGHT, GL_RGBA16UI, GL_RGBA_INTEGER,
+                            GL_UNSIGNED_SHORT, GL_NEAREST);
+    g.t_pack_rects = make_tex(1, 1, GL_RGBA16UI, GL_RGBA_INTEGER, GL_UNSIGNED_SHORT, GL_NEAREST);
+    p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA_INTEGER, GL_UNSIGNED_SHORT, zero);
+    p_glGenTextures(1, &g.t_pack_atlas);
+    p_glBindTexture(GL_TEXTURE_2D_ARRAY, g.t_pack_atlas);
+    p_glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, 1, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, clear);
+    p_glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    p_glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    p_glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    p_glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    p_glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+}
+
+void hd2d_pack_atlas(const uint8_t *rgba, int size, int pages, const int *rects, int n)
+{
+    if (!g.ready)
+        return;
+    g.pack_entries = 0;
+    if (!rgba || n <= 0 || size <= 0 || pages <= 0)
+        return;
+    GLint max = 0;
+    p_glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max);
+    if (size > max) {
+        fprintf(stderr, "hd2d: pack atlas %d over the GPU's %d texels: not used\n", size, max);
+        return;
+    }
+    /* Entries: texel 2k (page, x, y, w), 2k + 1 (h, src_w, src_h, 0). */
+    int rows = (n + 1023) / 1024, cols = n < 1024 ? n * 2 : 2048;
+    uint16_t *t = calloc((size_t)rows * cols * 4, sizeof *t);
+    if (!t)
+        return;
+    for (int k = 0; k < n; k++) {
+        uint16_t *e = t + ((size_t)(k / 1024) * cols + (k % 1024) * 2) * 4;
+        for (int c = 0; c < 7; c++)
+            e[c] = (uint16_t)rects[k * 8 + c];
+    }
+    p_glBindTexture(GL_TEXTURE_2D, g.t_pack_rects);
+    p_glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16UI, cols, rows, 0, GL_RGBA_INTEGER, GL_UNSIGNED_SHORT, t);
+    free(t);
+    int levels = 1;
+    while ((size >> levels) >= 64 && levels < 4)
+        levels++;
+    p_glBindTexture(GL_TEXTURE_2D_ARRAY, g.t_pack_atlas);
+    p_glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, size, size, pages, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                   rgba);
+    p_glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL, levels - 1);
+    p_glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    p_glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+    p_glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    GLenum err = p_glGetError();
+    if (err != GL_NO_ERROR) {
+        fprintf(stderr, "hd2d: pack atlas upload failed (GL error 0x%x)\n", err);
+        return;
+    }
+    g.pack_entries = n;
+}
+
+void hd2d_pack_map(const uint16_t *map) { g.pack_map = map; }
 
 static GLuint make_tex(int w, int h, GLint ifmt, GLenum fmt, GLenum type, GLint filter);
 static int s3d_init(void);
@@ -631,6 +720,12 @@ int hd2d_init(int gles)
         fprintf(stderr, "hd2d: GL error 0x%x during setup\n", err);
         return -1;
     }
+    pack_textures_init();   /* port */
+    err = p_glGetError();
+    if (err != GL_NO_ERROR) {
+        fprintf(stderr, "hd2d: GL error 0x%x making the pack textures\n", err);
+        return -1;
+    }
     g.ready = 1;
     /* The 3D diorama: optional (its preset falls back to the 2D path). */
     if (s3d_init()) {
@@ -688,6 +783,9 @@ void hd2d_shutdown(void)
     p_glDeleteFramebuffers(3, fbos);
     GLuint tex[7] = {g.t_color, g.t_layer, g.t_behind, g.t_blayer, g.t_lit, g.t_mat, g.t_back};
     p_glDeleteTextures(7, tex);
+    GLuint ptex[3] = {g.t_pack_atlas, g.t_pack_rects, g.t_pack_map};   /* port */
+    p_glDeleteTextures(3, ptex);
+    g.pack_entries = 0;
     if (g.t_osd)
         p_glDeleteTextures(1, &g.t_osd);
     p_glDeleteFramebuffers(1, &g.fbo_light);
@@ -814,6 +912,19 @@ static void bind_picture(int prog, int pw, int ph, float tilt)
     bind_tex(0, pic3d ? g.s3.t_color : g.t_lit);
     bind_tex(1, pic3d ? g.s3.t_color : g.t_back);
     bind_tex(2, pic3d ? g.s3.t_mat : g.t_mat);
+    /* port: asset packs, units 10-13 (always valid textures there: the
+       samplers' types differ from unit 0's) */
+    p_glUniform1i(U(prog, "uPack"), g.pack_on && !pic3d);   /* the map is 2D */
+    p_glUniform1i(U(prog, "uPackMap"), 10);
+    p_glUniform1i(U(prog, "uPackRects"), 11);
+    p_glUniform1i(U(prog, "uPackAtlas"), 12);
+    p_glUniform1i(U(prog, "uPackBehind"), 13);
+    p_glUniform2f(U(prog, "uPackParams"), 0.0f, (float)g.pack_have_behind);
+    bind_tex(10, g.t_pack_map);
+    bind_tex(11, g.t_pack_rects);
+    p_glActiveTexture(GL_TEXTURE0 + 12);
+    p_glBindTexture(GL_TEXTURE_2D_ARRAY, g.t_pack_atlas);
+    bind_tex(13, g.t_behind);
 }
 
 /* Bloom source from a smaller target (threshold < 0: a plain copy). */
@@ -1515,6 +1626,14 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     bind_tex(4, g.t_blayer);
     p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, SCHED_WIDTH, SCHED_HEIGHT, GL_RED_INTEGER,
                       GL_UNSIGNED_BYTE, have_behind ? behind_layers : layers);
+    /* port: the asset pack's per-pixel map, when there is one */
+    g.pack_on = g.pack_entries > 0 && g.pack_map != NULL;
+    if (g.pack_on) {
+        bind_tex(5, g.t_pack_map);
+        p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, SCHED_WIDTH, SCHED_HEIGHT, GL_RGBA_INTEGER,
+                          GL_UNSIGNED_SHORT, g.pack_map);
+        g.pack_have_behind = have_behind;
+    }
     prof.upload_ms[prof.slot] = ms_since(tu);
     prof_mark("texup");
 

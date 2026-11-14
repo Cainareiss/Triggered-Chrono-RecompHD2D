@@ -72,6 +72,16 @@ int hd2d_read(uint8_t *bgrx, int out_w, int out_h);
    0-9 and the punctuation in osd_font.h; at most 47 characters). */
 void hd2d_osd(const char *text);
 
+/* port: asset packs (docs/ASSET-PACKS.md). The replacement atlas:
+   pages x (size x size) RGBA texels, page after page, and n entries of
+   8 ints each: page, x, y, w, h (texels), src_w, src_h (the original
+   piece's size in console pixels), 0. NULL / 0 removes it. Copied. */
+void hd2d_pack_atlas(const uint8_t *rgba, int size, int pages, const int *rects, int n);
+/* The per-pixel replacement map for the frames rendered from now on
+   (SCHED_WIDTH x SCHED_HEIGHT x 4 uint16, packs_map_frame's layout), or
+   NULL for none. Read during hd2d_render; the caller keeps it alive. */
+void hd2d_pack_map(const uint16_t *map);
+
 /* GPU time of the last hd2d_render in milliseconds (glFinish-bracketed:
    only measured when timing is on, as it stalls the pipeline). */
 void hd2d_set_timing(int on);
