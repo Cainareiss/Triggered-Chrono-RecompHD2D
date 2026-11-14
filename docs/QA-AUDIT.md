@@ -9,30 +9,45 @@ it). The audit read the branches' bug lists, their diffs against `hd2d` and thei
 screenshots. **Nothing was built or run here** (memory limit), so every statement about
 behaviour is from reading code and pictures, not from a test run.
 
-Status: **interim, 06:40.** At this point none of the three branches had a commit; the
-review below is of their working trees. The final pass replaces this line.
+Status: **final pass, 06:58.** None of the three branches had a commit at that time
+(`git log hd2d..qa3d`, `..qa2d`, `..qaworld` all empty); the review is of their working
+trees as they stood (last source edits 06:28, 06:28 and 06:43). The verdicts apply to
+those changes once committed unchanged. If a branch commits something else, re-check
+it against the notes below.
 
 ## Verdicts
 
 | Branch | Verdict | Condition |
 | --- | --- | --- |
-| `qa2d` | (interim) merge | both fixes are small and right; see notes |
-| `qa3d` | (interim) merge after two small changes | bounds check on the tile index; early-out when no UI text is on screen |
-| `qaworld` | (interim) nothing to merge yet | only a `--poke-wram` debug option so far, no bug list |
+| `qa2d` | **Merge** | As is: the gate for the user's bright grid, the tall-window side fill, two tests. |
+| `qa3d` | **Merge after two small changes** | In `s3d_box_mask`: add `tx >= 0 && ty >= 0` to the tile index test (out-of-bounds read with a negative camera), and return before the pixel loop when no row has UI text (it runs on every 3D frame today). If there is no time for them, merge anyway and do them first thing after: the box is a large gain and the read needs a negative camera to go wrong. |
+| `qaworld` | **Merge (docs and a debug option only)** | No renderer change. `--poke-wram` / `--set-wram` are QA aids in `frontend/main.c`; keep them out of the user-facing help. Its list is useful but its coverage is thin: battles, other eras, FSR and other sizes were not reached. |
 
 ## Merge order
 
 1. `qa2d` first. It holds the fix for the user's report (the bright grid), which
    `qa3d` deliberately left to it.
-2. `qa3d` second. Both edit `frontend/hd2d/hd2d.c` (`qa2d` in `hd2d_render` at the
-   `want3` test; `qa3d` adds `s3d_box_mask` above `s3d_render` and one call below the
-   `want3` test) and `game/ct/CMakeLists.txt` (tests added at different places). The
-   hunks don't overlap, so the merge should be clean; if it conflicts, keep both sides.
-3. `qaworld` last (touches `frontend/main.c` only, so far).
+2. `qa3d` second. Both edit `frontend/hd2d/hd2d.c` (`qa2d`: one term in `want3` in
+   `hd2d_render`; `qa3d`: `s3d_box_mask` above `s3d_render`, a texture, and one call a
+   hundred lines below the `want3` test) and `game/ct/CMakeLists.txt` (tests added
+   about 20 lines apart). The hunks don't overlap, so git should merge them; if
+   CMakeLists conflicts, keep both sides. `qa3d` also edits `docs/HD2D.md`.
+3. `qaworld` last: `frontend/main.c` and its doc only, no overlap with the others.
+4. `design` (this branch): two new docs, no overlap.
 
 After merging 1 and 2, run `sdl_hidden_map_3d`, `sdl_3d_box`, `sdl_side_fill_tall` and
 `sdl_hdtext` together: the gate (`qa2d`) and the box mask (`qa3d`) both decide what the
-3D path shows at frames 3560-4300 and were each tested without the other.
+3D path shows at frames 3560-4300 and were each tested without the other. Run
+`tools/check_agnostic.py` too (the new frontend code reads clean: PPU state and
+`ct_scene` only, no game words).
+
+**Test reliability warning (from `qaworld` W6).** Two runs of the same script in
+`ct_sdl_engine` gave different pictures at the same frame number, and the SDL frontend's
+frame numbers drift from `ct_boot`'s. The three new tests (`sdl_3d_box` at frame 4300,
+`sdl_hidden_map_3d`, `sdl_side_fill_tall`) pick fixed frames in `ct_sdl_engine`. They
+sit inside long steady states (a text box open for hundreds of frames), so they should
+hold, but if one flakes, this is why. Finding that divergence is worth more than any
+single visual fix: every screenshot comparison depends on it.
 
 ## `qa2d`
 
@@ -142,43 +157,74 @@ in view), Q5 (opening flyover shows another place): open, causes plausible.**
 
 ## `qaworld`
 
-No bug list and no fixes at the interim pass. Working tree: `--poke-wram F:ADDR^M` in
-`frontend/main.c`, a debug option to force a state. Harmless, generic, but it is a
-cheat-like switch in the shipping frontend: keep it out of `--help`'s user section, or
-behind the existing debug options.
+No renderer fixes; a bug list (W1-W8) and two debug options.
+
+- **W3 (pause and save menus blurred):** real, the same fault as `qa2d` bug 3, and the
+  most important open bug (U3). See the decision under `qa2d`: a generic full-screen-UI
+  scene mode, not `OTHER`.
+- **W4 (thin green lines on the towns in `hd2d` on the world map): real, but the cause
+  given is wrong.** `build-qa/shots/h_crop.png` shows straight 1-px green lines along
+  tile rows and columns of the buildings, not outlines. That is the diorama tilt: the
+  towns are high-priority BG tiles, so they class as foreground, are drawn 2.2% larger,
+  and the pixels they move off show the behind buffer, which is the green ground. On a
+  top-down map nothing is tall, so the fix is no tilt (and no foreground plane DOF)
+  when the scene is `CT_SCENE_WORLD`; more generally, don't reveal where the revealed
+  strip is under 1.5 source px wide and enclosed by foreground on both sides. Owner:
+  whoever takes `hd2d.c`'s 2D passes next.
+- **W8 (mode 7 cockpit sky washed out):** agreed; fails L5 (bloom from a large bright
+  area, not a light). The bloom source should require local contrast (design: Bloom),
+  or scale bloom by the share of the picture over the threshold.
+- **W2:** "settles over ~40 frames, mean 0.3081 against 0.3179" is called not a bug.
+  Accept, but 40 frames is not the 8-frame crossfade; something else is easing
+  (the scene brightness or ground share). Worth one look.
+- **W6 is the real finding:** replays in `ct_sdl_engine` don't reproduce frame for
+  frame (see the warning above), so battles and the other eras were never seen.
+  **Battles in the 3D looks, the battle crossfade, the other eras' maps and all of
+  FSR 67% on the world map are unaudited.** Treat them as unknown, not as passing.
+- **W7** is a prediction from SCENE.md, not an observation. The suggested 2D fallback
+  for the sky map and the small map must come from the module (a scene mode or flag),
+  not from map ids in the frontend.
+- The debug options: `--set-wram` is inert unless given (`set_from > set_to`), both
+  bounds-check the address. Fine. They let a script alter game state in the user
+  binary; document them only with the developer options.
 
 ## Bugs the QA lists miss
 
 From the screenshots (paths relative to each worktree).
 
-1. **Pause/status menu blurred by the tilt-shift** (`qaworld`
-   `build-qa/shots/tr_sheet.png`). Same class as `qa2d` bug 3; neither list names the
-   pause menu. Fails U3. Highest priority of the open items.
-2. **Interiors have no walls in 3D.** In `qa3d` `build/qa/cmp/a_04690.png` and
-   `a_07150.png` the rooms' back walls lie on the floor plane: the room is a tilted
-   flat picture with a trapezoid outline, not a diorama. The outdoor scenes rise;
-   these don't. Either the cells aren't classed solid there or the wall tiles are
-   overhead-only. Not in QA-3D.md.
-3. **Side fill shows blob shapes on dark scenes** (`qaworld`
+1. **Nobody owns the blurred menus.** `qa2d` lists name entry (bug 3) and hands it
+   to the battle owner; `qaworld` lists the pause and save menus (W3) and hands them
+   to `qa2d`. It is one bug, in every flat look and in the 3D looks' menus, it fails
+   U3, and it is the highest priority open item. Assign it.
+2. **The text box hides the player in 3D** (`qa3d` `build/qa/f_1038/05950.png`). The
+   game puts the box at the top when the player is low on its screen. The 3D camera
+   frames the room elsewhere (Q4), so the box at the top now covers the room and the
+   speaker, and two thirds of the picture below it is void. Q4's framing must keep the
+   player at about the console's screen row, or boxes will keep landing on him.
+3. **Interior side walls read badly** (`qa3d` `build/qa/f_1038/04300.png`): the room's
+   left wall is a thin slanted strip with a stretched pale texture, and a strip of
+   another room's tiles shows in a line just above the text box. The back wall stands;
+   the sides don't look like walls. Not in QA-3D.md.
+4. **Side fill shows blob shapes on dark scenes** (`qaworld`
    `build-qa/shots/b_sheet1.png`, both sides: lighter rounded patches with visible
    contours). The fill should be featureless. Probably the eighth-size soft copy's few
    bright texels with too little blur, plus banding in the dark; needs a wider blur or
    dither.
-4. **The void takes the backdrop's color**: a dark red-brown field fills two thirds of
+5. **The void takes the backdrop's color**: a dark red-brown field fills two thirds of
    every interior shot. In 2D it is the same color but the room is centered and larger;
    in 3D it dominates. Neutral near-black, and Q4's framing, fix it.
-5. **Sprites on the world map are placed by screen position while the ground isn't**
+6. **Sprites on the world map are placed by screen position while the ground isn't**
    (`qa3d` `build/qa/m1.png`, third and fourth pairs: the balloons float over the fair
    on the console and over open sea in 3D). Related to Q5 but separate: even with the
    right camera, unowned sprites are laid flat at console coordinates over a
    perspective ground.
-6. **A pale translucent rectangle on the world map** at the right edge
+7. **A pale translucent rectangle on the world map** at the right edge
    (`qa3d` `build/qa/a_1038/02600.png`, over the mountain): a cloud tile block drawn
    with a straight edge, or the cloud plane's edge. Fails L15.
-7. **The 3D room is smaller on screen than the 2D one** (zoom 0.75 plus the tilt): the
+8. **The 3D room is smaller on screen than the 2D one** (zoom 0.75 plus the tilt): the
    user's first impression of 3D indoors is "everything shrank". With S6 (zoom to fit
    small maps) it goes away.
-8. **HD text with no box in 3D** (`b_sheet1.png`, frames 11700-12150): fixed by Q2 if
+9. **HD text with no box in 3D** (`b_sheet1.png`, frames 11700-12150): fixed by Q2 if
    HD text and the mask agree; see below.
 
 ## Bugs that cross areas
@@ -209,7 +255,8 @@ From the screenshots (paths relative to each worktree).
   QA-3D.md that small boxes are not covered; look at the interior walls (missed bug 2).
 - `qa2d`: add the pause menu to bug 3; the fix is a new generic scene mode, not
   `OTHER`. Commit what is there, it is good.
-- `qaworld`: write the list even if nothing is fixed; Q5 and missed bugs 5 and 6 are
-  yours.
+- `qaworld`: W4's cause is the tilt reveal, not a tint; Q5 (flyover camera) and
+  missed bugs 6 and 7 are yours; battles and other eras remain unseen, say so loudly.
+- Nobody had committed at 06:58. Commit with explicit paths.
 - All three: `__pycache__` directories appeared under `tools/` and `game/ct/tools/` in
   the worktrees. Don't commit them (use explicit paths).
