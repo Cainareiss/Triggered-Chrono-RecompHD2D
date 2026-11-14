@@ -109,6 +109,7 @@
 #include "hwlog.h"
 #include "input.h"
 #include "interp.h"
+#include "packs.h"    /* port: asset packs (docs/ASSET-PACKS.md) */
 #include "png.h"
 #include "replay.h"
 #include "resample.h"
@@ -234,6 +235,34 @@ static key_filter keys;
 static uint16_t live_buttons;
 static uint64_t perf_freq, next_frame;
 static int running = 1, fast, log_input, log_audio;
+
+/* port: asset packs (frontend/packs, docs/ASSET-PACKS.md). They live in
+   the per-game data folder, <pref path>/packs/NAME; a NAME with a slash
+   in it is a directory of its own. */
+static const char *pack_dump;   /* --pack-dump NAME */
+
+static char *pack_dir(const char *game_id, const char *name)
+{
+    char *p = malloc(4096);
+    if (!p)
+        return NULL;
+    if (strchr(name, '/') || strchr(name, '\\')) {
+        snprintf(p, 4096, "%s", name);
+        return p;
+    }
+    char *dir = SDL_GetPrefPath("ct-recomp", game_id);
+    snprintf(p, 4096, "%spacks/%s", dir ? dir : "./", name);
+    SDL_free(dir);
+    return p;
+}
+
+static void pack_dump_report(void)
+{
+    long pieces, objects;
+    packs_dump_counts(&pieces, &objects);
+    fprintf(stderr, "ct_sdl: pack dump: %ld new pieces, %ld new objects\n", pieces, objects);
+    packs_dump_close();
+}
 static const char *dump;
 
 /* port: HD-2D presentation and screenshots. */
@@ -748,6 +777,8 @@ static void on_frame(long f)
     }
     if (n_shots)
         take_shots(f);
+    if (pack_dump)   /* port: new tiles and sprites into the pack */
+        packs_dump_frame(f, sched_prov(), sched_prov_mem());
     if (dump)
         png_dump_frame(dump, f, fb, SCHED_WIDTH, SCHED_HEIGHT);
     if (!fast) {
@@ -930,7 +961,8 @@ static void usage(FILE *out)
             "[--log-gpu] [--shot F:PATH]... [--shot-size WxH] [--module FILE]\n         "
             "[--rom FILE] [--touch] [--touch-hide SECS] [--touch-test FILE]\n         "
             "[--save FILE] [--no-save] [--dump-sram FILE]\n         "
-            "[--poke-sram F:ADDR=VAL]... [--pacing auto|timer|vsync] [--log-pacing]"
+            "[--poke-sram F:ADDR=VAL]... [--pacing auto|timer|vsync] [--log-pacing]\n         "
+            "[--pack-dump NAME]"
 #ifdef CT_FIRSTRUN
             " [--data-dir DIR] [--game ID] [--shot status:PATH] [--build-only]"
 #endif
@@ -1028,6 +1060,8 @@ int main(int argc, char **argv)
                 fprintf(stderr, "ct_sdl: --poke-sram FRAME:ADDR=VAL (ADDR, VAL hex)\n");
                 return 2;
             }
+        } else if (!strcmp(argv[k], "--pack-dump") && k + 1 < argc) {   /* port */
+            pack_dump = argv[++k];
         } else if (!strcmp(argv[k], "--hd2d")) {
             hd2d_mode = 1;
         } else if (!strcmp(argv[k], "--no-hd2d")) {   /* port: beats the Game Mode default */
@@ -1216,6 +1250,17 @@ int main(int argc, char **argv)
     interp_reset(&cpu);
     sched_init(&cpu);
     sched_set_behind(hd2d_mode && hd2d_wants_behind());   /* port: see on_frame */
+    if (pack_dump) {   /* port: asset pack dump (docs/ASSET-PACKS.md) */
+        char *dir = pack_dir(game_id, pack_dump);
+        const char *base = strrchr(pack_dump, '/') ? strrchr(pack_dump, '/') + 1 : pack_dump;
+        if (!dir || packs_dump_open(dir, base)) {
+            set_exit_reason("cannot write the pack dump");
+            return 2;
+        }
+        free(dir);
+        atexit(pack_dump_report);
+        sched_set_prov(1);
+    }
     sched_set_frame_hook(on_frame);
     sched_set_reset_hook(script_reset);
     ct_fatal_hook = on_fatal;

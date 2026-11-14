@@ -164,6 +164,12 @@ if(NOT SDL2_FOUND AND CT_SDL2_SYSTEM_LIB)
         message(STATUS "SDL2: system ${CT_SDL2_LIB}, headers from 2.32.10")
     endif()
 endif()
+# port: asset packs (frontend/packs, docs/ASSET-PACKS.md): content keys,
+# the dump, PNG reading, the atlas. No SDL: unit-tested on its own.
+add_library(ct_packs STATIC frontend/packs/packs.c frontend/packs/pngio.c)
+target_include_directories(ct_packs PUBLIC frontend/packs runtime)
+target_compile_options(ct_packs PRIVATE ${CT_WARN})
+target_link_libraries(ct_packs PUBLIC m)
 if(SDL2_FOUND)
     # port: the on-screen touch controller (touch.h) and its GL drawer.
     add_library(ct_input STATIC frontend/input.c frontend/touch.c frontend/touch_gl.c
@@ -234,7 +240,7 @@ if(CT_ANDROID)
     target_include_directories(main PRIVATE ${CMAKE_SOURCE_DIR}/test)
     target_link_libraries(main ct_tables_empty
         "$<LINK_LIBRARY:WHOLE_ARCHIVE,ct_sched,ct_interp,ct_runtime>" ct_input ct_hd2d
-        SDL2::SDL2 android log)
+        ct_packs SDL2::SDL2 android log)
     target_compile_options(main PRIVATE ${CT_WARN})
     return()   # no tests, games or install() rules on Android
 endif()
@@ -257,7 +263,7 @@ if(SDL2_FOUND)
     ct_engine_exe(ct_sdl_engine ${CMAKE_SOURCE_DIR}/frontend/main.c
         ${CMAKE_SOURCE_DIR}/frontend/firstrun.c ${CMAKE_SOURCE_DIR}/frontend/sha1.c
         ${CMAKE_SOURCE_DIR}/frontend/saves.c)
-    target_link_libraries(ct_sdl_engine ct_input ct_hd2d)
+    target_link_libraries(ct_sdl_engine ct_input ct_hd2d ct_packs)
     target_compile_definitions(ct_sdl_engine PRIVATE CT_FIRSTRUN
         CT_FIRSTRUN_GAME="${CT_GAME_ID}" CT_FIRSTRUN_DATA_DIR="${CT_ENGINE_DATA_DIR}")
 endif()
