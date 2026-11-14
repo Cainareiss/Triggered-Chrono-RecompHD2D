@@ -92,3 +92,12 @@ path = [
 precedence = "closest"
 SPDX-FileCopyrightText = ["2022 snesrev", "2021 elzo_d", "2026 Akhil Moola", "2026 jerbanpls"]
 SPDX-License-Identifier = "MIT AND GPL-3.0-or-later"
+
+# Button prompt pictures: Kenney Input Prompts (CC0-1.0), a subset of the
+# 64 px "Default" PNGs, unmodified. Source and version in THIRD_PARTY.md and
+# third_party/glyphs/README.md.
+[[annotations]]
+path = ["third_party/glyphs/*.png", "third_party/glyphs/License.txt"]
+precedence = "override"
+SPDX-FileCopyrightText = "2025 Kenney (www.kenney.nl)"
+SPDX-License-Identifier = "CC0-1.0"
