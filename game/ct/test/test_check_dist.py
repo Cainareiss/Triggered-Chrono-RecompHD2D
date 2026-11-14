@@ -72,6 +72,19 @@ def main(argv: list[str]) -> int:
             z.writestr('README.txt', 'nothing to see\n')
             z.writestr('data/assets.tar', inner.getvalue())
         expect([nested], 1, 'a piece of the ROM in a tar in a zip')
+        # Asset packs (docs/ASSET-PACKS.md): their manifest, or one of their
+        # key-named pictures, fails a package wherever it is.
+        packzip = os.path.join(d, 'with_pack.zip')
+        with zipfile.ZipFile(packzip, 'w') as z:
+            z.writestr('share/ct-recomp/packs/mine/pack.toml', '[pack]\nversion = 1\n')
+        expect([packzip], 1, 'a pack manifest in a zip')
+        pictar = os.path.join(d, 'with_tiles.tar')
+        with tarfile.open(pictar, 'w') as t:
+            info = tarfile.TarInfo('data/sprites/0123456789abcdef.png')
+            body = b'\x89PNG\r\n\x1a\n' + os.urandom(64)
+            info.size = len(body)
+            t.addfile(info, io.BytesIO(body))
+        expect([pictar], 1, 'a key-named pack picture in a tar')
         expect([d], 1, 'a directory holding them')
     return 1 if bad else 0
 

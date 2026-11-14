@@ -10,7 +10,8 @@ extracted assets, keys) is ever committed to this repository.
 **Players:** the [player's guide](docs/USER-GUIDE.md) covers installing the AppImage or
 Flatpak, the first launch, controls, where files live and troubleshooting. On a Steam Deck or
 ROG Ally, follow [docs/HANDHELD.md](docs/HANDHELD.md): Game Mode, controller-only setup,
-the controls and the Deck preset.
+the controls and the Deck preset. To replace the game's art with your own, or with
+upscaled placeholders made from your ROM, see [docs/ASSET-PACKS.md](docs/ASSET-PACKS.md).
 
 CI for the port (`.github/workflows/port.yml`) runs without a ROM: an engine-only build
 and its tests, a check for generated code in the engine programs, the game-agnostic and

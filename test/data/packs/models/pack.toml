@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 jerbanpls
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# A test pack with no art from any game: one [[model]] entry, a plain
+# cube made for the test (cube.gltf). test/test_packs.c loads it.
+[pack]
+version = 1
+name = "models"
+scale = 1
+
+[[model]]
+map = 0x1F0        # map id
+cell = [3, 4]      # the map cell (x, y) it stands in
+file = "cube.gltf"
+scale = 16.0       # model units to map pixels
+offset = [0.5, 0.0, 0.5]
+
+[[model]]
+map = 2
+cell = [0, 0]
+file = "missing.glb"

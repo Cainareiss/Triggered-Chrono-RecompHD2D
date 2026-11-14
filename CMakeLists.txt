@@ -164,6 +164,13 @@ if(NOT SDL2_FOUND AND CT_SDL2_SYSTEM_LIB)
         message(STATUS "SDL2: system ${CT_SDL2_LIB}, headers from 2.32.10")
     endif()
 endif()
+# port: asset packs (frontend/packs, docs/ASSET-PACKS.md): content keys,
+# the dump, PNG reading, the atlas. No SDL: unit-tested on its own.
+add_library(ct_packs STATIC frontend/packs/packs.c frontend/packs/pngio.c
+    frontend/packs/packs_model.c)
+target_include_directories(ct_packs PUBLIC frontend/packs runtime PRIVATE third_party/cgltf)
+target_compile_options(ct_packs PRIVATE ${CT_WARN})
+target_link_libraries(ct_packs PUBLIC m)
 if(SDL2_FOUND)
     # port: the on-screen touch controller (touch.h) and its GL drawer.
     add_library(ct_input STATIC frontend/input.c frontend/touch.c frontend/touch_gl.c
@@ -234,7 +241,7 @@ if(CT_ANDROID)
     target_include_directories(main PRIVATE ${CMAKE_SOURCE_DIR}/test)
     target_link_libraries(main ct_tables_empty
         "$<LINK_LIBRARY:WHOLE_ARCHIVE,ct_sched,ct_interp,ct_runtime>" ct_input ct_hd2d
-        SDL2::SDL2 android log)
+        ct_packs SDL2::SDL2 android log)
     target_compile_options(main PRIVATE ${CT_WARN})
     return()   # no tests, games or install() rules on Android
 endif()
@@ -257,7 +264,7 @@ if(SDL2_FOUND)
     ct_engine_exe(ct_sdl_engine ${CMAKE_SOURCE_DIR}/frontend/main.c
         ${CMAKE_SOURCE_DIR}/frontend/firstrun.c ${CMAKE_SOURCE_DIR}/frontend/sha1.c
         ${CMAKE_SOURCE_DIR}/frontend/saves.c)
-    target_link_libraries(ct_sdl_engine ct_input ct_hd2d)
+    target_link_libraries(ct_sdl_engine ct_input ct_hd2d ct_packs)
     target_compile_definitions(ct_sdl_engine PRIVATE CT_FIRSTRUN
         CT_FIRSTRUN_GAME="${CT_GAME_ID}" CT_FIRSTRUN_DATA_DIR="${CT_ENGINE_DATA_DIR}")
 endif()
@@ -325,6 +332,11 @@ add_test(NAME ctest_cache_report COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DI
 
 # TAS movie converter on synthetic .bk2/.lsmv movies.
 add_test(NAME tas_convert COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_tas_convert.py)
+add_executable(test_packs test/test_packs.c)   # port: asset packs
+target_link_libraries(test_packs ct_packs)
+target_compile_options(test_packs PRIVATE ${CT_WARN} -Wno-format-truncation)
+add_test(NAME packs COMMAND test_packs ${CMAKE_SOURCE_DIR} ${CMAKE_BINARY_DIR})
+add_test(NAME pack_upscale COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_pack_upscale.py)   # port: asset packs
 add_test(NAME decode_calls COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_decode_calls.py)
 add_test(NAME funcs_meta COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_funcs_meta.py)
 add_test(NAME replay_gen COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_replay_gen.py)   # port: tools/replay_gen.py

@@ -92,7 +92,7 @@ if(SDL2_FOUND)
     # port: the game id names its saves folder, as for ct_sdl_engine
     get_filename_component(ct_game_id ${GAME_DIR} NAME)
     target_compile_definitions(ct_sdl PRIVATE CT_GAME_ID="${ct_game_id}")
-    target_link_libraries(ct_sdl ct_input ct_hd2d)
+    target_link_libraries(ct_sdl ct_input ct_hd2d ct_packs)
     set_target_properties(ct_sdl PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 endif()
 

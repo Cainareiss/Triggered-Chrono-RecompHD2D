@@ -30,6 +30,32 @@ enum {
 
 typedef uint16_t PpuZbufType;
 
+// port: provenance of one output pixel (Ppu.provBuffer): which character
+// and palette the main screen's winning pixel came from, for texture
+// replacement. 12 bytes.
+typedef struct PpuProv {
+  // BG: VRAM word address of the 8x8 character drawn. OBJ: the sprite's
+  // name table base (OBSEL's first or second table); its characters are
+  // name, name+1 .. (16x16 page wrap, see ppu_evaluateSprites).
+  uint16_t chr;
+  uint8_t pal;     // CGRAM index of the palette's color 0
+  uint8_t cidx;    // CGRAM index drawn (before brightness and color math)
+  // bits 0-1: bit depth (1: 2bpp, 2: 4bpp, 3: 8bpp; 0: nothing to
+  // replace: backdrop, mode 7, forced blank), 2: H flip, 3: V flip,
+  // 4: OBJ
+  uint8_t flags;
+  // The texel drawn, as stored (unflipped): BG 0-7 within the character,
+  // OBJ 0 .. size-1 within the whole sprite.
+  uint8_t u, v;
+  uint8_t index;   // OBJ: OAM index 0-127; BG: the layer 0-3
+  uint8_t name;    // OBJ: character number (OAM byte 2)
+  uint8_t size;    // OBJ: width and height in pixels; BG: 8
+  uint8_t layer;   // layer byte as Ppu.layerBuffer writes it
+  uint8_t reserved;
+} PpuProv;
+
+enum { kPpuProvBpp = 3, kPpuProvHFlip = 4, kPpuProvVFlip = 8, kPpuProvObj = 16 };
+
 typedef struct PpuPixelPrioBufs {
   // This holds the prio in the upper 8 bits and the color in the lower 8 bits.
   PpuZbufType data[kPpuXPixels];
@@ -69,6 +95,11 @@ struct Ppu {
   // the math bit clear. Main screen only.
   uint8_t *behindColor, *behindLayer;
   uint32_t behindColorPitch, behindLayerPitch;
+  // port: optional provenance buffer (NULL: off), one PpuProv per output
+  // pixel (provPitch in PpuProv units). Per-pixel renderer only; the
+  // whole-line renderer clears its rows.
+  PpuProv *provBuffer;
+  uint32_t provPitch;
   uint8_t extraLeftCur, extraRightCur, extraLeftRight, extraBottomCur;
   float mode7PerspectiveLow, mode7PerspectiveHigh;
 
@@ -143,6 +174,10 @@ struct Ppu {
   PpuPixelPrioBufs bgBuffers[2];
   PpuPixelPrioBufs objBuffer;
   PpuPixelPrioBufs behindBuf;   // port: whole-line renderer's runner-ups
+  // port: with provBuffer on, which sprite texel objBuffer holds per x:
+  // bits 0-5 u, 6-11 v, 12-18 OAM index, 19 H flip, 20 V flip, 21-22
+  // size (8 << n), 23 second name table, 24-31 name
+  uint32_t objProv[kPpuXPixels];
   uint16_t vram[0x8000];
 };
 
@@ -160,6 +195,9 @@ void PpuSetLayerBuffer(Ppu *ppu, uint8_t *buffer, size_t pitch);   // port
 // port: see Ppu.behindColor; color NULL turns it off.
 void PpuSetBehindBuffer(Ppu *ppu, uint8_t *color, size_t color_pitch,
                         uint8_t *layer, size_t layer_pitch);
+
+// port: see Ppu.provBuffer; NULL turns it off. pitch in PpuProv units.
+void PpuSetProvBuffer(Ppu *ppu, PpuProv *buffer, size_t pitch);
 
 // Returns the current render scale, 1x = 256px, 2x=512px, 4x=1024px
 int PpuGetCurrentRenderScale(Ppu *ppu, uint32_t render_flags);
