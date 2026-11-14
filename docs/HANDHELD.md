@@ -58,6 +58,12 @@ packaging/steam/add-to-steam.sh ~/Applications/CT_Recomp-x86_64.AppImage
    options empty: in Game Mode the HD-2D look is on by default.
 3. **Properties** > **Controller**: choose the **Gamepad** layout. A keyboard or desktop
    layout sends keys rather than buttons.
+4. Optional artwork: `packaging/steam/artwork/` has a capsule (`grid.png`, 600x900), wide
+   capsule (`capsule_wide.png`, 920x430), hero (`hero.png`, 1920x620), transparent logo
+   (`logo.png`, 1280x720) and icon (`icon.png`, 256x256). Right-click the entry >
+   **Manage** > **Set custom artwork** and pick each file in its slot. The helper prints
+   the paths. The art is original to this project (GPL-3.0-or-later, made by
+   `packaging/icons/make_icons.py --steam`); it uses no game imagery.
 
 Switch back to Game Mode. The game is in your library under **Non-Steam**.
 
