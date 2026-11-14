@@ -66,6 +66,18 @@ reads them to populate `funcs.toml` / `unresolved.toml`.
   uses it to read and check the models asset packs name in `[[model]]` entries
   (docs/ASSET-PACKS.md). Details and the file's hash in `third_party/cgltf/README.md`.
 
+### `third_party/imgui/`
+
+- **ocornut/imgui** (Dear ImGui), release `v1.92.9b`
+  (<https://github.com/ocornut/imgui/releases/tag/v1.92.9b>; MIT, Omar Cornut; the
+  release's `LICENSE.txt` is kept beside it) -- the immediate-mode GUI library, with
+  its SDL2, OpenGL 3 / ES 3 and SDL_Renderer 2 backends, vendored unmodified. The
+  frontend's settings menu (`frontend/menu.cpp`) draws with it; nothing else uses it.
+  Its stb headers (`imstb_*.h`, Sean Barrett) are public domain / MIT as their
+  headers say. Also `fonts/Roboto-Medium.ttf` from the release's `misc/fonts/`
+  (Roboto, Christian Robertson, Apache-2.0, `LICENSES/Apache-2.0.txt`), the menu's
+  font. Details and hashes in `third_party/imgui/README.md`.
+
 ### `third_party/snes/`
 
 - **snesrev/zelda3**, `snes/` subtree, commit `fbbb3f967a51fafe642e6140d0753979e73b4090`
