@@ -457,6 +457,9 @@ static struct {
     int pic_w, pic_h, out_w, out_h;
     float focus_y;
     unsigned frame;
+    GLuint t_text;                  /* port: HD text overlay (hd2d_set_text_overlay) */
+    unsigned text_gen;              /* what t_text holds */
+    int text_w, text_h;
     /* On-screen message: text, frames left, and its mask texture. */
     char osd_text[160];   /* port: room for [token] glyphs */
     int osd_frames, osd_dirty, osd_w, osd_h;
@@ -686,6 +689,45 @@ void hd2d_osd(const char *text)
     snprintf(g.osd_text, sizeof g.osd_text, "%s", text);
     g.osd_frames = OSD_FRAMES;
     g.osd_dirty = 1;
+}
+
+/* port: HD text (hd2d.h): the frontend's overlay, kept here (hd2d_init
+   clears g) and uploaded to g.t_text when its generation changes. */
+static struct {
+    const uint8_t *rgba;
+    int w, h;
+    float x, y, cw, ch;
+    unsigned gen;
+} text_ov;
+
+void hd2d_set_text_overlay(const uint8_t *rgba, int w, int h, float x, float y, float cw,
+                           float ch, unsigned gen)
+{
+    text_ov.rgba = w > 0 && h > 0 ? rgba : NULL;
+    text_ov.w = w;
+    text_ov.h = h;
+    text_ov.x = x;
+    text_ov.y = y;
+    text_ov.cw = cw;
+    text_ov.ch = ch;
+    text_ov.gen = gen;
+}
+
+static void text_upload(void)
+{
+    if (!text_ov.rgba || (g.t_text && g.text_gen == text_ov.gen))
+        return;
+    if (!g.t_text || g.text_w != text_ov.w || g.text_h != text_ov.h) {
+        if (g.t_text)
+            p_glDeleteTextures(1, &g.t_text);
+        g.t_text = make_tex(text_ov.w, text_ov.h, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_LINEAR);
+        g.text_w = text_ov.w;
+        g.text_h = text_ov.h;
+    }
+    p_glBindTexture(GL_TEXTURE_2D, g.t_text);
+    p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, text_ov.w, text_ov.h, GL_RGBA, GL_UNSIGNED_BYTE,
+                      text_ov.rgba);
+    g.text_gen = text_ov.gen;
 }
 
 /* Rasterize the message into its mask texture (1 = text), with button
@@ -943,6 +985,8 @@ void hd2d_shutdown(void)
     g.pack_entries = 0;
     if (g.t_osd)
         p_glDeleteTextures(1, &g.t_osd);
+    if (g.t_text)   /* port: HD text */
+        p_glDeleteTextures(1, &g.t_text);
     p_glDeleteFramebuffers(1, &g.fbo_light);
     for (int k = 0; k < P_ALL; k++)
         p_glDeleteProgram(g.prog[k]);
@@ -1276,6 +1320,16 @@ static void post(const settings *s, int px, int py, int pw, int ph, int ow, int 
         p_glUniform4f(U(pf, "uOsdRect"), px + scale * 4, py + scale * 4, g.osd_w * scale,
                       g.osd_h * scale);
         p_glUniform1f(U(pf, "uOsdAlpha"), g.t_osd ? osd_alpha : 0.0f);
+    }
+    {   /* port: HD text, over the picture where its console pixels are */
+        text_upload();
+        int on = text_ov.rgba && g.t_text && !debug_view;
+        p_glUniform1i(U(pf, "uText"), 15);
+        bind_tex(15, on ? g.t_text : g.t_mat);
+        p_glUniform4f(U(pf, "uTextRect"), px + text_ov.x * pw / SCHED_WIDTH,
+                      py + text_ov.y * ph / SCHED_HEIGHT, text_ov.cw * pw / SCHED_WIDTH,
+                      text_ov.ch * ph / SCHED_HEIGHT);
+        p_glUniform1i(U(pf, "uTextOn"), on);
     }
     p_glUniform1i(U(pf, "uDof"), 3);
     p_glUniform1i(U(pf, "uBloomA"), 4);

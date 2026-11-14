@@ -1387,6 +1387,7 @@ addr = 0xC25DC4
 states = ["m1x0"]
 e = 0
 module = "bankc2"
+patch = "text_glyph"   # port: HD text (game/ct/text.c)
 
 [[func]]
 name = "Text_DrawGlyph2bpp"

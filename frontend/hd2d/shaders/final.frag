@@ -30,6 +30,9 @@ uniform float uTime;
 uniform sampler2D uOsd;      // message mask, nearest
 uniform vec4 uOsdRect;       // its rectangle in output pixels (top-left origin)
 uniform float uOsdAlpha;     // 0: no message
+uniform sampler2D uText;     // port: HD text, premultiplied (hdtext.h)
+uniform vec4 uTextRect;      // its rectangle in output pixels (top-left origin)
+uniform int uTextOn;
 uniform int uDebug;          // 0 off, 1 classes, 2 depth, 3 blur amount, 4 split compare,
                              // 5 background plane
 out vec4 oColor;
@@ -139,6 +142,13 @@ void main()
 {
     vec2 fc = vec2(gl_FragCoord.x, uFlip == 1 ? uOut.y - gl_FragCoord.y : gl_FragCoord.y);
     vec3 c = shade(fc);
+    if (uTextOn == 1) {
+        vec2 o = (fc - uTextRect.xy) / uTextRect.zw;
+        if (all(greaterThanEqual(o, vec2(0.0))) && all(lessThan(o, vec2(1.0)))) {
+            vec4 t = texture(uText, o);
+            c = c * (1.0 - t.a) + t.rgb;
+        }
+    }
     // On-screen message: white text on a dimmed box, fading out.
     if (uOsdAlpha > 0.0) {
         vec2 o = (fc - uOsdRect.xy) / uOsdRect.zw;
