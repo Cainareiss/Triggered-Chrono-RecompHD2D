@@ -69,7 +69,8 @@ int hd2d_wants_behind(void);
 int hd2d_read(uint8_t *bgrx, int out_w, int out_h);
 
 /* Show a short message over the picture for about two seconds (A-Z,
-   0-9 and the punctuation in osd_font.h; at most 47 characters). */
+   0-9 and the punctuation in osd_font.h, and [token] button glyphs:
+   osd_text.h, glyphs.h; at most 159 bytes). */
 void hd2d_osd(const char *text);
 
 /* port: asset packs (docs/ASSET-PACKS.md). The replacement atlas:
@@ -91,6 +92,13 @@ void hd2d_pack_map(const uint16_t *map);
 typedef int (*hd2d_tile_lookup)(void *user, unsigned chr, int pal, int bpp, const uint16_t *vram,
                                 const uint16_t *cgram);
 void hd2d_pack_tiles(hd2d_tile_lookup fn, void *user);
+
+/* port: an offset for the 3D diorama's camera (HD2D_3D), in degrees:
+   dtilt more (> 0) or less tilted back than the preset's, dyaw turned
+   about the point it looks at. Clamped to +-HD2D_CAMERA_MAX; 0, 0 (the
+   default) is the camera as without it. For gyro aiming (main.c). */
+#define HD2D_CAMERA_MAX 10.0f
+void hd2d_set_camera_offset(float dtilt, float dyaw);
 
 /* GPU time of the last hd2d_render in milliseconds (glFinish-bracketed:
    only measured when timing is on, as it stalls the pipeline). */

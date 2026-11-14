@@ -36,6 +36,18 @@ reads them to populate `funcs.toml` / `unresolved.toml`.
   debuggers/tracers during development. No code from any of them is in this
   repository.
 
+### `third_party/glyphs/`
+
+- **Kenney, Input Prompts** version 1.3 (CC0-1.0; its `License.txt` is kept
+  beside the pictures, the CC0 text is `LICENSES/CC0-1.0.txt`) — 145 of the
+  pack's 64 px PNG button and key pictures (Steam Deck, Steam Controller,
+  Xbox, PlayStation, Nintendo Switch, keyboard), unmodified, for the button
+  glyphs in on-screen messages. Source: <https://kenney.nl/assets/input-prompts>;
+  downloaded from the mirror <https://github.com/Maaack/Kenney-Input-Prompts>
+  at commit `dd37497091c176e91ce81a14e203729ea12d8e4b`. `tools/embed_glyphs.py`
+  (our code) turns them into coverage masks at build time. Details in
+  `third_party/glyphs/README.md`.
+
 ### `third_party/ares/`
 
 - **ares-emulator/ares**, `ares/component/processor/spc700/`, commit

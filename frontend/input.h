@@ -77,4 +77,38 @@ int quit_combo_update(quit_combo *q, long frame,
 /* The controller's input should not reach the game this frame. */
 int quit_combo_masks(const quit_combo *q);
 
+/* port: SDL hints for controllers, set before SDL_Init (docs/HANDHELD.md):
+   - SDL_HINT_JOYSTICK_HIDAPI_STEAMDECK=1: the Steam Deck's built-in
+     controller through SDL's own driver, back buttons (paddle1-4),
+     trackpads and gyro included, when Steam Input isn't between them;
+   - SDL_HINT_JOYSTICK_HIDAPI_STEAM=1 (when native_steam): the Steam
+     Controller likewise (off by default in SDL 2; SDL 3 also drives the
+     2026 Steam Controller with it). Needs read access to /dev/hidraw*
+     (Steam's udev rules). Not on Android, where it means a Bluetooth
+     permission prompt;
+   - SDL_HINT_GAMECONTROLLER_USE_BUTTON_LABELS=0: face buttons by
+     position on Nintendo pads too, as input_controller assumes.
+   A hint already in the environment wins. Under Steam Input, Steam hides
+   the physical pads from SDL (SDL_GAMECONTROLLER_IGNORE_DEVICES): the
+   virtual pad is used as before. */
+void input_sdl_hints(int native_steam);
+/* Steam Input is giving this process its virtual pad instead of the real
+   ones (Steam's environment variables); why gets the variable. */
+int input_under_steam_input(const char **why);
+
+/* port: gyro aiming for the 3D diorama's camera (optional, settings.ini
+   gyro=on; docs/HANDHELD.md). Turning the pad tilts (pitch) and turns
+   (yaw) the camera a little; it eases back to the preset's view when the
+   pad is still. tilt and yaw in degrees, within +-GYRO_MAX_DEG. */
+#define GYRO_MAX_DEG 8.0f
+
+typedef struct {
+    float tilt, yaw;
+} gyro_cam;
+
+/* rate: SDL_SENSOR_GYRO data (rad/s about x = pitch, y = yaw, z = roll),
+   dt: seconds since the last step, strength: 1 = a degree of camera per
+   degree turned. */
+void gyro_cam_step(gyro_cam *gc, const float rate[3], float dt, float strength);
+
 #endif
