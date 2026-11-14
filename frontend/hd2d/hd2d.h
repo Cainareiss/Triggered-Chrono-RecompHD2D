@@ -18,11 +18,31 @@
 
 /* HD2D_DECK: HD2D_FULL made lighter for the Steam Deck's GPU (device.h).
    HD2D_3D: HD2D_FULL with map views rebuilt as a 3D diorama (scene3d.h)
-   where the game describes its scene; everything else as HD2D_FULL. */
-enum { HD2D_OFF, HD2D_SUBTLE, HD2D_FULL, HD2D_DECK, HD2D_3D, HD2D_PRESETS };
+   where the game describes its scene; everything else as HD2D_FULL.
+   HD2D_DECK3D: HD2D_DECK with the 3D diorama, rendered at 67% and
+   upscaled (FSR 1), its ambient occlusion at a quarter of the size. */
+enum { HD2D_OFF, HD2D_SUBTLE, HD2D_FULL, HD2D_DECK, HD2D_3D, HD2D_DECK3D, HD2D_PRESETS };
 enum { HD2D_DEBUG_NONE, HD2D_DEBUG_CLASSES, HD2D_DEBUG_DEPTH, HD2D_DEBUG_BLUR, HD2D_DEBUG_SPLIT,
        HD2D_DEBUG_BEHIND, HD2D_DEBUGS };
 enum { HD2D_ASPECT_4_3, HD2D_ASPECT_PIXEL, HD2D_ASPECT_STRETCH, HD2D_ASPECTS };
+
+/* The 3D diorama's quality (HD2D_3D, HD2D_DECK3D; docs/HD2D.md):
+   - render scale: the 3D scene is drawn at this share of the picture's
+     size, 0.5-1, then upscaled by FSR 1's EASU and sharpened by its RCAS;
+     the UI and the 2D path stay at full size. 0: the preset's (1 in
+     hd2d3d, 0.67 in deck3d).
+   - sharpen, 0-1: CAS at a render scale of 1 (0: off), RCAS's strength
+     below it. < 0: the preset's (0 at 1, 0.5 below).
+   - ambient occlusion strength, 0-1 (0: off, and the pass is skipped).
+     < 0: the preset's.
+   Settings (settings.ini render_scale, sharpen, ao); out-of-range values
+   are clamped. The getters return what was set (0 / -1: the preset's). */
+void hd2d_set_render_scale(float scale);
+float hd2d_render_scale(void);
+void hd2d_set_sharpen(float amount);
+float hd2d_sharpen(void);
+void hd2d_set_ao(float strength);
+float hd2d_ao(void);
 
 /* Load GL entry points (SDL_GL_GetProcAddress), compile the shaders, make
    the fixed-size targets. gles: the context is OpenGL ES 3.0. Returns 0,

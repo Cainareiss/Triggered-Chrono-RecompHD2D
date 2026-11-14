@@ -20,6 +20,11 @@
  *                             made only when the picture leaves sides
  *   5 final     output size   DOF mix, bloom, grade, vignette, grain, UI
  *
+ * The 3D diorama (hd2d3d, deck3d) replaces 1 and 2 with its own passes
+ * (shadow map, surfaces at the render scale, ambient occlusion, FSR 1's
+ * EASU up to the picture size, the UI over it) and runs 3-5 on the result
+ * (below, "the 3D diorama").
+ *
  * Every intermediate keeps row 0 at the top of the picture (the order the
  * frame is uploaded in); only drawing to the window flips. GL entry points
  * come from SDL_GL_GetProcAddress, so nothing links libGL directly. */
@@ -226,7 +231,7 @@ typedef void (*PFN_glDeleteQueries)(GLsizei n, const GLuint *ids);
 typedef void (*PFN_glQueryCounter)(GLuint id, GLenum target);
 typedef void (*PFN_glGetQueryObjectui64v)(GLuint id, GLenum pname, GLuint64 *v);
 
-enum { PROF_MARKS = 16, PROF_RING = 4 };
+enum { PROF_MARKS = 24, PROF_RING = 4 };
 
 static struct {
     FILE *f;
@@ -327,6 +332,11 @@ typedef struct {
     int bloom_quarter_only;   /* one bloom level, no 1/8 one */
     int side_fill_wide_only;  /* side fill only where the bars are over 20% of the width */
     int scene3d;              /* map views as the 3D diorama, where there is a scene */
+    /* The 3D diorama's quality (hd2d.h: hd2d_set_render_scale and the rest):
+       the preset's render scale and ambient occlusion strength, and the
+       occlusion's size (the picture's / ao_div). */
+    float render_scale, ao3d;
+    int ao_div;
 } settings;
 
 static const settings presets[HD2D_PRESETS] = {
@@ -357,10 +367,20 @@ static const settings presets[HD2D_PRESETS] = {
                  .dof_radius = 6.0f, .bloom = 0.45f, .bloom_threshold = 0.7f,
                  .exposure = 1.06f, .saturation = 1.12f, .contrast = 1.04f, .vignette = 0.35f,
                  .grain = 0.018f, .split = 0.35f, .side_dim = 0.42f, .tilt = 0.022f,
-                 .effects = 1, .scene3d = 1},
+                 .effects = 1, .scene3d = 1, .render_scale = 1.0f, .ao3d = 0.6f, .ao_div = 2},
+    /* HD2D_DECK with the 3D diorama: the surfaces at 67% of the picture's
+       size and FSR 1 up to it, the ambient occlusion at a quarter. */
+    [HD2D_DECK3D] = {.relief = 0.55f, .shadow = 0.85f, .ao = 0.7f, .rim = 0.6f, .haze = 0.5f, .point_light = 1.2f,
+                     .dof_tilt = 0.9f, .dof_depth = 0.5f, .focus_band = 0.18f, .focus_ramp = 0.34f,
+                     .dof_radius = 3.5f, .bloom = 0.4f, .bloom_threshold = 0.7f,
+                     .exposure = 1.06f, .saturation = 1.12f, .contrast = 1.04f, .vignette = 0.35f,
+                     .grain = 0.018f, .split = 0.35f, .side_dim = 0.42f, .tilt = 0.022f,
+                     .effects = 1, .bloom_quarter_only = 1, .side_fill_wide_only = 1,
+                     .scene3d = 1, .render_scale = 0.67f, .ao3d = 0.6f, .ao_div = 4},
 };
 
-static const char *const preset_names[HD2D_PRESETS] = {"off", "subtle", "hd2d", "deck", "hd2d3d"};
+static const char *const preset_names[HD2D_PRESETS] = {"off",  "subtle", "hd2d",
+                                                        "deck", "hd2d3d", "deck3d"};
 
 static int cur_preset = HD2D_FULL, debug_view, aspect_mode, timing;
 /* Eased across frames by hd2d_render (scene brightness, ground share). */
@@ -379,12 +399,25 @@ void hd2d_set_timing(int on) { timing = on; }
 int hd2d_wants_scene(void) { return presets[cur_preset].scene3d; }
 double hd2d_last_ms(void) { return last_ms; }
 
+/* The 3D diorama's quality, as set (0 / -1: the preset's). */
+static float user_render_scale, user_sharpen = -1.0f, user_ao = -1.0f;
+
+static float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
+void hd2d_set_render_scale(float v) { user_render_scale = v > 0.0f ? clampf(v, 0.5f, 1.0f) : 0.0f; }
+float hd2d_render_scale(void) { return user_render_scale; }
+void hd2d_set_sharpen(float v) { user_sharpen = v < 0.0f ? -1.0f : clampf(v, 0.0f, 1.0f); }
+float hd2d_sharpen(void) { return user_sharpen; }
+void hd2d_set_ao(float v) { user_ao = v < 0.0f ? -1.0f : clampf(v, 0.0f, 1.0f); }
+float hd2d_ao(void) { return user_ao; }
+
 /* ---- GL objects ---- */
 
 enum { P_EMIT, P_LIGHT, P_COC, P_DOFBLUR, P_BRIGHT, P_GAUSS, P_FINAL, P_COUNT,
        /* the 3D diorama's: its surfaces, their shadow map, the UI over them,
           and the picture's passes again with scene3d_pic.frag for upscale.frag */
-       P3_SCENE = P_COUNT, P3_SHADOW, P3_UI, P3_COC, P3_BRIGHT, P3_FINAL, P_ALL };
+       P3_SCENE = P_COUNT, P3_SHADOW, P3_UI, P3_COC, P3_BRIGHT, P3_FINAL,
+       /* its ambient occlusion and blur, and FSR 1's EASU */
+       P3_AO, P3_AOBLUR, P3_EASU, P_ALL };
 
 typedef struct {
     GLuint tex, fbo;
@@ -423,8 +456,15 @@ static struct {
         uint32_t empty_hash;        /* and which BG tiles were empty then */
         int have_map;
         s3d_mesh map, spr;
-        GLuint t_color, t_mat, t_depth, fbo;   /* picture size */
+        GLuint t_color, t_mat, t_depth, fbo;   /* render size (the picture's x render scale) */
         int w, h;
+        /* Below a render scale of 1: the picture-size target EASU fills
+           (color, material) and the UI goes over. */
+        GLuint t_up, t_upmat, fbo_up;
+        int up_w, up_h;
+        target ao[2];                 /* ambient occlusion, and the blur's scratch */
+        int pic_w, pic_h, scaled;     /* the last 3D frame: its picture size, upscaled */
+        float ao_amt, near_, far_;    /* and its occlusion strength, depth range */
         GLuint t_shadow, fbo_shadow;
         float dtilt, dyaw;   /* port: hd2d_set_camera_offset (gyro), degrees */
         float tilt, fov, zoom, stretch;   /* camera: degrees from straight down, vertical fov,
@@ -969,9 +1009,19 @@ static void bind_picture(int prog, int pw, int ph, float tilt)
     p_glUniform2f(U(prog, "uScale"), (float)pw / SCHED_WIDTH, (float)ph / SCHED_HEIGHT);
     p_glUniform2f(U(prog, "uPic"), (float)pw, (float)ph);
     p_glUniform3f(U(prog, "uTilt"), 0.5f, g.focus_y, tilt);
-    bind_tex(0, pic3d ? g.s3.t_color : g.t_lit);
-    bind_tex(1, pic3d ? g.s3.t_color : g.t_back);
-    bind_tex(2, pic3d ? g.s3.t_mat : g.t_mat);
+    GLuint pic = g.s3.scaled ? g.s3.t_up : g.s3.t_color, pmat = g.s3.scaled ? g.s3.t_upmat : g.s3.t_mat;
+    bind_tex(0, pic3d ? pic : g.t_lit);
+    bind_tex(1, pic3d ? pic : g.t_back);
+    bind_tex(2, pic3d ? pmat : g.t_mat);
+    if (pic3d) {   /* scene3d_pic.frag: ambient occlusion on units 14-15; sharpening off
+                      (the final pass turns it on) */
+        p_glUniform1i(U(prog, "uAoTex"), 14);
+        p_glUniform1i(U(prog, "uDepthTex"), 15);
+        p_glUniform4f(U(prog, "uAo"), g.s3.ao_amt, g.s3.near_, g.s3.far_, 0.0f);
+        p_glUniform2f(U(prog, "uSharp"), 0.0f, 0.0f);
+        bind_tex(14, g.s3.ao[0].tex ? g.s3.ao[0].tex : g.t_mat);
+        bind_tex(15, g.s3.t_depth);
+    }
     /* port: asset packs, units 10-13 (always valid textures there: the
        samplers' types differ from unit 0's) */
     p_glUniform1i(U(prog, "uPack"), g.pack_on && !pic3d);   /* the map is 2D */
@@ -1194,6 +1244,17 @@ static void post(const settings *s, int px, int py, int pw, int ph, int ow, int 
     p_glUniform1f(U(pf, "uSideDim"), side_fill ? s->side_dim : 0.0f);
     p_glUniform1f(U(pf, "uTime"), (float)(g.frame % 997) / 997.0f);
     p_glUniform1i(U(pf, "uDebug"), debug_view);
+    if (threeD) {
+        /* Sharpening (scene3d_pic.frag): RCAS after EASU, CAS at the
+           native render scale; neither in the debug views. */
+        float sh = user_sharpen >= 0.0f ? user_sharpen : g.s3.scaled ? 0.5f : 0.0f;
+        if (debug_view || sh <= 0.0f || !s->effects)
+            p_glUniform2f(U(pf, "uSharp"), 0.0f, 0.0f);
+        else if (g.s3.scaled)
+            p_glUniform2f(U(pf, "uSharp"), 2.0f, sh);   /* FsrRcasCon: exp2(-stops) */
+        else   /* CasSetup's peak */
+            p_glUniform2f(U(pf, "uSharp"), 1.0f, -1.0f / (8.0f + (5.0f - 8.0f) * sh));
+    }
     if (blend > 0.0f && blend < 1.0f) {
         p_glEnable(GL_BLEND);
         p_glBlendColor(0.0f, 0.0f, 0.0f, blend);
@@ -1218,6 +1279,7 @@ static void post(const settings *s, int px, int py, int pw, int ph, int ow, int 
 
 #define S3D_SHADOW_SIZE 1024
 #define S3D_FADE_STEP   0.125f   /* 8 frames */
+#define S3D_AO_RADIUS   14.0f    /* ambient occlusion's reach, map px (a cell is 16) */
 
 static void s3d_params_init(void)
 {
@@ -1252,21 +1314,35 @@ static void s3d_params_init(void)
 static int s3d_init(void)
 {
     s3d_params_init();
-    static const struct { int prog; const char *vert, *lib, *frag, *name; } ps[] = {
+    /* The picture's passes get FSR 1 and CAS (third_party/fidelityfx) in
+       front of scene3d_pic.frag, for the sharpening. */
+    size_t nf = strlen(hd2d_src_ffx_fsr1_cas_glsl), np = strlen(hd2d_src_scene3d_pic_frag);
+    char *pic = malloc(nf + np + 1);
+    if (!pic)
+        return -1;
+    memcpy(pic, hd2d_src_ffx_fsr1_cas_glsl, nf);
+    memcpy(pic + nf, hd2d_src_scene3d_pic_frag, np + 1);
+    const struct { int prog; const char *vert, *lib, *frag, *name; } ps[] = {
         {P3_SCENE, hd2d_src_scene3d_vert, NULL, hd2d_src_scene3d_frag, "scene3d.frag"},
         {P3_SHADOW, hd2d_src_scene3d_vert, "#define SHADOW_PASS\n", hd2d_src_scene3d_frag,
          "scene3d.frag (shadow)"},
         {P3_UI, NULL, NULL, hd2d_src_ui3d_frag, "ui3d.frag"},
-        {P3_COC, NULL, hd2d_src_scene3d_pic_frag, hd2d_src_coc_frag, "coc.frag (3D)"},
-        {P3_BRIGHT, NULL, hd2d_src_scene3d_pic_frag, hd2d_src_bright_frag, "bright.frag (3D)"},
-        {P3_FINAL, NULL, hd2d_src_scene3d_pic_frag, hd2d_src_final_frag, "final.frag (3D)"},
+        {P3_COC, NULL, pic, hd2d_src_coc_frag, "coc.frag (3D)"},
+        {P3_BRIGHT, NULL, pic, hd2d_src_bright_frag, "bright.frag (3D)"},
+        {P3_FINAL, NULL, pic, hd2d_src_final_frag, "final.frag (3D)"},
+        {P3_AO, NULL, NULL, hd2d_src_ssao_frag, "ssao.frag"},
+        {P3_AOBLUR, NULL, NULL, hd2d_src_aoblur_frag, "aoblur.frag"},
+        {P3_EASU, NULL, hd2d_src_ffx_fsr1_cas_glsl, hd2d_src_fsr_easu_frag, "fsr_easu.frag"},
     };
     for (size_t k = 0; k < sizeof ps / sizeof *ps; k++) {
         g.prog[ps[k].prog] = link_vs(ps[k].vert ? ps[k].vert : hd2d_src_fullscreen_vert,
                                      ps[k].lib, ps[k].frag, ps[k].name);
-        if (!g.prog[ps[k].prog])
+        if (!g.prog[ps[k].prog]) {
+            free(pic);
             return -1;
+        }
     }
+    free(pic);
     g.s3.t_vram = make_tex(256, 128, GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT, GL_NEAREST);
     g.s3.t_cgram = make_tex(256, 1, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_NEAREST);
     p_glGenVertexArrays(2, g.s3.vao);
@@ -1310,10 +1386,15 @@ static void s3d_free_targets(void)
 {
     if (g.s3.fbo)
         p_glDeleteFramebuffers(1, &g.s3.fbo);
-    GLuint t[3] = {g.s3.t_color, g.s3.t_mat, g.s3.t_depth};
-    p_glDeleteTextures(3, t);
+    if (g.s3.fbo_up)
+        p_glDeleteFramebuffers(1, &g.s3.fbo_up);
+    GLuint t[5] = {g.s3.t_color, g.s3.t_mat, g.s3.t_depth, g.s3.t_up, g.s3.t_upmat};
+    p_glDeleteTextures(5, t);
     g.s3.fbo = g.s3.t_color = g.s3.t_mat = g.s3.t_depth = 0;
-    g.s3.w = g.s3.h = 0;
+    g.s3.fbo_up = g.s3.t_up = g.s3.t_upmat = 0;
+    g.s3.w = g.s3.h = g.s3.up_w = g.s3.up_h = 0;
+    target_free(&g.s3.ao[0]);
+    target_free(&g.s3.ao[1]);
 }
 
 static void s3d_shutdown(void)
@@ -1331,30 +1412,46 @@ static void s3d_shutdown(void)
     memset(&g.s3, 0, sizeof g.s3);
 }
 
-/* The picture-size targets, made the first time the 3D path draws. */
-static int s3d_resize(int pw, int ph)
+/* The targets, made the first time the 3D path draws: the render-size
+   one with depth (rw x rh), below a render scale of 1 the picture-size
+   one EASU fills (pw x ph), and the ambient occlusion's (aw x ah; 0: not
+   made). */
+static int s3d_resize(int rw, int rh, int pw, int ph, int aw, int ah)
 {
-    if (pw == g.s3.w && ph == g.s3.h)
+    int up = rw != pw || rh != ph;
+    if (rw == g.s3.w && rh == g.s3.h && (up ? pw : 0) == g.s3.up_w &&
+        (up ? ph : 0) == g.s3.up_h && aw == g.s3.ao[0].w * (aw > 0) &&
+        ah == g.s3.ao[0].h * (ah > 0) && (aw > 0) == (g.s3.ao[0].tex != 0))
         return 0;
     s3d_free_targets();
-    g.s3.t_color = make_tex(pw, ph, (GLint)g.float_fmt, GL_RGBA, g.float_type, GL_LINEAR);
-    g.s3.t_mat = make_tex(pw, ph, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_NEAREST);
-    g.s3.t_depth = make_tex(pw, ph, GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT,
+    g.s3.t_color = make_tex(rw, rh, (GLint)g.float_fmt, GL_RGBA, g.float_type, GL_LINEAR);
+    g.s3.t_mat = make_tex(rw, rh, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_NEAREST);
+    g.s3.t_depth = make_tex(rw, rh, GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT,
                             GL_NEAREST);
     GLuint two[2] = {g.s3.t_color, g.s3.t_mat};
-    if (fbo_for(&g.s3.fbo, two, 2))
-        return -1;
+    int ok = !fbo_for(&g.s3.fbo, two, 2);
     p_glBindFramebuffer(GL_FRAMEBUFFER, g.s3.fbo);
     p_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, g.s3.t_depth, 0);
-    int ok = p_glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    ok &= p_glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
     p_glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (ok && up) {
+        g.s3.t_up = make_tex(pw, ph, (GLint)g.float_fmt, GL_RGBA, g.float_type, GL_LINEAR);
+        g.s3.t_upmat = make_tex(pw, ph, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_NEAREST);
+        two[0] = g.s3.t_up;
+        two[1] = g.s3.t_upmat;
+        ok &= !fbo_for(&g.s3.fbo_up, two, 2);
+    }
+    for (int k = 0; ok && aw > 0 && k < 2; k++)
+        ok &= !target_make(&g.s3.ao[k], aw, ah, 1);
     if (!ok) {
-        fprintf(stderr, "hd2d: cannot make the %dx%d 3D target\n", pw, ph);
+        fprintf(stderr, "hd2d: cannot make the %dx%d 3D targets\n", pw, ph);
         s3d_free_targets();
         return -1;
     }
-    g.s3.w = pw;
-    g.s3.h = ph;
+    g.s3.w = rw;
+    g.s3.h = rh;
+    g.s3.up_w = up ? pw : 0;
+    g.s3.up_h = up ? ph : 0;
     return 0;
 }
 
@@ -1503,12 +1600,27 @@ static void s3d_draw(int raised_only)
     p_glBindVertexArray(g.vao);
 }
 
-/* The 3D view into g.s3's picture-size target. Returns its depth of
-   field focus distance and range through *focus and *range. */
+/* The 3D view into g.s3's targets: the surfaces at the render scale,
+   their ambient occlusion, EASU up to the picture size when the render
+   scale is below 1, the UI on top at the picture size. post() reads the
+   result (bind_picture). */
 static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int ui_z,
                       float scene_amt)
 {
-    if (s3d_resize(pw, ph))
+    float a = s->effects ? scene_amt : 0.0f;
+    float rs = user_render_scale > 0.0f ? user_render_scale : s->render_scale;
+    int rw = pw, rh = ph;
+    if (rs > 0.0f && rs < 0.995f) {
+        rw = (int)lroundf(pw * rs);
+        rh = (int)lroundf(ph * rs);
+        rw = rw < 8 ? 8 : rw;
+        rh = rh < 8 ? 8 : rh;
+    }
+    /* (its targets kept while menus ease it off: no remaking them each time) */
+    float ao_base = user_ao >= 0.0f ? user_ao : s->ao3d, ao_amt = ao_base * a;
+    int div = s->ao_div > 0 ? s->ao_div : 2;
+    int aw = ao_base > 0.0f ? pw / div : 0, ah = ao_base > 0.0f ? ph / div : 0;
+    if (s3d_resize(rw, rh, pw, ph, aw, ah))
         return -1;
     s3d_update(sc);
 
@@ -1517,7 +1629,7 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     float tilt_deg = g.s3.tilt + g.s3.dtilt;   /* port: + the gyro's offset */
     tilt_deg = tilt_deg < 0 ? 0 : tilt_deg > 80 ? 80 : tilt_deg;
     float tilt = tilt_deg * 3.14159265f / 180.0f, fovy = g.s3.fov * 3.14159265f / 180.0f;
-    float aspect = (float)pw / (float)ph;
+    float aspect = (float)pw / (float)ph;   /* the picture's, at any render scale */
     float dist = 128.0f / g.s3.zoom / (tanf(fovy * 0.5f) * aspect);
     float at[3] = {(float)sc->camera_x + 128.0f, 0.0f, (float)sc->camera_y + 120.0f};
     /* The console's camera stops at the map's edges. This one sees
@@ -1597,7 +1709,7 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     float fog[3] = {0.27f, 0.30f, 0.37f};   /* haze with distance */
     const float void_[3] = {0.07f, 0.075f, 0.09f};   /* around the map */
     p_glBindFramebuffer(GL_FRAMEBUFFER, g.s3.fbo);
-    p_glViewport(0, 0, pw, ph);
+    p_glViewport(0, 0, rw, rh);
     float bright = sc->brightness / 15.0f;
     p_glClearColor(void_[0] * bright, void_[1] * bright, void_[2] * bright, 1.0f);
     p_glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -1629,7 +1741,6 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     p_glUniform3f(U(P, "uEye"), eye[0], eye[1], eye[2]);
     p_glUniform2f(U(P, "uCam"), (float)sc->camera_x, (float)sc->camera_y);
     p_glUniform4f(U(P, "uFog"), fog[0], fog[1], fog[2], 0.6f * s->haze / 0.5f);
-    float a = s->effects ? scene_amt : 0.0f;
     p_glUniform4f(U(P, "uDepth"), dist, dist * 1.6f, bright, 0.55f * s->shadow * a);
     p_glUniform4f(U(P, "uMisc"), s->point_light * a * (0.25f + 0.75f * dark_amt), dist * 1.25f,
                   dist * 3.5f, 1.0f / S3D_SHADOW_SIZE);
@@ -1637,7 +1748,55 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     p_glDisable(GL_DEPTH_TEST);
     prof_mark("s3d_scene");
 
-    /* The UI, flat on top. */
+    /* Ambient occlusion (ssao.frag) at the picture's size / ao_div, from
+       the render-size depth, then its bilateral blur, H and V; applied
+       where the picture is read (scene3d_pic.frag). */
+    g.s3.near_ = dist * 0.15f;
+    g.s3.far_ = dist * 5.0f;
+    g.s3.ao_amt = ao_amt;
+    if (ao_amt > 0.0f) {
+        p_glUseProgram(g.prog[P3_AO]);
+        p_glUniform1i(U(P3_AO, "uDepth"), 0);
+        p_glUniform1i(U(P3_AO, "uMat"), 1);
+        bind_tex(0, g.s3.t_depth);
+        bind_tex(1, g.s3.t_mat);
+        p_glUniformMatrix4fv(U(P3_AO, "uView"), 1, GL_FALSE, view);
+        p_glUniform4f(U(P3_AO, "uProj"), proj[0], proj[5], g.s3.near_, g.s3.far_);
+        p_glUniform2f(U(P3_AO, "uRadius"), S3D_AO_RADIUS, div > 2 ? 8.0f : 12.0f);
+        draw_to(g.s3.ao[0].fbo, g.s3.ao[0].w, g.s3.ao[0].h);
+        p_glUseProgram(g.prog[P3_AOBLUR]);
+        p_glUniform1i(U(P3_AOBLUR, "uSrc"), 0);
+        bind_tex(0, g.s3.ao[0].tex);
+        p_glUniform2f(U(P3_AOBLUR, "uDir"), 1.0f / g.s3.ao[0].w, 0.0f);
+        draw_to(g.s3.ao[1].fbo, g.s3.ao[1].w, g.s3.ao[1].h);
+        bind_tex(0, g.s3.ao[1].tex);
+        p_glUniform2f(U(P3_AOBLUR, "uDir"), 0.0f, 1.0f / g.s3.ao[1].h);
+        draw_to(g.s3.ao[0].fbo, g.s3.ao[0].w, g.s3.ao[0].h);
+        prof_mark("s3d_ao");
+    }
+
+    /* Below a render scale of 1: FSR 1's EASU up to the picture size
+       (fsr_easu.frag; FsrEasuCon's con0). The UI then goes on at full
+       size; RCAS sharpens in the final pass. */
+    g.s3.scaled = rw != pw || rh != ph;
+    g.s3.pic_w = pw;
+    g.s3.pic_h = ph;
+    if (g.s3.scaled) {
+        p_glUseProgram(g.prog[P3_EASU]);
+        p_glUniform1i(U(P3_EASU, "uSrc"), 0);
+        p_glUniform1i(U(P3_EASU, "uSrcMat"), 1);
+        bind_tex(0, g.s3.t_color);
+        bind_tex(1, g.s3.t_mat);
+        float sx = (float)rw / (float)pw, sy = (float)rh / (float)ph;
+        p_glUniform4f(U(P3_EASU, "uCon0"), sx, sy, 0.5f * sx - 0.5f, 0.5f * sy - 0.5f);
+        draw_to(g.s3.fbo_up, pw, ph);
+        prof_mark("s3d_easu");
+    } else {
+        p_glBindFramebuffer(GL_FRAMEBUFFER, g.s3.fbo);
+        p_glViewport(0, 0, pw, ph);
+    }
+
+    /* The UI, flat on top, at the picture's size. */
     p_glUseProgram(g.prog[P3_UI]);
     p_glUniform1i(U(P3_UI, "uColor"), 0);
     p_glUniform1i(U(P3_UI, "uLayer"), 1);
@@ -1744,7 +1903,7 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     const ct_scene *sc = g.s3.scene;
     int want3 = s->scene3d && g.s3.ok && sc && sc->mode == CT_SCENE_FIELD && sc->vram &&
                 !(st && st->mode == 7);
-    if (!s->scene3d || (!want3 && (g.s3.w != pw || g.s3.h != ph)))
+    if (!s->scene3d || (!want3 && (g.s3.pic_w != pw || g.s3.pic_h != ph)))
         g.s3.amt = 0.0f;
     else
         g.s3.amt = want3 ? fminf(g.s3.amt + S3D_FADE_STEP, 1.0f)
