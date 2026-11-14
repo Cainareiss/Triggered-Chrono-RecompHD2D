@@ -2055,8 +2055,9 @@ static void s3d_box_mask(const ct_scene *sc, const uint8_t *bgrx, const uint8_t 
     uint8_t mk[29][33];   /* marked tiles, from the camera's top-left one */
     memset(mk, 0, sizeof mk);
     const ct_scene_layer *L = &sc->layer[0];
-    if (sc->mode == CT_SCENE_FIELD && L->present && L->tiles && sc->vram && sc->cgram &&
-        sc->brightness >= 4) {
+    /* (No UI text on screen: no box to find, so skip the per-pixel scan.) */
+    if (ui_z >= 0 && sc->mode == CT_SCENE_FIELD && L->present && L->tiles && sc->vram &&
+        sc->cgram && sc->brightness >= 4) {
         uint8_t lev[32];
         for (int c = 0; c < 32; c++) {
             int v = c * sc->brightness / 15;
@@ -2065,7 +2066,8 @@ static void s3d_box_mask(const ct_scene *sc, const uint8_t *bgrx, const uint8_t 
         int tw = 2 * sc->map_w, th = 2 * sc->map_h, cx = sc->camera_x, cy = sc->camera_y;
         for (int ty = cy >> 3; ty * 8 - cy < SCHED_HEIGHT; ty++)
             for (int tx = cx >> 3; tx * 8 - cx < SCHED_WIDTH; tx++) {
-                uint16_t e = tx < tw && ty < th ? L->tiles[ty * CT_SCENE_STRIDE + tx] : 0;
+                uint16_t e = tx >= 0 && ty >= 0 && tx < tw && ty < th
+                                 ? L->tiles[ty * CT_SCENE_STRIDE + tx] : 0;
                 uint32_t a = (L->chr_base + (e & 0x3FFu) * 16u) & 0x7FFFu;
                 int seen = 0, diff = 0;
                 for (int v = 0; v < 8; v++) {
