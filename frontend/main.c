@@ -80,6 +80,25 @@
  *       HD-2D on unless --no-hd2d; on a Steam Deck with no saved look the
  *       "deck" preset is the default. Holding View+Menu (Back+Start) for
  *       2 s asks whether to quit (A quits, B goes back).
+ *   --coop | --no-coop
+ *       two players (docs/USER-GUIDE.md, co-op): a second controller plays
+ *       SNES pad 2, and the game module's co-op patches share the game
+ *       with it (sched_set_players). Default: on whenever two controllers
+ *       are connected; F4 turns it on or off; saved (settings.ini
+ *       coop=auto|on|off). Pad 1 is the keyboard plus the first
+ *       controller, pad 2 the second, pad 3 a third. settings.ini
+ *       coop_chars=2,3 lists the party slots player 2 has (default 2 and
+ *       3), coop_chars3= player 3's (none by default; a third player only
+ *       plays with one). A controller that goes hands its characters back
+ *       to player 1 at once. --record writes pads 2 and 3 as "p2"/"p3"
+ *       lines and --script plays them (with --coop, a script's pad 2 is a
+ *       second player without a controller).
+ *   --coop-split
+ *       experimental: when player 2's party member is about 3/4 of a
+ *       screen from the leader, the window shows a second view centred on
+ *       it (side by side on a wide window, else one above the other), and
+ *       one view again once they are close. Plain (not HD-2D) picture
+ *       only. The game module draws it (docs/USER-GUIDE.md, co-op).
  *   --pacing auto|timer|vsync [--log-pacing]
  *       how frames are paced: a sleep to each 60.0988 Hz frame time
  *       (timer; auto, the default, is the timer for now), or the
@@ -115,6 +134,7 @@
 #include "saves.h"    /* port: save RAM on disk */
 #include "sched.h"
 #include "touch.h"      /* port: on-screen touch controller */
+#include "hd2d/osd_font.h" /* port: the co-op turn tag */
 #include "touch_gl.h"
 
 #define RATE 48000
@@ -211,12 +231,26 @@ static int pad_axis(void *ctx, SDL_GameControllerAxis a)
     return SDL_GameControllerGetAxis(ctx, a);
 }
 
+static SDL_JoystickID pad_id(SDL_GameController *c)
+{
+    return c ? SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(c)) : -1;
+}
+
+/* The first game controller other than a and b (port: co-op's pads skip
+   the ones already open). */
+static SDL_GameController *open_controller_except2(SDL_GameController *a, SDL_GameController *b)
+{
+    for (int k = 0; k < SDL_NumJoysticks(); k++) {
+        SDL_JoystickID id = SDL_JoystickGetDeviceInstanceID(k);
+        if (SDL_IsGameController(k) && id != pad_id(a) && id != pad_id(b))
+            return SDL_GameControllerOpen(k);
+    }
+    return NULL;
+}
+
 static SDL_GameController *open_controller(void)
 {
-    for (int k = 0; k < SDL_NumJoysticks(); k++)
-        if (SDL_IsGameController(k))
-            return SDL_GameControllerOpen(k);
-    return NULL;
+    return open_controller_except2(NULL, NULL);
 }
 
 static replay script;
@@ -227,6 +261,7 @@ static SDL_Renderer *ren;
 static SDL_Texture *tex;
 static SDL_AudioDeviceID audio;
 static SDL_GameController *pad;
+static SDL_GameController *pad2, *pad3;   /* port: co-op, the second and third controllers */
 static resampler rs;
 static int playing;
 static double level_avg = AUDIO_TARGET;
@@ -242,6 +277,13 @@ static SDL_GLContext glctx;
 static int hd2d_mode, log_gpu;
 static int game_mode, preset_saved, preset_given;   /* port: device.h defaults */
 static quit_combo quitc;                            /* port: View+Menu quits */
+/* port: co-op (--coop): COOP_AUTO is on while two controllers are open. */
+enum { COOP_AUTO, COOP_ON, COOP_OFF };
+static int coop_pref = COOP_AUTO, coop_players = 1;
+static uint16_t live_buttons2, live_buttons3;       /* pads 2 and 3, this frame */
+/* port: which player (1-3) has party slot 1-3 (settings.ini coop_chars,
+   coop_chars3: the slots players 2 and 3 have). */
+static uint8_t slot_player[3] = {1, 2, 2};
 static long quit_asked = -1;                        /* frame the question went up */
 #define MAX_SHOTS 64
 static struct { long frame; const char *path; } shots[MAX_SHOTS];
@@ -263,15 +305,68 @@ static touch_rect picture_rect(int w, int h)
 
 /* port: the plain path: the frame integer-scaled and centered, the touch
    overlay over it. No logical size: SDL would clamp touches to it. */
+/* port: co-op: "P2" / "P3" over the picture while the game waits on that
+   player (sched_turn_player: the battle menu that player has is open),
+   by the command windows at the bottom left, in the 5x7 font at 2x. */
+static const uint8_t *turn_tag(const uint8_t *fb)
+{
+    static uint8_t out[SCHED_WIDTH * SCHED_HEIGHT * 4];
+    int p = coop_players > 1 ? sched_turn_player() : -1;
+    if (p < 1)
+        return fb;
+    memcpy(out, fb, sizeof out);
+    char text[3] = {'P', (char)('1' + p), 0};
+    static const uint8_t col[4][3] = {{0, 0, 0}, {80, 200, 255}, {255, 190, 60}, {120, 255, 120}};
+    int x0 = 6, y0 = 136;
+    for (int y = y0 - 3; y < y0 + 17; y++)   /* a dark box */
+        for (int x = x0 - 3; x < x0 + 26; x++) {
+            uint8_t *q = out + ((size_t)y * SCHED_WIDTH + x) * 4;
+            q[0] = q[0] / 4, q[1] = q[1] / 4, q[2] = q[2] / 4;
+        }
+    for (int k = 0; text[k]; k++) {
+        const uint8_t *rows = osd_glyph(text[k]);
+        for (int r = 0; r < 7; r++)
+            for (int b = 0; b < 5; b++)
+                if (rows[r] & (0x10 >> b))
+                    for (int d = 0; d < 4; d++) {
+                        int x = x0 + (k * 6 + b) * 2 + (d & 1), y = y0 + r * 2 + (d >> 1);
+                        uint8_t *q = out + ((size_t)y * SCHED_WIDTH + x) * 4;
+                        q[0] = col[p][2], q[1] = col[p][1], q[2] = col[p][0];
+                    }
+    }
+    return out;
+}
+
+/* port: split screen (--coop-split): this frame's second view, if any. */
+static int split_on;
+static uint8_t view2_px[SCHED_WIDTH * SCHED_HEIGHT * 4];
+static SDL_Texture *tex2;
+
 static void present_plain(const uint8_t *bgrx)
 {
     int w, h;
     SDL_GetRendererOutputSize(ren, &w, &h);
-    touch_rect p = touch_picture_plain(w, h);
-    SDL_Rect dst = {p.x, p.y, p.w, p.h};
     SDL_UpdateTexture(tex, NULL, bgrx, SCHED_WIDTH * 4);
     SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
     SDL_RenderClear(ren);
+    if (split_on && tex2) {
+        /* port: two views, side by side on a wide window (player 2's on
+           the side it is on), else one above the other */
+        int side = (long)w * SCHED_HEIGHT >= (long)h * SCHED_WIDTH;
+        int hw = side ? w / 2 : w, hh = side ? h : h / 2;
+        touch_rect p = touch_picture_aspect(hw, hh, (double)SCHED_WIDTH / SCHED_HEIGHT);
+        int second_first = side ? sched_view2()->dx < 0 : sched_view2()->dy < 0;
+        SDL_UpdateTexture(tex2, NULL, view2_px, SCHED_WIDTH * 4);
+        for (int k = 0; k < 2; k++) {
+            int slot = k ^ second_first;
+            SDL_Rect dst = {p.x + (side ? slot * hw : 0), p.y + (side ? 0 : slot * hh), p.w, p.h};
+            SDL_RenderCopy(ren, k ? tex2 : tex, NULL, &dst);
+        }
+        SDL_RenderPresent(ren);
+        return;
+    }
+    touch_rect p = touch_picture_plain(w, h);
+    SDL_Rect dst = {p.x, p.y, p.w, p.h};
     SDL_RenderCopy(ren, tex, NULL, &dst);
     touch_draw_sdl(ren);
     SDL_RenderPresent(ren);
@@ -327,6 +422,12 @@ static void take_shots(long f)
                             sched_behind_layers(), sched_ppu_state_get());
         fprintf(stderr, "ct_sdl: frame %ld: %s %s\n", f, ok ? "wrote" : "cannot write",
                 shots[k].path);
+        if (split_on) {   /* port: the second view beside it */
+            char p2[512];
+            snprintf(p2, sizeof p2, "%s.view2.png", shots[k].path);
+            ok = !png_write_bgrx(p2, view2_px, SCHED_WIDTH, SCHED_HEIGHT);
+            fprintf(stderr, "ct_sdl: frame %ld: %s %s\n", f, ok ? "wrote" : "cannot write", p2);
+        }
     }
 }
 
@@ -398,9 +499,98 @@ static int wst_on_screen(int x, int y, int w)
     return 0;
 }
 
+/* port: a message on screen when there is one (HD-2D), always on stderr. */
+static void osd(const char *msg)
+{
+    fprintf(stderr, "ct_sdl: %s\n", msg);
+    if (hd2d_mode)
+        hd2d_osd(msg);
+}
+
+/* port: co-op is on: never when turned off; otherwise while a second
+   controller is open, or a --script plays pad 2 with co-op turned on.
+   When the second controller goes, its characters go back to player 1
+   at once (one player: the game's co-op patches stand aside). */
+static int coop_on(void)
+{
+    if (coop_pref == COOP_OFF)
+        return 0;
+    return pad2 || (coop_pref == COOP_ON && replay_multi(&script));
+}
+
+/* port: players on: 1, 2, or 3 with a third controller and a party slot
+   given to player 3. */
+static int coop_count(void)
+{
+    if (!coop_on())
+        return 1;
+    int p3 = 0;
+    for (int k = 0; k < 3; k++)
+        p3 |= slot_player[k] == 3;
+    return pad3 && p3 ? 3 : 2;
+}
+
+/* port: tell the game how many players there are, and who has which
+   party slot; say so when it changes. */
+static void coop_update(void)
+{
+    static int said;
+    int n = coop_count();
+    for (int k = 0; k < 3; k++)
+        sched_set_slot_player(k, slot_player[k] - 1);
+    if (said && n == coop_players)
+        return;
+    if (said || n > 1) {
+        char msg[200];
+        const char *name = pad2 ? SDL_GameControllerName(pad2) : "the script";
+        if (n > 1)
+            snprintf(msg, sizeof msg, "Co-op: on, player 2 is %s%s%s", name ? name : "?",
+                     n > 2 ? ", player 3 is " : "",
+                     n > 2 && SDL_GameControllerName(pad3) ? SDL_GameControllerName(pad3) : "");
+        else
+            snprintf(msg, sizeof msg, "Co-op: off");
+        osd(msg);
+    }
+    said = 1;
+    coop_players = n;
+    sched_set_players(n);
+}
+
+/* port: settings.ini coop_chars / coop_chars3: party slots, "2,3". */
+static void parse_chars(const char *v, int player)
+{
+    if (player == 2)
+        for (int k = 0; k < 3; k++)
+            if (slot_player[k] == 2)
+                slot_player[k] = 1;
+    for (; *v; v++)
+        if (*v >= '1' && *v <= '3')
+            slot_player[*v - '1'] = (uint8_t)player;
+}
+
+static void print_chars(FILE *f, const char *key, int player)
+{
+    fprintf(f, "%s=", key);
+    const char *sep = "";
+    for (int k = 0; k < 3; k++)
+        if (slot_player[k] == player) {
+            fprintf(f, "%s%d", sep, k + 1);
+            sep = ",";
+        }
+    fputc('\n', f);
+}
+
 /* F1-F3, F11: the HD-2D controls. Returns 1 if the key was one of them. */
 static int hd2d_key(SDL_Scancode sc)
 {
+    if (sc == SDL_SCANCODE_F4) {   /* port: co-op on / off */
+        coop_pref = coop_on() ? COOP_OFF : COOP_ON;
+        coop_update();
+        if (coop_pref == COOP_ON && coop_players < 2)
+            osd("Co-op: on once a second controller is connected");
+        settings_save();
+        return 1;
+    }
     if (sc == SDL_SCANCODE_F11) {
         int fs = SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP;
         SDL_SetWindowFullscreen(win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
@@ -473,6 +663,12 @@ static void settings_load(void)
             wst.have_pos = 1;
         else if (sscanf(line, "fullscreen=%d", &n) == 1)
             wst.fs = n != 0;
+        else if (sscanf(line, "coop_chars=%63s", val) == 1)   /* port: co-op */
+            parse_chars(val, 2);
+        else if (sscanf(line, "coop_chars3=%63s", val) == 1)
+            parse_chars(val, 3);
+        else if (sscanf(line, "coop=%63s", val) == 1)
+            coop_pref = !strcmp(val, "on") ? COOP_ON : !strcmp(val, "off") ? COOP_OFF : COOP_AUTO;
     }
     if (f)
         fclose(f);
@@ -490,6 +686,10 @@ static void settings_save(void)
         if (wst.have_pos)
             fprintf(f, "position=%d,%d\n", wst.x, wst.y);
         fprintf(f, "fullscreen=%d\n", wst.fs);
+        static const char *const coop_name[] = {"auto", "on", "off"};
+        fprintf(f, "coop=%s\n", coop_name[coop_pref]);
+        print_chars(f, "coop_chars", 2);
+        print_chars(f, "coop_chars3", 3);
         fclose(f);
     }
     free(path);
@@ -553,17 +753,37 @@ static void poll_input(long f)
                                                                             : SDL_SCANCODE_F3);
         } else if (ev.type == SDL_CONTROLLERBUTTONDOWN) {
             key_filter_button(&keys, f);
-        } else if (ev.type == SDL_CONTROLLERDEVICEADDED && !pad)
+        } else if (ev.type == SDL_CONTROLLERDEVICEADDED && !pad) {
             pad = open_controller();
-        else if (ev.type == SDL_CONTROLLERDEVICEREMOVED && pad &&
-                 !SDL_GameControllerGetAttached(pad)) {
-            SDL_GameControllerClose(pad);
-            pad = open_controller();
+        } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {   /* port: pads 2 and 3 */
+            if (!pad2)
+                pad2 = open_controller_except2(pad, pad3);
+            else if (!pad3)
+                pad3 = open_controller_except2(pad, pad2);
+        } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
+            SDL_GameController **all[3] = {&pad, &pad2, &pad3};
+            for (int k = 0; k < 3; k++)
+                if (*all[k] && !SDL_GameControllerGetAttached(*all[k])) {
+                    SDL_GameControllerClose(*all[k]);
+                    *all[k] = NULL;
+                }
+            if (!pad) {   /* port: the next one takes over pad 1 */
+                pad = pad2;
+                pad2 = pad3;
+                pad3 = NULL;
+            }
+            if (!pad)
+                pad = open_controller();
         }
     }
+    coop_update();   /* port */
+    SDL_GameController *p1 = pad, *p2 = coop_players > 1 ? pad2 : NULL;
+    SDL_GameController *p3 = coop_players > 2 ? pad3 : NULL;
     uint16_t buttons = input_keyboard(keys.held);
-    if (pad) {   /* port: the quit combo first: it can keep the pad from the game */
-        int q = quit_combo_update(&quitc, f, pad_button, pad);
+    live_buttons2 = p2 ? input_controller(pad_button, pad_axis, p2) : 0;   /* port: co-op */
+    live_buttons3 = p3 ? input_controller(pad_button, pad_axis, p3) : 0;
+    if (p1) {   /* port: the quit combo first: it can keep the pad from the game */
+        int q = quit_combo_update(&quitc, f, pad_button, p1);
         if (q == QUIT_ASK && !hd2d_mode) {   /* no on-screen messages: the hold quits */
             fprintf(stderr, "ct_sdl: View+Menu held 2 s: quitting\n");
             set_exit_reason("View+Menu held 2 s");
@@ -584,18 +804,26 @@ static void poll_input(long f)
         if (quit_asked >= 0 && running && (f - quit_asked) % 90 == 0)
             hd2d_osd("Quit? A: quit   B: back to the game");
         if (!quit_combo_masks(&quitc))
-            buttons |= input_controller(pad_button, pad_axis, pad);
+            buttons |= input_controller(pad_button, pad_axis, p1);
     }
     buttons |= touch_buttons(f);   /* port */
     live_buttons = buttons;
 }
 
-/* Pad 1 for frame f: live input plus the --script, recorded. */
+/* Pad 1 for frame f: live input plus the --script, recorded. port: pad 2
+   (co-op) and the script's "pN" pads likewise. */
 static void set_input(long f)
 {
     uint16_t b = live_buttons | replay_buttons(&script, f);
     sched_set_joypad(0, b);
     replay_rec_frame(&rec, f, b);
+    for (int p = 1; p < REPLAY_PORTS; p++) {
+        uint16_t bp = (uint16_t)(replay_port_buttons(&script, p, f) |
+                                 (p == 1 ? live_buttons2 : p == 2 ? live_buttons3 : 0));
+        sched_set_joypad(p, bp);
+        if (bp || p == 1)
+            replay_rec_port(&rec, p, f, bp);
+    }
 }
 
 /* This frame's DSP output through the resampler into the SDL queue, with
@@ -739,12 +967,28 @@ static void on_frame(long f)
         }
     }
     const uint8_t *fb = sched_frame();   /* B G R x = ARGB8888 little-endian */
+    {   /* port: split screen, the plain path only */
+        int was = split_on;
+        split_on = !hd2d_mode && sched_views() > 1 && sched_render_view2(view2_px);
+        if (split_on != was)
+            fprintf(stderr, "ct_sdl: frame %ld: split screen %s\n", f, split_on ? "on" : "off");
+    }
+    {   /* port: co-op: whose turn, on screen in HD-2D (the plain picture has the tag) */
+        static int last_turn = -1;
+        int t = coop_players > 1 ? sched_turn_player() : -1;
+        if (t != last_turn && t > 0 && hd2d_mode) {
+            char msg[32];
+            snprintf(msg, sizeof msg, "P%d's turn", t + 1);
+            hd2d_osd(msg);
+        }
+        last_turn = t;
+    }
     if (hd2d_mode) {
         present_hd2d();
         /* The PPU's behind G-buffer only while the look uses it. */
         sched_set_behind(hd2d_wants_behind());
     } else {
-        present_plain(fb);   /* port: with the touch overlay */
+        present_plain(turn_tag(fb));   /* port: with the touch overlay, the co-op tag */
     }
     if (n_shots)
         take_shots(f);
@@ -859,6 +1103,9 @@ static int open_window(const char *title, int scale, int fullscreen)
         tex = ren ? SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888,
                                                    SDL_TEXTUREACCESS_STREAMING, SCHED_WIDTH,
                                                    SCHED_HEIGHT) : NULL;
+        tex2 = ren ? SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888,   /* port: split */
+                                       SDL_TEXTUREACCESS_STREAMING, SCHED_WIDTH, SCHED_HEIGHT)
+                   : NULL;
         if (!tex) {
             fprintf(stderr, "ct_sdl: window: %s\n", SDL_GetError());
             set_exit_reason("window or renderer creation failed");
@@ -930,7 +1177,8 @@ static void usage(FILE *out)
             "[--log-gpu] [--shot F:PATH]... [--shot-size WxH] [--module FILE]\n         "
             "[--rom FILE] [--touch] [--touch-hide SECS] [--touch-test FILE]\n         "
             "[--save FILE] [--no-save] [--dump-sram FILE]\n         "
-            "[--poke-sram F:ADDR=VAL]... [--pacing auto|timer|vsync] [--log-pacing]"
+            "[--poke-sram F:ADDR=VAL]... [--pacing auto|timer|vsync] [--log-pacing]\n         "
+            "[--coop] [--no-coop] [--coop-split]"
 #ifdef CT_FIRSTRUN
             " [--data-dir DIR] [--game ID] [--shot status:PATH] [--build-only]"
 #endif
@@ -944,10 +1192,15 @@ static void usage(FILE *out)
           "  F11               fullscreen on / off\n"
           "  F1                HD-2D look: original, subtle, HD-2D, Steam Deck, 3D\n"
           "  F2                HD-2D debug view      F3  aspect: 4:3, pixel 8:7, stretch\n"
+          "  F4                co-op on / off (two players: a second controller is pad 2)\n"
           "  Ctrl+Q            quit\n"
           "Controllers: south = B, east = A, west = Y, north = X, shoulders = L / R,\n"
           "  Start, Back = Select, d-pad or left stick. The window's size, place and\n"
-          "  fullscreen state, the look and the aspect are remembered between runs.\n",
+          "  fullscreen state, the look and the aspect are remembered between runs.\n"
+          "Co-op: on by itself when two controllers are connected (pad 1: keyboard and\n"
+          "  the first; pad 2: the second, for party members 2 and 3); F4, --coop or\n"
+          "  --no-coop change it. --coop-split (experimental): a second view when\n"
+          "  player 2 walks away.\n",
           out);
 }
 
@@ -1028,6 +1281,13 @@ int main(int argc, char **argv)
                 fprintf(stderr, "ct_sdl: --poke-sram FRAME:ADDR=VAL (ADDR, VAL hex)\n");
                 return 2;
             }
+        } else if (!strcmp(argv[k], "--coop")) {   /* port: co-op */
+            coop_pref = COOP_ON;
+        } else if (!strcmp(argv[k], "--no-coop")) {
+            coop_pref = COOP_OFF;
+        } else if (!strcmp(argv[k], "--coop-split")) {   /* port: experimental */
+            coop_pref = COOP_ON;
+            sched_set_views(2);
         } else if (!strcmp(argv[k], "--hd2d")) {
             hd2d_mode = 1;
         } else if (!strcmp(argv[k], "--no-hd2d")) {   /* port: beats the Game Mode default */
@@ -1212,6 +1472,16 @@ int main(int argc, char **argv)
     pad = open_controller();
     if (pad)
         fprintf(stderr, "ct_sdl: using \"%s\" on pad 1\n", SDL_GameControllerName(pad));
+    if (sched_views() > 1 && hd2d_mode)
+        fprintf(stderr, "ct_sdl: --coop-split: the split screen is drawn by the plain "
+                        "picture only (--no-hd2d); HD-2D keeps one view\n");
+    pad2 = open_controller_except2(pad, NULL);   /* port: co-op */
+    pad3 = open_controller_except2(pad, pad2);
+    if (pad2)
+        fprintf(stderr, "ct_sdl: second controller \"%s\"\n", SDL_GameControllerName(pad2));
+    if (pad3)
+        fprintf(stderr, "ct_sdl: third controller \"%s\"\n", SDL_GameControllerName(pad3));
+    coop_update();
 
     interp_reset(&cpu);
     sched_init(&cpu);
@@ -1262,6 +1532,12 @@ int main(int argc, char **argv)
     }
     if (pad)
         SDL_GameControllerClose(pad);
+    if (pad2)
+        SDL_GameControllerClose(pad2);
+    if (pad3)
+        SDL_GameControllerClose(pad3);
+    if (tex2)
+        SDL_DestroyTexture(tex2);
     if (audio)
         SDL_CloseAudioDevice(audio);
     if (glctx) {

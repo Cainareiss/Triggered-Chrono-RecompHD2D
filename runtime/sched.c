@@ -324,6 +324,70 @@ void sched_set_joypad(int port, uint16_t buttons)
         pad[port] = buttons;
 }
 
+static int players = 1;   /* port: sched_set_players */
+
+void sched_set_players(int n) { players = n < 1 ? 1 : n > 4 ? 4 : n; }
+int sched_players(void) { return players; }
+
+static uint8_t slot_player[8] = {0, 1, 1, 1, 1, 1, 1, 1};
+static int turn_player = -1;
+
+void sched_set_turn_player(int player) { turn_player = player; }
+int sched_turn_player(void) { return turn_player; }
+
+void sched_set_slot_player(int slot, int player)
+{
+    if (slot >= 0 && slot < 8 && player >= 0 && player < 4)
+        slot_player[slot] = (uint8_t)player;
+}
+
+int sched_slot_player(int slot)
+{
+    if (slot < 0 || slot >= 8 || slot_player[slot] >= players)
+        return 0;
+    return slot_player[slot];
+}
+
+uint16_t sched_joypad_read(int port)
+{
+    return port >= 0 && port < 4 ? joy[port] : 0;
+}
+
+static int views = 1;          /* port: split screen (sched_set_views) */
+static sched_view view2;
+
+void sched_set_views(int n) { views = n < 2 ? 1 : 2; }
+int sched_views(void) { return views; }
+sched_view *sched_view2(void) { return &view2; }
+
+int sched_render_view2(uint8_t *bgrx)
+{
+    if (views < 2 || !view2.on || view2.frame < frames - 2)
+        return 0;
+    static Ppu *v;   /* a copy: the real PPU is untouched */
+    if (!v && !(v = malloc(sizeof *v)))
+        return 0;
+    *v = *snes_hw_ppu();
+    for (int k = 0; k < 4; k++) {
+        v->bgLayer[k].hScroll = view2.hofs[k];
+        v->bgLayer[k].vScroll = view2.vofs[k];
+        if (view2.map_on[k]) {
+            unsigned a = v->bgLayer[k].tilemapAdr & 0x7FFF;
+            for (unsigned n = 0; n < 2048; n++)
+                v->vram[(a + n) & 0x7FFF] = view2.map[k][n];
+        }
+    }
+    for (int k = 0; k < 0x110; k++)
+        v->oam[k] = (uint16_t)(view2.oam[2 * k] | view2.oam[2 * k + 1] << 8);
+    PpuBeginDrawing(v, bgrx, SCHED_WIDTH * 4, 0);
+    PpuSetLayerBuffer(v, NULL, 0);
+    PpuSetBehindBuffer(v, NULL, 0, NULL, 0);
+    for (int line = 0; line <= SCHED_HEIGHT; line++)
+        ppu_runLine(v, line);
+    ppu_drawTo(v, 256);
+    return 1;
+}
+
 /* RDNMI: the VBlank NMI flag is set at clock 2 of line 225 and cleared at
    clock 2 of line 0 (Mesen 2), at the read's own clock, which can be past
    the line its instruction started in. Reading clears it, except in the

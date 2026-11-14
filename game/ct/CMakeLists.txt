@@ -52,8 +52,10 @@ add_custom_command(
     COMMENT "emit ${CT_MODULES}"
     VERBATIM)
 
-# Recompiled functions plus this game's extern hooks.
-add_library(ct_gen STATIC ${CT_GEN_SOURCES} hooks.c)
+# Recompiled functions plus this game's own C: extern hooks, and the patches
+# funcs.toml names (port: co-op). build_module.py compiles the same *.c.
+file(GLOB CT_GAME_C ${GAME_DIR}/*.c)
+add_library(ct_gen STATIC ${CT_GEN_SOURCES} ${CT_GAME_C})
 target_include_directories(ct_gen PUBLIC ${CT_OUT})
 target_link_libraries(ct_gen PUBLIC ct_runtime ct_sched)
 target_compile_options(ct_gen PRIVATE ${CT_WARN} -Wno-unused-label)
@@ -98,7 +100,7 @@ endif()
 # port: the same game code as a loadable module (runtime/module.h), and
 # engine-only programs that load it with --module. The engine programs
 # contain no game code: built from the runtime and the empty tables only.
-add_library(ct_game_module MODULE ${CT_GEN_SOURCES} hooks.c scene.c ${CT_OUT}/ct_funcs.c
+add_library(ct_game_module MODULE ${CT_GEN_SOURCES} ${CT_GAME_C} ${CT_OUT}/ct_funcs.c
     ${CMAKE_SOURCE_DIR}/runtime/module_entry.c)
 target_include_directories(ct_game_module PRIVATE ${CT_OUT} ${CMAKE_SOURCE_DIR}/runtime)
 target_compile_definitions(ct_game_module PRIVATE CT_TEST_BUILD CT_TABLES_DEFINE)
@@ -268,6 +270,57 @@ list(APPEND ct_game_tests battle_no_flicker)
 add_test(NAME native_coverage COMMAND ct_boot --frames 11000 --min-native 49
     --script ${GAME_DIR}/test/replay/gato_battle.txt)
 list(APPEND ct_game_tests native_coverage)
+
+# port: co-op (game/ct/coop.c, replay/coop_battle.txt): Gato's fight with
+# the girl in the party. With --coop her command menu ($7E95D5 = 1) takes
+# pad 2 only: pad 1's A presses and a pad 2 A held across the hand-off pick
+# nothing (still open at 14720), pad 2's presses close it (14741). Without
+# --coop the same script is a one-player run: pad 1 closes it by 14563. The
+# module build takes the same patches.
+set(ct_coop_battle --frames 14750 --script ${GAME_DIR}/test/replay/coop_battle.txt)
+add_test(NAME coop_battle COMMAND ct_boot ${ct_coop_battle} --coop --expect-wram 14462:95D5=1
+    --expect-wram 14720:95D5=1 --expect-wram 14745:95D5=FF)
+add_test(NAME coop_battle_off COMMAND ct_boot ${ct_coop_battle} --expect-wram 14462:95D5=1
+    --expect-wram 14600:95D5=FF)
+add_test(NAME coop_battle_module COMMAND $<TARGET_FILE:ct_boot_engine>
+    --module $<TARGET_FILE:ct_game_module> ${ct_coop_battle} --coop
+    --expect-wram 14720:95D5=1 --expect-wram 14745:95D5=FF)
+list(APPEND ct_game_tests coop_battle coop_battle_off coop_battle_module)
+# port: co-op in the field (replay/coop_field.txt): pad 2 walks follower 1
+# away (her X high byte $1807 is $1D at frame 12540, $19 without --coop),
+# then she rejoins: at 12820 she is where the one-player run has her
+# (345.5, 211.94 px).
+set(ct_coop_field --frames 12820 --script ${GAME_DIR}/test/replay/coop_field.txt
+    --expect-wram 12820:1806=98 --expect-wram 12820:1807=15 --expect-wram 12820:1886=3F
+    --expect-wram 12820:1887=0D)
+add_test(NAME coop_field COMMAND ct_boot ${ct_coop_field} --coop --expect-wram 12540:1807=1D)
+add_test(NAME coop_field_off COMMAND ct_boot ${ct_coop_field} --expect-wram 12540:1807=19)
+list(APPEND ct_game_tests coop_field coop_field_off)
+# port: the party slots a player has (--coop-chars, settings.ini
+# coop_chars): with player 2 given only slot 3, the girl (slot 2) stays
+# player 1's, who closes her menu as in a one-player run.
+add_test(NAME coop_battle_chars COMMAND ct_boot ${ct_coop_battle} --coop --coop-chars 3
+    --expect-wram 14600:95D5=FF)
+# port: the experimental split screen (replay/coop_split.txt): a second
+# view while she is far from the leader, one view once she is back, none
+# without --coop-split.
+add_test(NAME coop_split COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_coop_split.py
+    $<TARGET_FILE:ct_boot_engine> ${GAME_DIR}/test/replay/coop_split.txt
+    --module $<TARGET_FILE:ct_game_module>)
+list(APPEND ct_game_tests coop_battle_chars coop_split)
+# port: the hand-off guard with pad 2 mashing A across it
+# (replay/coop_mash.txt): the press held through the hand-off is not one,
+# so her menu closes on the two after it (14479), not at 14470.
+add_test(NAME coop_mash COMMAND ct_boot --frames 14500 --coop
+    --script ${GAME_DIR}/test/replay/coop_mash.txt --expect-wram 14474:95D5=1
+    --expect-wram 14500:95D5=FF)
+# port: right in Crono's menu with the girl ready: one player moves to her
+# menu ($95D5 = 1 by 14406); with co-op she is player 2's, so it stays.
+add_test(NAME coop_cycle COMMAND ct_boot --frames 14420 --coop --script
+    ${GAME_DIR}/test/replay/coop_battle.txt --input 14400-14403:right --expect-wram 14420:95D5=0)
+add_test(NAME coop_cycle_off COMMAND ct_boot --frames 14420 --script
+    ${GAME_DIR}/test/replay/coop_battle.txt --input 14400-14403:right --expect-wram 14420:95D5=1)
+list(APPEND ct_game_tests coop_mash coop_cycle coop_cycle_off)
 
 if(SDL2_FOUND)
     # The frontend itself, headless (SDL dummy drivers), unpaced. port: every

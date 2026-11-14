@@ -727,6 +727,7 @@ addr = 0xC111E1
 states = ["m1x0"]
 e = 0
 module = "bankc1"
+patch = "coop_cycle_prev"   # port: co-op (game/ct/coop.c)
 
 [[func]]
 name = "BattleMenu_CycleActivePcNext"
@@ -734,6 +735,7 @@ addr = 0xC11218
 states = ["m1x0"]
 e = 0
 module = "bankc1"
+patch = "coop_cycle_next"   # port: co-op (game/ct/coop.c)
 
 [[func]]
 name = "BattleMenu_ConfirmCommand"
@@ -3532,6 +3534,7 @@ addr = 0xC03002
 states = ["m1x0"]
 e = 0
 module = "bankc0"
+patch = "coop_party_member"   # port: co-op (game/ct/coop.c)
 
 [[func]]
 name = "Obj_StepAlignToTileCenter"
@@ -5541,6 +5544,7 @@ addr = 0xC0A26B
 states = ["m1x1"]
 e = 0
 module = "bankc0"
+patch = "coop_follower"   # port: co-op (game/ct/coop.c)
 
 [[func]]
 name = "Field_MoveFollower2"
@@ -6736,6 +6740,7 @@ states = ["m1x0"]
 e = 0
 module = "bankc0"
 source = "profile"
+patch = "coop_oam"   # port: co-op split screen (game/ct/coop.c)
 
 [[func]]
 name = "Vblank_UpdateAnimTileWords"
@@ -7355,6 +7360,7 @@ states = ["m1x1"]
 e = 0
 module = "bankc0"
 source = "profile"
+patch = "coop_visibility"   # port: co-op split screen (game/ct/coop.c)
 
 [[func]]
 name = "Obj_ActivateIfOnScreen"
@@ -9710,6 +9716,7 @@ states = ["m1x0"]
 e = 0
 module = "bankcd"
 source = "profile"
+patch = "coop_battle_pad"   # port: co-op (game/ct/coop.c)
 
 [[func]]
 name = "BattleSys_HdmaSplitStepClose"

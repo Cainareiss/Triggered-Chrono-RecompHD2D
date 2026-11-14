@@ -17,6 +17,14 @@ int replay_add(replay *r, const char *spec)
 {
     long from, to;
     char buttons[128];
+    int port = 0;
+    while (*spec == ' ' || *spec == '\t')
+        spec++;
+    if (spec[0] == 'p' && spec[1] >= '1' && spec[1] <= '0' + REPLAY_PORTS &&
+        (spec[2] == ' ' || spec[2] == '\t')) {   /* port: "pN " prefix */
+        port = spec[1] - '1';
+        spec += 3;
+    }
     if (sscanf(spec, "%ld-%ld:%127s", &from, &to, buttons) != 3 || from < 1 || to < from)
         return -1;
     uint16_t b = 0;
@@ -44,7 +52,7 @@ int replay_add(replay *r, const char *spec)
         r->spans = s;
         r->cap = cap;
     }
-    r->spans[r->n++] = (replay_span){from, to, b};
+    r->spans[r->n++] = (replay_span){from, to, b, (uint8_t)port};
     return 0;
 }
 
@@ -74,7 +82,7 @@ int replay_load(replay *r, const char *path)
         char *h = strchr(line, '#');
         if (h)
             *h = 0;
-        char tok[160];
+        char tok[160], arg[160];
         long rf;
         char extra;
         if (sscanf(line, " reset %ld %c", &rf, &extra) == 1 && rf >= 1) {
@@ -84,8 +92,14 @@ int replay_load(replay *r, const char *path)
             }
             continue;
         }
-        if (sscanf(line, "%159s", tok) == 1 && replay_add(r, tok)) {
-            fprintf(stderr, "replay: %s:%d: bad span \"%s\"\n", path, n, tok);
+        char spec[sizeof tok + sizeof arg + 1];
+        int got = sscanf(line, "%159s %159s", tok, arg);
+        if (got == 2 && tok[0] == 'p' && tok[1] && !tok[2])   /* port: "pN F1-F2:B" */
+            snprintf(spec, sizeof spec, "%s %s", tok, arg);
+        else if (got >= 1)
+            snprintf(spec, sizeof spec, "%s", tok);
+        if (got >= 1 && replay_add(r, spec)) {
+            fprintf(stderr, "replay: %s:%d: bad span \"%s\"\n", path, n, spec);
             bad = 1;
         }
     }
@@ -93,13 +107,26 @@ int replay_load(replay *r, const char *path)
     return bad ? -1 : 0;
 }
 
-uint16_t replay_buttons(const replay *r, long frame)
+uint16_t replay_port_buttons(const replay *r, int port, long frame)
 {
     uint16_t b = 0;
     for (int k = 0; k < r->n; k++)
-        if (frame >= r->spans[k].from && frame <= r->spans[k].to)
+        if (r->spans[k].port == port && frame >= r->spans[k].from && frame <= r->spans[k].to)
             b |= r->spans[k].buttons;
     return b;
+}
+
+uint16_t replay_buttons(const replay *r, long frame)
+{
+    return replay_port_buttons(r, 0, frame);
+}
+
+int replay_multi(const replay *r)
+{
+    for (int k = 0; k < r->n; k++)
+        if (r->spans[k].port)
+            return 1;
+    return 0;
 }
 
 int replay_reset(const replay *r, long frame)
@@ -128,39 +155,51 @@ int replay_rec_open(replay_rec *w, const char *path, const char *source)
     return 0;
 }
 
-static void flush_span(replay_rec *w)
+static void flush_span(replay_rec *w, int port)
 {
-    if (!w->buttons)
+    if (!w->buttons[port])
         return;
-    fprintf(w->f, "%ld-%ld:", w->from, w->last);
+    if (port)
+        fprintf(w->f, "p%d ", port + 1);
+    fprintf(w->f, "%ld-%ld:", w->from[port], w->last[port]);
     const char *sep = "";
     for (unsigned k = 0; k < N_NAMES; k++)
-        if (w->buttons & names[k].bit) {
+        if (w->buttons[port] & names[k].bit) {
             fprintf(w->f, "%s%s", sep, names[k].name);
             sep = "+";
         }
     fputc('\n', w->f);
 }
 
-void replay_rec_frame(replay_rec *w, long frame, uint16_t buttons)
+void replay_rec_port(replay_rec *w, int port, long frame, uint16_t buttons)
 {
-    if (!w->f)
+    if (!w->f || port < 0 || port >= REPLAY_PORTS)
         return;
     buttons &= 0xFFF0;   /* the 12 buttons; the low bits are the pad ID */
-    if (buttons != w->buttons || frame != w->last + 1) {
-        flush_span(w);
-        w->buttons = buttons;
-        w->from = frame;
+    if (buttons != w->buttons[port] || frame != w->last[port] + 1) {
+        flush_span(w, port);
+        w->buttons[port] = buttons;
+        w->from[port] = frame;
     }
-    w->last = frame;
+    w->last[port] = frame;
+}
+
+void replay_rec_frame(replay_rec *w, long frame, uint16_t buttons)
+{
+    replay_rec_port(w, 0, frame, buttons);
 }
 
 void replay_rec_close(replay_rec *w)
 {
     if (!w->f)
         return;
-    flush_span(w);
-    fprintf(w->f, "# frames %ld\n", w->last);
+    long last = 0;
+    for (int p = 0; p < REPLAY_PORTS; p++) {
+        flush_span(w, p);
+        if (w->last[p] > last)
+            last = w->last[p];
+    }
+    fprintf(w->f, "# frames %ld\n", last);
     fclose(w->f);
     w->f = NULL;
 }

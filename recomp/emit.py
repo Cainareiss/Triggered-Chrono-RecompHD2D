@@ -324,6 +324,8 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
         '{',
         f'    cpu_enter(cpu, 0x{fm.addr:06X}, {int(st.m)}, {int(st.x)});',
     ]
+    if fm.patch:   # port: funcs.toml patch (FuncMeta.patch)
+        lines.append(f'    if (ct_patch_{fm.patch}(cpu)) return;')
     # s0: every function can hand its rest to the executor (a callee that
     # came back elsewhere: ops.h cpu_return_ok)
     lines.append('    const uint16_t s0 = cpu->S;   /* the return address sits above */')
@@ -630,6 +632,9 @@ def emit_prototypes(reg: funcs.Registry, metas: list[funcs.FuncMeta]) -> tuple[s
     c += ['};', f'const unsigned ct_func_count = {n};', '']
     jt = sorted(reg.jumptables.items())
     ex = sorted(reg.externs.values(), key=lambda e: e.addr)
+    for p in sorted({fm.patch for fm in metas if fm.patch}):
+        h.insert(h.index('#include "func_table.h"') + 2,
+                 f'int ct_patch_{p}(CPU *cpu);  /* port: funcs.toml patch */')
     for e in ex:
         h.insert(h.index('#include "func_table.h"') + 2,
                  f'void ct_hook_{e.hook}(CPU *cpu);  /* extern {e.name} ${e.addr:06X} ({e.kind}) */')
