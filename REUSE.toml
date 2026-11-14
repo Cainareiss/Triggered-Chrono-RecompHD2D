@@ -133,3 +133,13 @@ path = "third_party/imgui/fonts/Roboto-Medium.ttf"
 precedence = "override"
 SPDX-FileCopyrightText = "2011 Google Inc. (Roboto, Christian Robertson)"
 SPDX-License-Identifier = "Apache-2.0"
+
+# The Deck-format hidraw reader: its report parsing is ported from SDL's
+# Steam Deck driver (SDL_hidapi_steamdeck.c, 2023 Max Maisel) and
+# steam/controller_structs.h (2020 Valve Corporation), zlib license, notice
+# kept in the file (THIRD_PARTY.md). The file's own header says the same.
+[[annotations]]
+path = "frontend/hid_deck.c"
+precedence = "closest"
+SPDX-FileCopyrightText = ["2026 jerbanpls", "2023 Max Maisel", "2020 Valve Corporation"]
+SPDX-License-Identifier = "GPL-3.0-or-later AND Zlib"

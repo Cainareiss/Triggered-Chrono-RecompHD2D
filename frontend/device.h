@@ -27,6 +27,10 @@ const char *device_product(void);   /* the product name read, or "" */
    context; 0 without one. renderer (may be NULL) gets the string. */
 int device_gl_is_deck(const char **renderer);
 
+/* The one-time message for a handheld (Deck, Ally) that started with no
+   controller at all, or NULL (a PC, or a controller is there). */
+const char *device_no_pad_hint(int kind, int controllers);
+
 /* Pure versions of the two checks, for tests. */
 int device_product_kind(const char *product);
 int device_renderer_is_deck(const char *renderer);

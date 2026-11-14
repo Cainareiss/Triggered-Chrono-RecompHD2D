@@ -25,6 +25,7 @@
 #include "bus.h"
 #include "device.h"
 #include "hd2d/osd_font.h"
+#include "hid_deck.h"   /* port: InputPlumber's Deck pad */
 #include "module.h"
 #include "sched.h"
 #include "sha1.h"
@@ -178,6 +179,7 @@ static const char *quit_hint(void)
 static void pump(events *e)
 {
     SDL_Event ev;
+    hid_deck_update();   /* port: InputPlumber's Deck pad (hid_deck.h) */
     while (SDL_PollEvent(&ev)) {
         if (ev.type == SDL_QUIT) {
             e->quit = 1;

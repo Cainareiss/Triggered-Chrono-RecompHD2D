@@ -33,7 +33,8 @@
  *
  * Every exit prints its reason ("ct_sdl: exit: ..."); startup prints each
  * joystick and the button mapping. --log-input prints every key and
- * controller button event.
+ * controller button event (port: and, with frontend/hid_deck.c reading
+ * InputPlumber's Deck pad, each of its button changes, "hid_deck: ...").
  *
  * port additions (GPL-3.0-or-later):
  *   --hd2d [--preset off|subtle|hd2d|deck|hd2d3d] [--aspect 4:3|pixel|stretch]
@@ -155,6 +156,7 @@
 #include "bus.h"
 #include "device.h"   /* port: Steam Game Mode, Steam Deck */
 #include "glyphs.h"   /* port: button glyphs in messages */
+#include "hid_deck.h" /* port: Deck-format hidraw pads SDL misses (InputPlumber) */
 #include "osd_text.h"
 #include "module.h"   /* port: --module */
 #ifdef CT_FIRSTRUN
@@ -425,6 +427,7 @@ static void pack_dump_report(void)
     packs_dump_close();
 }
 static const char *dump;
+static int no_pad_hint;   /* port: scripted / dumping runs: no "No controller" message */
 
 /* port: HD-2D presentation and screenshots. */
 static SDL_Window *win;
@@ -1121,6 +1124,10 @@ static void set_key(void *u, int v)
 static const char *key_namer(int sc) { return SDL_GetScancodeName((SDL_Scancode)sc); }
 static int get_hidapi(void *u) { (void)u; return steam_hidapi; }
 static void set_hidapi(void *u, int v) { (void)u; steam_hidapi = v; }
+static const char *const hid_deck_labels[] = {"Auto", "On", "Off"};
+static const char *const hid_deck_values[] = {"auto", "on", "off"};
+static int get_hid_deck(void *u) { (void)u; return hid_deck_mode(); }
+static void set_hid_deck(void *u, int v) { (void)u; hid_deck_set_mode(v); }
 static const char *menu_combo_text(void *u, char *buf, size_t n)
 {
     (void)u;
@@ -1470,6 +1477,12 @@ static void register_settings(void)
         .type = SETTING_BOOL, .get = get_hidapi, .set = set_hidapi, .flags = SETTING_RESTART,
         .help = "SDL's own driver for the Steam Controller, back buttons included, when Steam "
                 "Input isn't running."});
+    settings_register(&(setting){
+        .key = "hid_deck", .label = "Built-in controls (InputPlumber)", .category = "Controls",
+        .type = SETTING_ENUM, .options = hid_deck_labels, .values = hid_deck_values, .count = 3,
+        .get = get_hid_deck, .set = set_hid_deck,
+        .help = "Bazzite's InputPlumber shows an Ally's or Legion Go's controls as a Steam Deck "
+                "pad only Steam reads. Auto: read it while no other controller is there."});
 
     /* Co-op */
     settings_register(&(setting){
@@ -1599,6 +1612,16 @@ static void poll_input(long f)
         touch_set_screen(win, w, h, picture_rect(w, h));
         touch_test_inject(f + 1);
     }
+    hid_deck_update();   /* port: InputPlumber's Deck pad, before SDL reads it */
+    {   /* port: a handheld with no controller at all: say why, once */
+        static int polls, hinted;
+        if (!hinted && !no_pad_hint && ++polls >= 120) {
+            const char *h = device_no_pad_hint(device_kind(), pad != NULL);
+            hinted = 1;
+            if (h)
+                osd(h);
+        }
+    }
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         if (!menu_is_open() && touch_event(&ev, f))
@@ -1706,8 +1729,10 @@ static void poll_input(long f)
         } else if (ev.type == SDL_CONTROLLERDEVICEADDED && !pad) {
             pad = open_controller();
             pads_changed();   /* port */
-            if (pad)
+            if (pad) {
+                fprintf(stderr, "ct_sdl: using \"%s\" on pad 1\n", SDL_GameControllerName(pad));
                 use_glyphs_of(pad);
+            }
         } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {   /* port: pads 2 and 3 */
             if (!pad2)
                 pad2 = open_controller_except2(pad, pad3);
@@ -2783,6 +2808,9 @@ int main(int argc, char **argv)
         set_exit_reason("SDL_Init failed");
         return 1;
     }
+    hid_deck_set_log(log_input);   /* port: InputPlumber's Deck pad (hid_deck.h) */
+    hid_deck_update();
+    no_pad_hint = scripted || dump;
     static CPU cpu;
     int first_run = 0;
 #ifdef CT_FIRSTRUN

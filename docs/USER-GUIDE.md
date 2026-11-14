@@ -620,3 +620,7 @@ without OpenGL 3.3 can still play without `--hd2d`.
   drivers, which need access to `/dev/hidraw*` (Steam's udev rules, the `steam-devices`
   package on some distributions). `steam_hidapi=off` in `settings.ini` leaves the Steam
   Controller to other drivers ([HANDHELD.md](HANDHELD.md#without-steam-input-desktop-mode)).
+- **ROG Ally, Legion Go and the like on Bazzite, outside Steam:** InputPlumber shows the
+  built-in controls as an emulated Steam Deck controller that SDL doesn't recognize; the
+  game reads it itself (`hid_deck=auto|on|off` in `settings.ini`, the menu's **Controls**
+  tab; [HANDHELD.md](HANDHELD.md#bazzite--inputplumber-rog-ally-legion-go--outside-steam)).

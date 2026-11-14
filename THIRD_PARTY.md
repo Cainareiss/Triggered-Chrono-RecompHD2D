@@ -36,6 +36,19 @@ reads them to populate `funcs.toml` / `unresolved.toml`.
   debuggers/tracers during development. No code from any of them is in this
   repository.
 
+### `frontend/hid_deck.c` (ported code)
+
+- **Simple DirectMedia Layer**, release `2.32.10`: the Steam Deck input report
+  layout and its button bits, buttons and axes, from
+  `src/joystick/hidapi/SDL_hidapi_steamdeck.c` (Copyright (C) 2023 Max Maisel) and
+  `src/joystick/hidapi/steam/controller_structs.h` (Copyright (C) 2020 Valve
+  Corporation), zlib license (`LICENSES/Zlib.txt`). Rewritten as a byte-offset parser
+  in `hid_deck_parse`, without SDL's hidapi layer, lizard-mode reports, rumble or
+  sensors; the zlib notice is kept at the top of the file, which is
+  `GPL-3.0-or-later AND Zlib`. It reads the emulated Steam Deck controller that
+  InputPlumber offers on Bazzite handhelds (docs/HANDHELD.md, "Bazzite /
+  InputPlumber"). The rest of the file is ours.
+
 ### `third_party/glyphs/`
 
 - **Kenney, Input Prompts** version 1.3 (CC0-1.0; its `License.txt` is kept
