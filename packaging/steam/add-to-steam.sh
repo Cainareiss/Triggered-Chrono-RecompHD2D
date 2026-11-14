@@ -32,6 +32,8 @@ else
     found=0
 fi
 dir=$(dirname "$img")
+# The recommended Steam Input layout, next to this script (docs/HANDHELD.md).
+vdf=$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo packaging/steam)/ct-recomp_neptune.vdf
 
 q() {   # quote for Steam's fields: double quotes around paths with spaces
     printf '"%s"' "$1"
@@ -78,6 +80,23 @@ cat <<EOF
 5. Controller: right-click > Properties... > Controller > Override for CT
    Recomp: "Gamepad" (Steam Input's standard gamepad layout). A keyboard or
    desktop layout sends keys instead of buttons.
+
+6. Back buttons (optional, Steam Deck). Under Steam Input the game sees an
+   Xbox-style pad without L4 L5 R4 R5, so bind them to the game's keys:
+     L4 = F6 quick save      R4 = F9 quick load
+     L5 = Tab fast-forward   R5 = F10 menu
+   Either set them by hand (controller icon > Edit Layout > Back Grip
+   Buttons > each one > Keyboard), or use the recommended layout:
+   copy it into Steam's templates folder yourself (this script does not),
+   restart Steam, then pick it under Controller > Templates:
+
+     mkdir -p ~/.steam/steam/controller_base/templates
+     cp $(q "$vdf") \\
+        ~/.steam/steam/controller_base/templates/
+
+   It is the gamepad layout with those four keys; gyro and trackpads off.
+   Without Steam Input (Desktop Mode, started outside Steam) the game reads
+   the back buttons itself and needs none of this.
 
 Game Mode tips
 --------------
