@@ -460,6 +460,10 @@ if(SDL2_FOUND)
     add_test(NAME sdl_pack_art COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_pack_art.py
         $<TARGET_FILE:ct_sdl_engine> $<TARGET_FILE:ct_game_module> ${GAME_DIR}/test/replay/leene_square.txt)
     list(APPEND ct_game_tests sdl_pack_art)
+    # The text box over the 3D diorama (docs/QA-3D.md)
+    add_test(NAME sdl_3d_box COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_3d_box.py
+        $<TARGET_FILE:ct_sdl_engine> $<TARGET_FILE:ct_game_module> ${GAME_DIR}/test/replay/leene_square.txt)
+    list(APPEND ct_game_tests sdl_3d_box)
     add_test(NAME sdl_menu COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_menu.py
         $<TARGET_FILE:ct_sdl> 300 150)
     add_test(NAME sdl_menu_hd2d COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_menu.py

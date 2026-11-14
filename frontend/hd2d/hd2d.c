@@ -497,6 +497,9 @@ static struct {
         /* The world map (CT_SCENE_WORLD, scene3d_world.c): the ground's
            normals, the overlay's tilemap; its own camera; entrance marks. */
         GLuint t_world_nrm, t_overlay;
+        /* Console pixels the scene doesn't hold (s3d_box_mask): R8UI, the
+           console's size; laid flat over the 3D picture with the UI. */
+        GLuint t_box;
         float wtilt, wzoom;
         int marks;
     } s3;
@@ -1611,6 +1614,8 @@ static int s3d_init(void)
     p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     g.s3.t_overlay = make_tex(CT_SCENE_WORLD_STRIDE, 128, GL_R16UI, GL_RED_INTEGER,
                               GL_UNSIGNED_SHORT, GL_NEAREST);
+    g.s3.t_box = make_tex(SCHED_WIDTH, SCHED_HEIGHT, GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE,
+                          GL_NEAREST);
     p_glUseProgram(g.prog[P3_WSCENE]);
     p_glUniform1i(U(P3_WSCENE, "uWorldNrm"), 6);
     p_glUniform1i(U(P3_WSCENE, "uOverlayMap"), 7);
@@ -1682,8 +1687,9 @@ static void s3d_free_targets(void)
 static void s3d_shutdown(void)
 {
     s3d_free_targets();
-    GLuint t[5] = {g.s3.t_vram, g.s3.t_cgram, g.s3.t_shadow, g.s3.t_world_nrm, g.s3.t_overlay};
-    p_glDeleteTextures(5, t);
+    GLuint t[6] = {g.s3.t_vram, g.s3.t_cgram, g.s3.t_shadow, g.s3.t_world_nrm, g.s3.t_overlay,
+                   g.s3.t_box};
+    p_glDeleteTextures(6, t);
     if (g.s3.fbo_shadow)
         p_glDeleteFramebuffers(1, &g.s3.fbo_shadow);
     p_glDeleteBuffers(2, g.s3.vbo);
@@ -2031,6 +2037,110 @@ static void s3d_ao_kernel(float *k, int n)
    their ambient occlusion, EASU up to the picture size when the render
    scale is below 1, the UI on top at the picture size. post() reads the
    result (bind_picture). */
+/* Console pixels the 3D scene doesn't hold: the scene's BG1 is the map as
+   the game keeps it, but the console's BG1 can show more, drawn into its
+   tilemap only (a text box's window, under its BG3 text). Per 8x8 tile of
+   BG1 on the screen (the scene's camera is BG1's scroll), the console's
+   BG1 pixels there are compared with the scene's tile decoded from VRAM
+   and CGRAM; a tile where they mostly differ is marked, and where marked
+   tiles make a box, every console pixel in it is laid flat over the 3D
+   picture, as the UI is. */
+static void s3d_box_mask(const ct_scene *sc, const uint8_t *bgrx, const uint8_t *layers,
+                         int ui_z)
+{
+    static uint8_t mask[SCHED_WIDTH * SCHED_HEIGHT];
+    static int was_set;
+    memset(mask, 0, sizeof mask);
+    int any = 0;
+    uint8_t mk[29][33];   /* marked tiles, from the camera's top-left one */
+    memset(mk, 0, sizeof mk);
+    const ct_scene_layer *L = &sc->layer[0];
+    if (sc->mode == CT_SCENE_FIELD && L->present && L->tiles && sc->vram && sc->cgram &&
+        sc->brightness >= 4) {
+        uint8_t lev[32];
+        for (int c = 0; c < 32; c++) {
+            int v = c * sc->brightness / 15;
+            lev[c] = (uint8_t)(v << 3 | v >> 2);
+        }
+        int tw = 2 * sc->map_w, th = 2 * sc->map_h, cx = sc->camera_x, cy = sc->camera_y;
+        for (int ty = cy >> 3; ty * 8 - cy < SCHED_HEIGHT; ty++)
+            for (int tx = cx >> 3; tx * 8 - cx < SCHED_WIDTH; tx++) {
+                uint16_t e = tx < tw && ty < th ? L->tiles[ty * CT_SCENE_STRIDE + tx] : 0;
+                uint32_t a = (L->chr_base + (e & 0x3FFu) * 16u) & 0x7FFFu;
+                int seen = 0, diff = 0;
+                for (int v = 0; v < 8; v++) {
+                    int y = ty * 8 - cy + v;
+                    if (y < 0 || y >= SCHED_HEIGHT)
+                        continue;
+                    int r = e & 0x8000 ? 7 - v : v;
+                    uint16_t w0 = sc->vram[(a + (uint32_t)r) & 0x7FFF],
+                             w1 = sc->vram[(a + 8u + (uint32_t)r) & 0x7FFF];
+                    for (int u = 0; u < 8; u++) {
+                        int x = tx * 8 - cx + u, k = y * SCHED_WIDTH + x;
+                        if (x < 0 || x >= SCHED_WIDTH || (layers[k] & 7) != 0)
+                            continue;   /* not BG1 there */
+                        int sh = e & 0x4000 ? u : 7 - u;
+                        int ci = (w0 >> sh & 1) | (w0 >> (sh + 8) & 1) << 1 |
+                                 (w1 >> sh & 1) << 2 | (w1 >> (sh + 8) & 1) << 3;
+                        seen++;
+                        if (!ci) {
+                            diff++;
+                            continue;
+                        }
+                        uint16_t c = sc->cgram[(L->pal_base + ((e >> 10) & 7) * 16 + ci) & 255];
+                        const uint8_t *p = &bgrx[k * 4];
+                        diff += abs(p[2] - lev[c & 31]) > 8 || abs(p[1] - lev[c >> 5 & 31]) > 8 ||
+                                abs(p[0] - lev[c >> 10 & 31]) > 8;
+                    }
+                }
+                if (diff < 6 || diff * 2 < seen)
+                    continue;
+                mk[ty - (cy >> 3)][tx - (cx >> 3)] = 1;
+            }
+        /* A box is a band of tiles across the screen with the UI's text
+           in it: runs of at least 16 marked tiles in a row, within 10
+           tile rows of a row with UI pixels (scattered marks are tiles
+           the game changed, or color math; a band far from any text is
+           the void below a map, which the console fills and the scene
+           doesn't). */
+        int text_row[29] = {0};
+        for (int y = 0; ui_z >= 0 && y < SCHED_HEIGHT; y++) {
+            const uint8_t *row = layers + y * SCHED_WIDTH;
+            int n = 0;
+            for (int x = 0; x < SCHED_WIDTH; x++)
+                n += (row[x] >> 4) == ui_z && (row[x] & 7) < 4;
+            if (n >= 4)
+                text_row[(y + (cy & 7)) >> 3] = 1;
+        }
+        for (int r = 0; r < 29; r++) {
+            int near = 0;
+            for (int t = r - 10; t <= r + 10 && !near; t++)
+                near = t >= 0 && t < 29 && text_row[t];
+            for (int c0 = 0; near && c0 < 33;) {
+                int c1 = c0;
+                while (c1 < 33 && mk[r][c1])
+                    c1++;
+                for (int c = c0; c1 - c0 >= 16 && c < c1; c++) {
+                    any = 1;
+                    for (int v = 0; v < 8; v++)
+                        for (int u = 0; u < 8; u++) {
+                            int x = ((cx >> 3) + c) * 8 - cx + u, y = ((cy >> 3) + r) * 8 - cy + v;
+                            if (x >= 0 && x < SCHED_WIDTH && y >= 0 && y < SCHED_HEIGHT)
+                                mask[y * SCHED_WIDTH + x] = 1;
+                        }
+                }
+                c0 = c1 > c0 ? c1 : c0 + 1;
+            }
+        }
+    }
+    if (any || was_set) {
+        bind_tex(0, g.s3.t_box);
+        p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, SCHED_WIDTH, SCHED_HEIGHT, GL_RED_INTEGER,
+                          GL_UNSIGNED_BYTE, mask);
+    }
+    was_set = any;
+}
+
 static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int ui_z,
                       float scene_amt)
 {
@@ -2310,8 +2420,10 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     p_glUniform1i(U(P3_UI, "uLayer"), 1);
     p_glUniform1i(U(P3_UI, "uUiZ"), world ? -1 : ui_z);   /* the world map's BG3 is clouds */
     p_glUniform1i(U(P3_UI, "uEncode"), g.s3.scaled);
+    p_glUniform1i(U(P3_UI, "uBox"), 2);
     bind_tex(0, g.t_color);
     bind_tex(1, g.t_layer);
+    bind_tex(2, g.s3.t_box);
     p_glDrawArrays(GL_TRIANGLES, 0, 3);
     return 0;
 }
@@ -2448,6 +2560,8 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
         post(s, px, py, pw, ph, ow, oh, offscreen, tilt, dof_tilt, dof_depth, osd_alpha, 0, 0.0f);
     }
     if (amt3 > 0.0f) {
+        if (want3)
+            s3d_box_mask(sc, bgrx, layers, ui_z);
         if (want3 && s3d_render(sc, s, pw, ph, ui_z, scene_amt))
             g.s3.amt = 0.0f;   /* no target: the 2D path from the next frame */
         else
