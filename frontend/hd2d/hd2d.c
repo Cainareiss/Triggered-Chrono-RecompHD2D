@@ -434,7 +434,9 @@ enum { P_EMIT, P_LIGHT, P_COC, P_DOFBLUR, P_BRIGHT, P_GAUSS, P_FINAL, P_COUNT,
        /* its ambient occlusion and blur, and FSR 1's EASU */
        P3_AOPREP, P3_AO, P3_AOBLUR, P3_EASU,
        /* the world map's surfaces and shadow map (WORLD_MAP) */
-       P3_WSCENE, P3_WSHADOW, P_ALL };
+       P3_WSCENE, P3_WSHADOW,
+       /* port: asset packs' models (MODEL) */
+       P3_MSCENE, P3_MSHADOW, P_ALL };
 
 typedef struct {
     GLuint tex, fbo;
@@ -509,6 +511,16 @@ static struct {
     void *pack_lookup_user;
     GLuint t_pack_lut;
     int pack3d_on;                   /* this frame */
+    /* port: asset packs' models (hd2d_pack_models): the source, and what
+       it gave for the current map (one buffer, its parts, textures). */
+    hd2d_model_fn model_fn;
+    void *model_user;
+    unsigned model_gen, model_built;  /* hd2d_pack_models calls; the map's models are from */
+    GLuint m_vao, m_vbo, m_ebo;
+    GLuint *m_tex;
+    int m_ntex, m_ni;
+    hd2d_mpart *m_part;
+    int m_nparts;
     /* Uniform locations, looked up once (key: program, name literal). */
     struct { const char *name; int prog; GLint loc; } uloc[256];
 } g;
@@ -596,6 +608,118 @@ void hd2d_pack_tiles(hd2d_tile_lookup fn, void *user)
 {
     g.pack_lookup = fn;
     g.pack_lookup_user = user;
+}
+
+void hd2d_pack_models(hd2d_model_fn fn, void *user)
+{
+    g.model_fn = fn;
+    g.model_user = user;
+    g.model_gen++;   /* the map is rebuilt with them at the next 3D frame */
+}
+
+static GLint U(int prog, const char *name);
+static void bind_tex(int unit, GLuint tex);
+
+/* port: the models' GL objects for this map (none if out has none). */
+static void models_free(void)
+{
+    if (g.m_ntex)
+        p_glDeleteTextures(g.m_ntex, g.m_tex);
+    free(g.m_tex);
+    free(g.m_part);
+    g.m_tex = NULL;
+    g.m_part = NULL;
+    g.m_ntex = g.m_nparts = g.m_ni = 0;
+}
+
+static void models_upload(const hd2d_models *m)
+{
+    models_free();
+    if (!m || !m->ni || !m->nv || !m->nparts)
+        return;
+    g.m_part = malloc(sizeof *g.m_part * (size_t)m->nparts);
+    g.m_tex = m->ntex ? calloc((size_t)m->ntex, sizeof *g.m_tex) : NULL;
+    if (!g.m_part || (m->ntex && !g.m_tex)) {
+        models_free();
+        return;
+    }
+    memcpy(g.m_part, m->part, sizeof *g.m_part * (size_t)m->nparts);
+    g.m_nparts = m->nparts;
+    if (!g.m_vao) {
+        p_glGenVertexArrays(1, &g.m_vao);
+        p_glGenBuffers(1, &g.m_vbo);
+        p_glGenBuffers(1, &g.m_ebo);
+        p_glBindVertexArray(g.m_vao);
+        p_glBindBuffer(GL_ARRAY_BUFFER, g.m_vbo);
+        p_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g.m_ebo);
+        p_glEnableVertexAttribArray(0);
+        p_glEnableVertexAttribArray(1);
+        p_glEnableVertexAttribArray(3);
+        p_glEnableVertexAttribArray(4);
+        p_glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(hd2d_mvertex),
+                                (const void *)offsetof(hd2d_mvertex, x));
+        p_glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(hd2d_mvertex),
+                                (const void *)offsetof(hd2d_mvertex, u));
+        p_glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(hd2d_mvertex),
+                                (const void *)offsetof(hd2d_mvertex, nx));
+        p_glVertexAttribPointer(4, 4, GL_UNSIGNED_BYTE, 1, sizeof(hd2d_mvertex),
+                                (const void *)offsetof(hd2d_mvertex, rgba));
+    }
+    p_glBindVertexArray(g.m_vao);
+    p_glBindBuffer(GL_ARRAY_BUFFER, g.m_vbo);
+    p_glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(hd2d_mvertex) * (size_t)m->nv), m->v,
+                   GL_STATIC_DRAW);
+    p_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g.m_ebo);
+    p_glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(sizeof(uint32_t) * (size_t)m->ni), m->idx,
+                   GL_STATIC_DRAW);
+    p_glBindVertexArray(g.vao);
+    g.m_ni = m->ni;
+    if (m->ntex) {
+        p_glGenTextures(m->ntex, g.m_tex);
+        g.m_ntex = m->ntex;
+    }
+    for (int k = 0; k < m->ntex; k++) {
+        const hd2d_mtex *t = &m->tex[k];
+        p_glBindTexture(GL_TEXTURE_2D, g.m_tex[k]);
+        p_glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, t->w, t->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, t->rgba);
+        p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        if (t->linear) {
+            p_glGenerateMipmap(GL_TEXTURE_2D);
+            p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+            p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        } else {
+            p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        }
+    }
+    p_glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+/* port: draw the models (prog P3_MSCENE or P3_MSHADOW), at each of the
+   map's copies (offsets: copies, n). */
+static void models_draw(int prog, const float (*offs)[2], int n)
+{
+    if (!g.m_ni)
+        return;
+    p_glUseProgram(g.prog[prog]);
+    p_glUniform1i(U(prog, "uModelTex"), 13);
+    p_glBindVertexArray(g.m_vao);
+    for (int c = 0; c < n; c++) {
+        p_glUniform3f(U(prog, "uOffset"), offs[c][0], 0.0f, offs[c][1]);
+        for (int k = 0; k < g.m_nparts; k++) {
+            const hd2d_mpart *pt = &g.m_part[k];
+            int tex = pt->tex >= 0 && pt->tex < g.m_ntex;
+            if (tex)
+                bind_tex(13, g.m_tex[pt->tex]);
+            p_glUniform2i(U(prog, "uModelMode"), tex, pt->cutout);
+            p_glUniform4f(U(prog, "uModelColor"), pt->color[0], pt->color[1], pt->color[2],
+                          pt->color[3]);
+            p_glDrawElements(GL_TRIANGLES, pt->count, GL_UNSIGNED_INT,
+                             (const void *)(sizeof(uint32_t) * (size_t)pt->first));
+        }
+    }
+    p_glBindVertexArray(g.vao);
 }
 
 /* The 3D meshes' BG tiles -> atlas entries, for scene3d.frag's tileTexel.
@@ -1457,12 +1581,20 @@ static int s3d_init(void)
         {P3_WSCENE, NULL, "#define WORLD_MAP\n", hd2d_src_scene3d_frag, "scene3d.frag (world)"},
         {P3_WSHADOW, NULL, "#define WORLD_MAP\n#define SHADOW_PASS\n", hd2d_src_scene3d_frag,
          "scene3d.frag (world shadow)"},
+        /* port: asset packs' models */
+        {P3_MSCENE, NULL, "#define MODEL\n", hd2d_src_scene3d_frag, "scene3d.frag (model)"},
+        {P3_MSHADOW, NULL, "#define MODEL\n#define SHADOW_PASS\n", hd2d_src_scene3d_frag,
+         "scene3d.frag (model shadow)"},
     };
-    /* The world map's vertex shader: scene3d.vert with WORLD_MAP. */
-    static char wvert[8192];
+    /* The world map's vertex shader: scene3d.vert with WORLD_MAP; the
+       models' with MODEL. */
+    static char wvert[8192], mvert[8192];
     snprintf(wvert, sizeof wvert, "#define WORLD_MAP\n%s", hd2d_src_scene3d_vert);
+    snprintf(mvert, sizeof mvert, "#define MODEL\n%s", hd2d_src_scene3d_vert);
     for (size_t k = 0; k < sizeof ps / sizeof *ps; k++) {
-        const char *vert = ps[k].prog == P3_WSCENE || ps[k].prog == P3_WSHADOW ? wvert : ps[k].vert;
+        const char *vert = ps[k].prog == P3_WSCENE || ps[k].prog == P3_WSHADOW ? wvert
+                           : ps[k].prog == P3_MSCENE || ps[k].prog == P3_MSHADOW ? mvert
+                                                                                  : ps[k].vert;
         g.prog[ps[k].prog] = link_vs(vert ? vert : hd2d_src_fullscreen_vert, ps[k].lib,
                                      ps[k].frag, ps[k].name);
         if (!g.prog[ps[k].prog]) {
@@ -1482,6 +1614,18 @@ static int s3d_init(void)
     p_glUseProgram(g.prog[P3_WSCENE]);
     p_glUniform1i(U(P3_WSCENE, "uWorldNrm"), 6);
     p_glUniform1i(U(P3_WSCENE, "uOverlayMap"), 7);
+    /* port: asset packs: the atlas and its entries (whole pictures, poses,
+       in every pass), the models' texture */
+    static const int pack_progs[] = {P3_SCENE, P3_SHADOW, P3_WSCENE, P3_WSHADOW, P3_MSCENE,
+                                     P3_MSHADOW};
+    for (size_t k = 0; k < sizeof pack_progs / sizeof *pack_progs; k++) {
+        int P = pack_progs[k];
+        p_glUseProgram(g.prog[P]);
+        p_glUniform1i(U(P, "uPackRects"), 11);
+        p_glUniform1i(U(P, "uPackAtlas"), 12);
+        p_glUniform1i(U(P, "uModelTex"), 13);
+        p_glUniform1i(U(P, "uVram"), 0);
+    }
     p_glUseProgram(0);
     p_glGenVertexArrays(2, g.s3.vao);
     p_glGenBuffers(2, g.s3.vbo);
@@ -1548,6 +1692,14 @@ static void s3d_shutdown(void)
     s3d_mesh_free(&g.s3.map);
     s3d_mesh_free(&g.s3.spr);
     memset(&g.s3, 0, sizeof g.s3);
+    models_free();   /* port: asset packs' models */
+    if (g.m_vao) {
+        p_glDeleteBuffers(1, &g.m_vbo);
+        p_glDeleteBuffers(1, &g.m_ebo);
+        p_glDeleteVertexArrays(1, &g.m_vao);
+        g.m_vao = g.m_vbo = g.m_ebo = 0;
+    }
+    g.model_built = g.model_gen - 1;
 }
 
 /* The targets, made the first time the 3D path draws: the render-size
@@ -1704,10 +1856,21 @@ static void s3d_update(const ct_scene *sc)
 
     uint32_t eh = s3d_empty_hash(sc);
     if (!g.s3.have_map || sc->map_generation != g.s3.map_gen || eh != g.s3.empty_hash ||
-        sc->mode != g.s3.map_mode) {
+        sc->mode != g.s3.map_mode || g.model_built != g.model_gen) {
+        /* port: asset packs' models: their cell hook first, then (below,
+           once the map's heights are known) their triangles */
+        if (g.model_fn)
+            g.model_fn(g.model_user, sc, NULL);
         if ((sc->mode == CT_SCENE_WORLD ? s3d_build_world(sc, &g.s3.map)
                                         : s3d_build_map(sc, &p, &g.s3.map)) < 0)
             fprintf(stderr, "hd2d: out of memory for the 3D map\n");
+        hd2d_models mo;
+        memset(&mo, 0, sizeof mo);
+        if (g.model_fn && g.model_fn(g.model_user, sc, &mo) > 0)
+            models_upload(&mo);
+        else
+            models_free();
+        g.model_built = g.model_gen;
         if (sc->mode == CT_SCENE_WORLD) {   /* the ground's normals */
             int nw, nh;
             const uint8_t *n = s3d_world_normals(&nw, &nh);
@@ -1983,7 +2146,16 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     p_glClear(GL_DEPTH_BUFFER_BIT);
     p_glEnable(GL_POLYGON_OFFSET_FILL);
     p_glPolygonOffset(1.5f, 2.0f);
+    bind_tex(11, g.t_pack_rects);   /* port: asset packs (whole pictures) */
+    p_glActiveTexture(GL_TEXTURE0 + 12);
+    p_glBindTexture(GL_TEXTURE_2D_ARRAY, g.t_pack_atlas);
     s3d_draw(1, PS);
+    if (g.m_ni) {   /* port: asset packs' models */
+        p_glUseProgram(g.prog[P3_MSHADOW]);
+        p_glUniformMatrix4fv(U(P3_MSHADOW, "uMVP"), 1, GL_FALSE, lmvp);
+        p_glUniformMatrix4fv(U(P3_MSHADOW, "uLightMVP"), 1, GL_FALSE, lmvp);
+        models_draw(P3_MSHADOW, (const float (*)[2])copies, n_copies);
+    }
     p_glDisable(GL_POLYGON_OFFSET_FILL);
     prof_mark("s3d_shadow");
 
@@ -1996,7 +2168,9 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     p_glClearColor(void_[0] * bright, void_[1] * bright, void_[2] * bright, 1.0f);
     p_glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     p_glClearColor(0, 0, 0, 0);
-    int P = world ? P3_WSCENE : P3_SCENE;
+    /* port: the models' program gets the same (asset packs) */
+    for (int pass = g.m_ni ? 1 : 0; pass >= 0; pass--) {
+    int P = pass ? P3_MSCENE : world ? P3_WSCENE : P3_SCENE;
     p_glUseProgram(g.prog[P]);
     p_glUniformMatrix4fv(U(P, "uMVP"), 1, GL_FALSE, mvp);
     p_glUniformMatrix4fv(U(P, "uLightMVP"), 1, GL_FALSE, lmvp);
@@ -2026,6 +2200,10 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     p_glUniform4f(U(P, "uDepth"), dist, dist * 1.6f, bright, 0.55f * s->shadow * a);
     p_glUniform4f(U(P, "uMisc"), s->point_light * a * (0.25f + 0.75f * dark_amt), dist * 1.25f,
                   dist * 3.5f, 1.0f / S3D_SHADOW_SIZE);
+    if (pass) {
+        models_draw(P, (const float (*)[2])copies, n_copies);
+        continue;
+    }
     if (world) {   /* the world map's (scene3d_world.c) */
         bind_tex(6, g.s3.t_world_nrm);
         bind_tex(7, g.s3.t_overlay);
@@ -2043,6 +2221,8 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
                       eye[2] + (at[2] - eye[2]) * t);
     }
     s3d_draw(0, P);
+    }
+    int P = world ? P3_WSCENE : P3_SCENE;
     if (world && cloud_ni) {   /* the overlay plane, blended over (its alpha: opacity) */
         p_glDepthMask(0);
         p_glEnable(GL_BLEND);

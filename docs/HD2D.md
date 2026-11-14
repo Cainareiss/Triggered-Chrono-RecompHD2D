@@ -272,7 +272,10 @@ Two hook points are left for asset packs: the cell hook (`s3d_set_cell_hook` in
 `scene3d.h`), where a pack can replace a cell's generated geometry with its own, and the
 tile lookup (`tileTexel()` in `shaders/scene3d.frag`), the one function every 3D
 surface samples its texture through, keyed by the tile (VRAM address, which gives the
-tile id, and palette), where a pack can return its own texture.
+tile id, and palette), where a pack can return its own texture. Asset packs use both,
+and two more: glTF models drawn as a mesh of their own with `scene3d.frag`'s `MODEL`
+variant (`hd2d_pack_models`), and a sprite hook (`s3d_set_sprite_hook`) that draws a
+character as one billboard of a whole pose picture (`S3D_PACKED`).
 
 ### Render scale, sharpening and ambient occlusion
 
@@ -446,8 +449,9 @@ Where this is wrong:
 - Sprites are flat cut-outs, and a billboard near the top of the picture leans with the
   view. The ferry and other play-area sprites are grouped by touching pieces.
 - Text boxes on the world map, if any, are not shown in 3D (the UI layer is off).
-- The cell hook (`s3d_set_cell_hook`) applies to the field only; packs still replace
-  textures through `tileTexel()`, the clouds included.
+- Packs replace textures through `tileTexel()`, the clouds included; the cell hook
+  (`s3d_set_cell_hook`) and the packs' models work on the world map too, the pose
+  billboards don't (the world map's sprites have no poses).
 - The cloud plane is one quad over the view's footprint; at very low tilts its far edge
   can show.
 
@@ -544,8 +548,9 @@ while a preset uses it.
 
 With `--pack`, replacement art is composited at the output resolution in the upscale
 (`shaders/upscale.frag`), before the lighting, depth of field and grade see the picture.
-It is driven by a third G-buffer, the PPU's provenance buffer. Details, the format and
-the cost are in [ASSET-PACKS.md](ASSET-PACKS.md).
+It is driven by a third G-buffer, the PPU's provenance buffer. In the 3D looks, packs
+also add glTF models to the map and draw characters with whole-pose pictures. Details,
+the format and the cost are in [ASSET-PACKS.md](ASSET-PACKS.md).
 
 ## HD text
 

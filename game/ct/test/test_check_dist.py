@@ -105,6 +105,12 @@ def main(argv: list[str]) -> int:
             f.write(b'RIFF' + os.urandom(60))
         expect([okdir], 0, 'a sound outside a pack layout')
         shutil.rmtree(okdir)
+        for name in ('ct/packs/mine/poses/01000002.png', 'ct/sheets/x/sheet_pc00_4x.png'):
+            posezip = os.path.join(d, 'with_pose.zip')
+            with zipfile.ZipFile(posezip, 'w') as z:
+                z.writestr(name, b'\x89PNG\r\n\x1a\n' + os.urandom(64))
+            expect([posezip], 1, f'a pose picture or sheet export in a zip ({name})')
+            os.remove(posezip)
         expect([d], 1, 'a directory holding them')
     return 1 if bad else 0
 

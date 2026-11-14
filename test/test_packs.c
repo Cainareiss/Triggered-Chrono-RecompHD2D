@@ -3,7 +3,8 @@
  *
  * Asset packs (frontend/packs): PNG reading and writing, content keys,
  * the dump, loading with priorities, the atlas and the per-pixel map,
- * and [[model]] entries with a glTF cube made for the test. No game data:
+ * and [[model]] entries with a glTF cube made for the test, [[pose]]
+ * entries and their pixels in the map. No game data:
  * every picture and VRAM byte here is made up.
  *
  * usage: test_packs SOURCE_DIR TMP_DIR */
@@ -319,15 +320,16 @@ static void test_models(const char *src)
     char dir[4096], err[512];
     snprintf(dir, sizeof dir, "%s/test/data/packs/models", src);
     const char *dirs[1] = {dir};
-    CHECK(packs_load(dirs, 1) == 0, "model pack: no tiles");
+    CHECK(packs_load(dirs, 1) == 2, "model pack: no tiles, two models");
     int n;
     const packs_model *m = packs_models(&n);
     CHECK(n == 2, "%d [[model]] entries", n);
     if (n < 2)
         return;
-    CHECK(m[0].map == 0x1F0 && m[0].cell_x == 3 && m[0].cell_y == 4 && m[0].scale == 16.0f &&
-              m[0].offset[0] == 0.5f && m[0].offset[2] == 0.5f,
-          "entry: map %x cell %d,%d scale %g", m[0].map, m[0].cell_x, m[0].cell_y, m[0].scale);
+    CHECK(m[0].map == 0x1F0 && m[0].cell_x == 3 && m[0].cell_y == 4 && m[0].scale[0] == 16.0f &&
+              m[0].scale[2] == 16.0f && m[0].offset[0] == 8.0f && m[0].offset[2] == 8.0f &&
+              m[0].cells_w == 1 && !m[0].n_tiles && !m[0].hide_cells && m[0].color[3] == 1.0f,
+          "entry: map %x cell %d,%d scale %g", m[0].map, m[0].cell_x, m[0].cell_y, m[0].scale[0]);
     packs_model pm = m[0];
     CHECK(!packs_model_parse(pm.file, &pm, err, sizeof err), "parse the cube: %s", err);
     CHECK(pm.meshes == 1 && pm.primitives == 1, "cube: %d meshes, %d primitives", pm.meshes, pm.primitives);
@@ -336,7 +338,111 @@ static void test_models(const char *src)
     pm = m[1];
     CHECK(packs_model_parse(pm.file, &pm, err, sizeof err) && strstr(err, "not found"), "missing file: %s", err);
     CHECK(m[1].meshes == 0, "a model that failed has no meshes");
+    /* The triangles: the cube's 12, its normals unit length and facing out. */
+    const packs_mesh *mesh = packs_model_mesh(0);
+    CHECK(mesh && mesh->ni == 36 && mesh->nparts == 1 && mesh->part[0].count == 36,
+          "cube mesh: %d indices", mesh ? mesh->ni : -1);
+    int out = 1;
+    for (int k = 0; mesh && k < mesh->nv; k++) {
+        const packs_mvertex *v = &mesh->v[k];
+        float l = v->nrm[0] * v->nrm[0] + v->nrm[1] * v->nrm[1] + v->nrm[2] * v->nrm[2];
+        float d = v->nrm[0] * v->pos[0] + v->nrm[1] * v->pos[1] + v->nrm[2] * v->pos[2];
+        out &= l > 0.99f && l < 1.01f && d > 0;
+    }
+    CHECK(out, "cube normals: unit, outward");
+    CHECK(packs_model_mesh(0) == mesh, "the mesh is kept");
+    CHECK(packs_model_mesh(1) == NULL, "no mesh for the missing file");
     packs_unload();
+}
+
+/* [[model]] keys, and [[pose]] entries with the 2D map's pose pixels. */
+static void test_poses_and_keys(const char *tmp)
+{
+    char dir[4096], path[4200];
+    snprintf(dir, sizeof dir, "%s/packs/poses", tmp);
+    snprintf(path, sizeof path, "mkdir -p '%s'", dir);
+    CHECK(system(path) == 0, "mkdir");
+    /* the pose: 32 x 16 console px at 4x; its right quarter transparent */
+    static uint8_t img[128 * 64 * 4];
+    for (int y = 0; y < 64; y++)
+        for (int x = 0; x < 128; x++) {
+            uint8_t *q = &img[(y * 128 + x) * 4];
+            q[0] = (uint8_t)x;
+            q[1] = (uint8_t)y;
+            q[2] = 200;
+            q[3] = x < 96 ? 255 : 0;
+        }
+    snprintf(path, sizeof path, "%s/pose.png", dir);
+    CHECK(!pngio_write_rgba(path, img, 128, 64), "write the pose");
+    snprintf(path, sizeof path, "%s/pack.toml", dir);
+    FILE *f = fopen(path, "w");
+    if (f) {
+        fprintf(f, "[pack]\nversion = 1\n\n[[pose]]\nkey = \"01000002\"\nfile = \"pose.png\"\n"
+                   "w = 32\nh = 16\nflip = \"h\"\n\n"
+                   "[[model]]\nmap = 5\ncells = [2, 3, 4, 6]\nfile = \"x.glb\"\nscale = [1, 2, 3]\n"
+                   "rotate = [0, 90, 0]\ncolor = [0.5, 1, 1, 1]\nfilter = \"linear\"\nhide_cells = true\n\n"
+                   "[[model]]\ntiles = [1, 0x0123, 0x4124, 0x2133, 0x0134]\nsize = [2, 1]\nfile = \"y.glb\"\n\n"
+                   "[[model]]\nfile = \"no_place.glb\"\n");
+        fclose(f);
+    }
+    const char *dirs[1] = {dir};
+    packs_load(dirs, 1);
+    int n;
+    const packs_model *m = packs_models(&n);
+    CHECK(n == 2, "%d models (one with no place left out)", n);
+    if (n == 2) {
+        CHECK(m[0].map == 5 && m[0].cell_x == 2 && m[0].cell_y == 3 && m[0].cells_w == 3 &&
+                  m[0].cells_h == 4 && m[0].scale[1] == 2 && m[0].scale[2] == 3 &&
+                  m[0].rotate[1] == 90 && m[0].color[0] == 0.5f && m[0].linear && m[0].hide_cells,
+              "model keys: cells, scale, rotate, color, filter, hide_cells");
+        CHECK(m[1].map == -1 && m[1].n_tiles == 4 && m[1].tiles_layer == 1 && m[1].tiles[1] == 0x4124 &&
+                  m[1].cells_w == 2 && m[1].cells_h == 1 && !m[1].linear,
+              "model keys: tiles, size");
+    }
+    CHECK(packs_have_poses(), "a pose loaded");
+    const packs_rect *r = packs_lookup_pose(0x01000002);
+    CHECK(r && r->w == 128 && r->h == 64 && r->src_w == 32 && r->src_h == 16 && r->flags == PACKS_FLIP_H,
+          "pose lookup");
+    CHECK(packs_lookup_tile(0x01000002) == NULL, "poses are not tiles");
+    int ne;
+    const packs_rect *all = packs_entries(&ne);
+
+    /* The frame of test_dump_and_load: OAM 0 and 1 (16x16 each, at 40,0 and
+       56,0) are one object, its pose 32 x 16; two BG pixels inside its box,
+       one behind it (z 2), one in front (z 12). */
+    frame[5 * SCHED_WIDTH + 60] = bg_px(1, 1, 0);
+    frame[5 * SCHED_WIDTH + 60].layer = 0x20;
+    frame[6 * SCHED_WIDTH + 60] = bg_px(1, 1, 0);
+    frame[6 * SCHED_WIDTH + 60].layer = 0xC0;
+    frame[5 * SCHED_WIDTH + 45] = frame[5 * SCHED_WIDTH + 60];
+    int x, y, w, h;
+    const uint8_t sizes[2] = {8, 16}, both[2] = {0, 1};
+    CHECK(!packs_oam_box(mem.oam, sizes, both, 2, &x, &y, &w, &h) && x == 40 && y == 0 && w == 32 && h == 16,
+          "OAM box %d,%d %dx%d", x, y, w, h);
+    packs_pose_place pl = {(int)(r - all), 32, 16, 0, 0, 2, {0, 1}};
+    packs_set_poses(&pl, 1, sizes);
+    packs_map_frame(frame, &mem, map);
+    const uint16_t *e = &map[(3 * SCHED_WIDTH + 50) * 4];
+    /* flipped: screen x 50 is texel 31 - 10 */
+    CHECK(e[0] == pl.entry + 1 && e[1] == (21 | 3 << 8) && (e[2] & SCHED_PROV_HFLIP) && !(e[2] & 64),
+          "pose pixel: entry %d texel %d,%d", e[0] - 1, e[1] & 255, e[1] >> 8);
+    e = &map[(10 * SCHED_WIDTH + 63) * 4];
+    CHECK(e[0] == pl.entry + 1 && (e[1] & 255) == 8, "the second OAM entry: the same picture");
+    e = &map[(5 * SCHED_WIDTH + 60) * 4];
+    CHECK(e[0] == pl.entry + 1 && (e[1] & 255) == 11 && (e[2] & 64),
+          "behind the object: the pose's picture, over that pixel");
+    e = &map[(6 * SCHED_WIDTH + 60) * 4];
+    CHECK(e[0] != pl.entry + 1, "in front of the object: not the pose");
+    e = &map[(5 * SCHED_WIDTH + 45) * 4];
+    CHECK(e[0] != pl.entry + 1, "behind it, where the picture is transparent: not the pose");
+    /* a box that doesn't match: the pieces keep their own */
+    pl.w = 30;
+    packs_set_poses(&pl, 1, sizes);
+    packs_map_frame(frame, &mem, map);
+    CHECK(map[(3 * SCHED_WIDTH + 50) * 4] != pl.entry + 1, "pose of another size: not used");
+    packs_set_poses(NULL, 0, NULL);
+    packs_unload();
+    CHECK(!packs_have_poses() && packs_lookup_pose(0x01000002) == NULL, "unload: no poses");
 }
 
 int main(int argc, char **argv)
@@ -356,6 +462,7 @@ int main(int argc, char **argv)
     test_keys();
     test_dump_and_load(tmp);
     test_models(argv[1]);
+    test_poses_and_keys(tmp);
     printf("packs: %ld checks, %ld failed\n", checks, fails);
     return fails ? 1 : 0;
 }

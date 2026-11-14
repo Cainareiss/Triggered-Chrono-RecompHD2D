@@ -12,6 +12,19 @@
 #include "snes_adapter.h"
 
 static ct_module_scene_fn scene_fn;
+static ct_module_pose_fn pose_fn;
+
+void ct_pose_set_source(ct_module_pose_fn fn) { pose_fn = fn; }
+int ct_pose_available(void) { return pose_fn != NULL; }
+
+int ct_scene_pose_of(int obj, ct_scene_pose *out, uint8_t *rgba, int max)
+{
+    memset(out, 0, sizeof *out);
+    if (!pose_fn || pose_fn(obj, out, rgba, max) || !out->key || !out->w || !out->h)
+        return -1;
+    out->name[sizeof out->name - 1] = 0;
+    return 0;
+}
 
 void ct_scene_set_source(ct_module_scene_fn fn) { scene_fn = fn; }
 int ct_scene_available(void) { return scene_fn != NULL; }
@@ -108,5 +121,10 @@ int ct_module_load(const char *path, const char **err)
     ct_rumble_set_source(m->rumble);
     ct_music_set_source(m->music);
     ct_text_set_source(m->text);
+    /* Optional, outside ct_module_info: poses (a module without them is fine). */
+    sym = dlsym(h, "ct_module_pose");
+    ct_module_pose_fn pose = NULL;
+    memcpy(&pose, &sym, sizeof pose);
+    ct_pose_set_source(pose);
     return 0;
 }

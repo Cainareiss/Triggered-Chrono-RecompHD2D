@@ -12,8 +12,8 @@ scale = 1
 map = 0x1F0        # map id
 cell = [3, 4]      # the map cell (x, y) it stands in
 file = "cube.gltf"
-scale = 16.0       # model units to map pixels
-offset = [0.5, 0.0, 0.5]
+scale = 16.0       # map pixels per model unit
+offset = [8.0, 0.0, 8.0]   # map pixels
 
 [[model]]
 map = 2

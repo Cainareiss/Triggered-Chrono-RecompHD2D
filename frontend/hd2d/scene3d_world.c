@@ -33,6 +33,8 @@
 #include <math.h>
 #include <string.h>
 
+int s3d_cell_hooked(const ct_scene *s, int x, int y, s3d_mesh *m);   /* scene3d.c */
+
 #define WS CT_SCENE_WORLD_STRIDE
 
 enum { DIST_CAP = 8 };
@@ -467,7 +469,7 @@ int s3d_build_world(const ct_scene *s, s3d_mesh *m)
                     float v = corner(x + (k & 1), y + (k >> 1));
                     hi = v > hi ? v : hi;
                 }
-                if ((hi > 0.75f) == pass)
+                if ((hi > 0.75f) == pass && !s3d_cell_hooked(s, x, y, m))
                     bad |= emit_cell(s, m, x, y);
             }
         if (pass == 0)

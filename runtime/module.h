@@ -213,6 +213,25 @@ typedef struct {
    Returns 0 with out filled (n_lines may be 0), or -1 when the module
    can't say. */
 typedef int (*ct_module_text_fn)(ct_text *out);
+/* Poses (optional, no ABI change: a module without it has none). A pose
+   is one object's whole animation frame as the game assembles it, keyed
+   so that the same picture has the same key on any map and in any object
+   slot: what asset packs replace as one picture, and what an artist's
+   sheet holds (docs/ASSET-PACKS.md, "Poses"). */
+typedef struct {
+    uint32_t key;            /* the pose: the module's stable id, never 0 */
+    uint32_t sheet;          /* which poses go on one sheet (one character) */
+    uint16_t w, h;           /* the picture, px: the bounding box of its OAM entries */
+    int16_t origin_x, origin_y;   /* the object's foot point in the picture, px */
+    uint8_t hflip, vflip;    /* the console draws the picture mirrored */
+    char name[22];           /* the sheet's name for files ("pc00", ...): [a-z0-9_] */
+} ct_scene_pose;
+
+/* Module export ct_module_pose (optional): the pose of object[obj] of the
+   ct_scene the module filled last. With rgba (max pixels) it also draws
+   the original picture there, w x h RGBA8, color 0 transparent. Returns
+   0, or -1 when the object has no pose this can describe. */
+typedef int (*ct_module_pose_fn)(int obj, ct_scene_pose *out, uint8_t *rgba, int max);
 
 typedef struct {
     uint32_t abi;            /* CT_MODULE_ABI the module was built with */
@@ -258,5 +277,11 @@ int ct_music_events(ct_music_event *out, int max);
 void ct_text_set_source(ct_module_text_fn fn);
 int ct_text_available(void);
 int ct_text_capture(ct_text *out);
+/* The pose source: ct_module_load finds the module's ct_module_pose, a
+   static build sets the game's ct_game_pose (NULL: none). ct_scene_pose
+   asks it about object obj of the last ct_scene_capture; -1 without one. */
+void ct_pose_set_source(ct_module_pose_fn fn);
+int ct_pose_available(void);
+int ct_scene_pose_of(int obj, ct_scene_pose *out, uint8_t *rgba, int max);
 
 #endif

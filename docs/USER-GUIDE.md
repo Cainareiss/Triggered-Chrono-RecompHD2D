@@ -116,6 +116,7 @@ flatpak run io.github.jerbanpls.CtRecomp --hd2d
 | `--rumble off\|light\|medium\|strong` | Rumble strength for this run (see [Rumble](#rumble)); `--log-rumble` prints every pulse |
 | `--music-log` | Print each song the game asks for (its id, for [audio packs](#audio-packs)), and its fades and stops |
 | `--hd-font FILE` | Draw the text boxes with this font (see [HD text](#hd-text)), remembered for next time |
+| `--pack-export-sheets NAME` | While you play, save every character pose seen onto sprite sheets in `sheets/NAME`, to paint over and import (`--pack-export-scale N`: their second size, default 4x) |
 
 ## First launch
 
@@ -358,6 +359,22 @@ workflow, the format and the rules are in [ASSET-PACKS.md](ASSET-PACKS.md).
 still is. It is for your personal use only: never share or upload it.** Pictures you
 paint yourself from scratch are yours.
 
+Besides single tiles, a pack can hold:
+
+- **Poses:** a character's whole animation frame as one picture, at any size. Play with
+  `--pack-export-sheets mysheets` to get each character's poses on a sprite sheet
+  (`ct/sheets/mysheets/sheet_pc00_4x.png` and its index), paint over it in Aseprite,
+  Krita or an image-to-image tool, and cut it back into a pack with
+  `python3 tools/pack_import_sheet.py EDITED.png --index sheet_pc00.json --pack mychars`.
+- **3D models:** glTF files (from Blender, Sprytile or Crocotile 3D) placed on map cells,
+  drawn in the 3D diorama look (`hd2d3d`), lit and shadowed like the map. Run with
+  `CT_PACK_WHERE=1` to see the map id and the cell you stand on.
+
+The formats, the axes and units for models, and the sheet workflow are in
+[ASSET-PACKS.md](ASSET-PACKS.md). **Sheets are the game's art too, and so is anything
+painted over them: for your personal use only.** Models you build from scratch, with
+your own textures, are yours.
+
 Packs need the GL renderer. Without `--hd2d` the game switches to it with the original
 look while a pack is loaded.
 
@@ -410,6 +427,7 @@ HD text needs the GL renderer: without `--hd2d` the game switches to it with the
 look, as for asset packs; with `--no-hd2d` there is no HD text. It follows the game
 module (with `--interp-only` there is none). Menus, battle messages and the name entry
 still use the console's font: only the dialogue boxes are done so far.
+| F5 | Reload the asset packs (after editing their pictures or models) |
 
 ## Quality of life
 
@@ -585,6 +603,8 @@ The engine keeps its files in your user data folder, `~/.local/share/ct-recomp/`
 | `ct/states/` | Save states and the resume point, each with a `.png` of the screen (see [Save states](#save-states)) |
 | `ct/packs/NAME/` | Asset pack NAME: `pack.toml` and its pictures, and its music (`[[music]]` files). Made from the game's art or music unless you made every picture and song yourself: **never share it.** |
 | `ct/fonts/` | Fonts for [HD text](#hd-text), which you put there (none come with the game) |
+| `ct/packs/NAME/` | Asset pack NAME: `pack.toml` and its pictures. Made from the game's art unless you painted every picture yourself: **never share it.** |
+| `ct/sheets/NAME/` | Sprite sheets from `--pack-export-sheets`: the game's own frames, **never share them** |
 | `ct/gen/`, `ct/obj/` | Temporary build files, normally deleted after the build. If a build fails they can be left behind: they hold code generated from your ROM, so don't share them. Deleting them is safe. |
 
 The ROM itself is never copied: only its location is saved.

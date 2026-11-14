@@ -30,7 +30,10 @@
 #define S3D_OPAQUE      (1u << 23)   /* color 0 shows the backdrop instead of nothing */
 #define S3D_RAISED      (1u << 24)   /* stood up or lifted (not floor): casts shadows */
 #define S3D_OVERHEAD    (1u << 25)   /* the original drew it over sprites */
-/* Bits 26-31 are free, for asset packs: a pack's sampling hook (the
+#define S3D_PACKED      (1u << 26)   /* asset packs: bits 0-17 are an atlas entry (a whole
+                                        picture: uv 0-8 spans it), not a VRAM tile */
+#define S3D_ENTRY_MASK  0x3FFFFu
+/* Bits 27-31 are free, for asset packs: a pack's sampling hook (the
    shader's tileTexel(), shaders/scene3d.frag) gets the whole value, so it
    can look a tile up by (VRAM address = character base + tile id * words
    per tile, palette) or by a flag of its own set from s3d_set_cell_hook. */
@@ -80,11 +83,25 @@ void s3d_emit(s3d_mesh *m, const float tl[3], const float u[3], const float v[3]
    over uneven ground. Returns 0, or -1 out of memory. */
 int s3d_emit_corners(s3d_mesh *m, float c[4][3], uint32_t tile, int hflip, int vflip);
 
-/* Asset packs (later): a hook asked for every cell before the builder
-   makes its quads. It may emit its own with s3d_emit and return nonzero,
-   and the cell's generated quads are skipped. NULL (the default): none. */
+/* Asset packs: a hook asked for every cell before the builder makes its
+   quads (the field's and the world map's). It may emit its own with
+   s3d_emit and return nonzero, and the cell's generated quads are skipped
+   (on the field, the side walls it would give too). NULL (the default):
+   none. */
 typedef int (*s3d_cell_hook)(void *user, const ct_scene *s, int x, int y, s3d_mesh *m);
 void s3d_set_cell_hook(s3d_cell_hook fn, void *user);
+
+/* Asset packs: a whole picture for an object (a pose), asked for every
+   object s3d_build_sprites draws. Returns nonzero with *out filled to draw
+   the object as that one quad, standing where its OAM entries would; 0
+   for its OAM entries as usual. */
+typedef struct {
+    uint32_t tile;     /* S3D_PACKED | atlas entry (the flags are added) */
+    int x, y, w, h;    /* its rectangle on the console's screen, px */
+    int hflip, vflip;
+} s3d_sprite_image;
+typedef int (*s3d_sprite_hook)(void *user, const ct_scene *s, int obj, s3d_sprite_image *out);
+void s3d_set_sprite_hook(s3d_sprite_hook fn, void *user);
 
 /* The part of the map with pixels (map px), from the last s3d_build_map:
    the renderer keeps its camera from showing much beyond it. */

@@ -15,6 +15,7 @@ __attribute__((weak)) int ct_game_scene(ct_scene *out);   /* NULL: none linked *
 __attribute__((weak)) int ct_game_rumble(long frame);      /* rumble.h; NULL: none */
 __attribute__((weak)) extern const ct_music_hooks ct_game_music;
 __attribute__((weak)) int ct_game_text(ct_text *out);
+__attribute__((weak)) int ct_game_pose(int obj, ct_scene_pose *out, uint8_t *rgba, int max);
 
 __attribute__((constructor)) static void install_linked_tables(void)
 {
@@ -26,4 +27,5 @@ __attribute__((constructor)) static void install_linked_tables(void)
     ct_rumble_set_source(ct_game_rumble);
     ct_music_set_source(&ct_game_music ? &ct_game_music : NULL);
     ct_text_set_source(ct_game_text);
+    ct_pose_set_source(ct_game_pose);
 }

@@ -127,6 +127,11 @@
  *       packs= in settings.ini; F5 reloads), or dump every new tile and
  *       sprite drawn into a pack. A pack needs the GL renderer: without
  *       --hd2d it is used with the off preset.
+ *   --pack-export-sheets NAME [--pack-export-scale N]
+ *       write every pose (whole sprite frame) seen while playing to sprite
+ *       sheets in <pref path>/sheets/NAME, one per character, at 1x and Nx
+ *       (4), with an index, for tools/pack_import_sheet.py; and each map's
+ *       cells (pack_scene.h).
  *   --mute | --no-mute
  *       silence the game for this run only (the volume setting is kept).
  *   --rumble off|light|medium|strong, --log-rumble
@@ -193,6 +198,7 @@
 #include "packs.h"    /* port: asset packs (docs/ASSET-PACKS.md) */
 #include "music.h"    /* port: audio packs: [[music]] in the same packs */
 #include "hdtext.h"   /* port: HD text: the player's font over the text boxes */
+#include "pack_scene.h"   /* port: their models, poses and sheets */
 #include "png.h"
 #include "replay.h"
 #include "resample.h"
@@ -363,6 +369,8 @@ static int running = 1, fast, log_input, log_audio, log_music;
    in it is a directory of its own. */
 static const char *pack_dump;   /* --pack-dump NAME */
 static int want_prov(void) { return packs_active() || pack_dump || hdtext_ready(); }
+static const char *pack_sheets;   /* --pack-export-sheets NAME */
+static int pack_sheets_scale = 4;   /* --pack-export-scale N */
 #define MAX_PACK_NAMES 16
 static char pack_names[MAX_PACK_NAMES][256];   /* loaded, highest priority first */
 static int n_pack_names, packs_given;          /* --pack seen: beats settings.ini */
@@ -484,6 +492,12 @@ static void packs_upload(void)
     hd2d_pack_atlas(rects ? atlas : NULL, size, pages, rects, rects ? n : 0);
     hd2d_pack_tiles(rects ? pack_tile_lookup : NULL, NULL);
     free(rects);
+    pack_scene_attach();   /* models and poses (pack_scene.h) */
+}
+
+static void pack_sheets_report(void)
+{
+    pack_scene_export_close();
 }
 
 static void pack_dump_report(void)
@@ -660,17 +674,22 @@ static void present_plain(const uint8_t *bgrx)
 
 /* port: the scene the 3D diorama look draws (module.h), captured once per
    frame edge and only while the look uses it. */
-static const ct_scene *scene_now(void)
+static const ct_scene *scene_capture_now(void)
 {
     static ct_scene sc;
     static long at = -1;
-    if (!hd2d_wants_scene() || !ct_scene_available())
+    if (!ct_scene_available())
         return NULL;
     if (sched_frame_count() != at) {
         at = sched_frame_count();
         ct_scene_capture(&sc);
     }
     return &sc;
+}
+
+static const ct_scene *scene_now(void)
+{
+    return hd2d_wants_scene() ? scene_capture_now() : NULL;
 }
 
 /* One screenshot of a frame: HD-2D at shot_w x shot_h, else as is. */
@@ -2616,10 +2635,13 @@ static void on_frame(long f)
         }
         last_turn = t;
     }
+    /* port: asset packs' poses (pack_scene.h): the objects' at this edge */
+    pack_scene_frame(pack_scene_wants_poses() ? scene_capture_now() : NULL);
     if (hd2d_mode && show) {
         /* port: this frame's asset pack replacements */
         if (packs_active() && sched_prov()) {
             uint64_t t0 = SDL_GetPerformanceCounter();
+            pack_scene_map_poses();
             pack_map_pixels += packs_map_frame(sched_prov(), sched_prov_mem(), pack_map);
             pack_map_ms += (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 /
                            (double)SDL_GetPerformanceFrequency();
@@ -2863,6 +2885,7 @@ static void usage(FILE *out)
             "[--coop] [--no-coop] [--coop-split]"
             " "
             "[--pack-dump NAME] [--pack NAME|none]...\n         "
+            "[--pack-export-sheets NAME] [--pack-export-scale N]\n         "
             "[--mute] [--no-mute] [--pad-test] [--rumble off|light|medium|strong] [--log-rumble] [--rumble-test F]\n         "
             "[--menu-test FILE] [--hash-log FILE]"
 #ifdef CT_FIRSTRUN
@@ -3059,6 +3082,14 @@ int main(int argc, char **argv)
         } else if (!strcmp(argv[k], "--hd-font") && k + 1 < argc) {   /* port: HD text */
             snprintf(hd_font, sizeof hd_font, "%s", argv[++k]);
             hd_font_given = 1;
+        } else if (!strcmp(argv[k], "--pack-export-sheets") && k + 1 < argc) {   /* port */
+            pack_sheets = argv[++k];
+        } else if (!strcmp(argv[k], "--pack-export-scale") && k + 1 < argc) {
+            pack_sheets_scale = atoi(argv[++k]);
+            if (pack_sheets_scale < 1 || pack_sheets_scale > 16) {
+                fprintf(stderr, "ct_sdl: --pack-export-scale: 1 to 16\n");
+                return 2;
+            }
         } else if (!strcmp(argv[k], "--pack") && k + 1 < argc) {   /* port: asset packs */
             if (!packs_given)
                 n_pack_names = 0;   /* the command line replaces the saved list */
@@ -3387,6 +3418,23 @@ int main(int argc, char **argv)
         free(dir);
         atexit(pack_dump_report);
         sched_set_prov(1);
+    }
+    if (pack_sheets) {   /* port: sprite sheets for artists (docs/ASSET-PACKS.md) */
+        char *dir = malloc(4096);
+        if (dir && (strchr(pack_sheets, '/') || strchr(pack_sheets, '\\'))) {
+            snprintf(dir, 4096, "%s", pack_sheets);
+        } else if (dir) {
+            char *pref = SDL_GetPrefPath("ct-recomp", game_id);
+            snprintf(dir, 4096, "%ssheets/%s", pref ? pref : "./", pack_sheets);
+            SDL_free(pref);
+        }
+        if (!dir || pack_scene_export_open(dir, pack_sheets_scale)) {
+            free(dir);
+            set_exit_reason("cannot write the sprite sheets");
+            return 2;
+        }
+        free(dir);
+        atexit(pack_sheets_report);
     }
     sched_set_frame_hook(on_frame);
     sched_set_reset_hook(script_reset);

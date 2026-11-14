@@ -65,7 +65,8 @@ GENERATED_NAMES = ('ct_game*.so', 'ct_game*.so.*', 'bank*.c', 'ct_funcs.c', 'ct_
 SYMBOL_RE = re.compile(rb'f_[0-9A-F]{6}_m[01]x[01]')
 MODULE_ENTRY = b'ct_module_get'   # runtime/module.h
 PACK_MANIFEST = 'pack.toml'       # asset packs (docs/ASSET-PACKS.md)
-PACK_PICTURE_RE = re.compile(r'(^|[/!\\])(tiles|sprites|objects)[/\\][0-9a-f]{16}\.png$', re.I)
+PACK_PICTURE_RE = re.compile(r'(^|[/!\\])((tiles|sprites|objects)[/\\][0-9a-f]{16}'
+                             r'|poses[/\\][0-9a-f]{8}|sheet_[a-z0-9_]+_\d+x)\.png$', re.I)
 # Audio packs' sound ([[music]]): in a music/ or packs/ folder (any depth below).
 PACK_AUDIO_DIR_RE = re.compile(r'(^|[/!\\])(music|packs)[/\\]', re.I)
 PACK_AUDIO_EXT_RE = re.compile(r'\.(ogg|oga|opus|flac|wav|mp3)$', re.I)
@@ -180,7 +181,8 @@ class Checker:
         if base.lower() == PACK_MANIFEST:
             self.fail(where, 'an asset pack manifest (packs are personal-use only, never shipped)')
         elif PACK_PICTURE_RE.search(where):
-            self.fail(where, 'a picture from an asset pack (named by a content key)')
+            self.fail(where, 'a picture from an asset pack or a sprite sheet export '
+                             '(named by a content or pose key)')
         elif PACK_AUDIO_DIR_RE.search(where) and (PACK_AUDIO_EXT_RE.search(base) or
                                                   data[:4] in PACK_AUDIO_MAGIC):
             self.fail(where, 'sound from an audio pack (packs are personal-use only, never '

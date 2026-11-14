@@ -92,7 +92,8 @@ set_target_properties(ct_boot PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY
 if(SDL2_FOUND)
     ct_game_exe(ct_sdl ${CMAKE_SOURCE_DIR}/frontend/main.c ${CMAKE_SOURCE_DIR}/frontend/saves.c
         ${CMAKE_SOURCE_DIR}/frontend/qol.c   # port: quality of life (qol.h)
-        ${CMAKE_SOURCE_DIR}/frontend/padtest.c)   # port: the controller test (padtest.h)
+        ${CMAKE_SOURCE_DIR}/frontend/padtest.c   # port: the controller test (padtest.h)
+        ${CMAKE_SOURCE_DIR}/frontend/pack_scene.c)   # port: asset packs in the scene
     # port: the game id names its saves folder, as for ct_sdl_engine
     get_filename_component(ct_game_id ${GAME_DIR} NAME)
     target_compile_definitions(ct_sdl PRIVATE CT_GAME_ID="${ct_game_id}")
@@ -441,6 +442,13 @@ if(SDL2_FOUND)
     # every frame hash matches a run without it. sdl_menu_hd2d does the
     # same through the HD-2D renderer where SDL's offscreen driver has
     # OpenGL (else it skips).
+    # port: asset packs with original art (docs/ASSET-PACKS.md): glTF models on
+    # the fair's map and the world map, the leader's poses exported as sheets,
+    # replaced by a smiley sheet cut back into a pack (2D and 3D), through
+    # the engine and the module; where SDL's offscreen driver has OpenGL.
+    add_test(NAME sdl_pack_art COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_pack_art.py
+        $<TARGET_FILE:ct_sdl_engine> $<TARGET_FILE:ct_game_module> ${GAME_DIR}/test/replay/leene_square.txt)
+    list(APPEND ct_game_tests sdl_pack_art)
     add_test(NAME sdl_menu COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_menu.py
         $<TARGET_FILE:ct_sdl> 300 150)
     add_test(NAME sdl_menu_hd2d COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_menu.py

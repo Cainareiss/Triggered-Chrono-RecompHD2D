@@ -35,6 +35,7 @@
 #define MAXC CT_SCENE_MAX_CELLS
 #define HMAX_CAP 8
 
+int s3d_cell_hooked(const ct_scene *s, int x, int y, s3d_mesh *m);   /* for scene3d_world.c */
 static s3d_cell_hook cell_hook;
 static void *cell_hook_user;
 
@@ -42,6 +43,21 @@ void s3d_set_cell_hook(s3d_cell_hook fn, void *user)
 {
     cell_hook = fn;
     cell_hook_user = user;
+}
+
+/* scene3d_world.c's way to the hook. */
+int s3d_cell_hooked(const ct_scene *s, int x, int y, s3d_mesh *m)
+{
+    return cell_hook && cell_hook(cell_hook_user, s, x, y, m);
+}
+
+static s3d_sprite_hook sprite_hook;
+static void *sprite_hook_user;
+
+void s3d_set_sprite_hook(s3d_sprite_hook fn, void *user)
+{
+    sprite_hook = fn;
+    sprite_hook_user = user;
 }
 
 void s3d_mesh_free(s3d_mesh *m)
@@ -126,6 +142,7 @@ typedef struct {
     int8_t run_a[MAXC][MAXC], run_b[MAXC][MAXC], run_h[MAXC][MAXC];   /* -1: not in a run */
     uint8_t solid[MAXC][MAXC];
     uint8_t boxed[MAXC][MAXC];      /* its floor is inside a box */
+    uint8_t hooked[MAXC][MAXC];     /* the cell hook drew it (or nothing) */
 } build_ctx;
 
 static build_ctx ctx;   /* the last build's, also for placing sprites */
@@ -372,7 +389,7 @@ static void emit_sides(build_ctx *c)
             float X = (float)(x + 1) * 16;
             for (int k = lo; k < hi; k++) {
                 int sy = b - k;   /* the wall cell at that height */
-                if (sy < 0 || c->empty[sy][src])
+                if (sy < 0 || c->empty[sy][src] || c->hooked[sy][src])
                     continue;
                 place p = east ? (place){{X, (float)(k + 1) * 16, (float)(z + 1) * 16},
                                          {0, 0, -1}, {0, -1, 0}, S3D_N_EAST, S3D_RAISED}
@@ -414,6 +431,8 @@ int s3d_build_map(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
         for (int x = 0; x < s->map_w; x++)
             if (!cell_hook || !cell_hook(cell_hook_user, s, x, y, &tmp))
                 emit_cell(c, x, y);
+            else
+                c->hooked[y][x] = 1;
     /* tmp holds every quad in cell order: copy the floor ones, then the
        raised ones (a hook's quads sort by their S3D_RAISED flag too). */
     for (int pass = 0; pass < 2; pass++) {
@@ -532,6 +551,21 @@ int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
             float up = b - cy < h ? (float)((b + 1) * 16 + 2 - o->y) : (float)(h * 16);
             foot_z += up;
             base_y = up;
+        }
+        s3d_sprite_image im;
+        if (sprite_hook && sprite_hook(sprite_hook_user, s, k, &im)) {
+            /* one quad for the whole picture, where its entries would be */
+            float st = p->stretch, h = (float)(foot_sy - im.y) + lift;
+            float tl[3] = {(float)(s->camera_x + im.x), base_y + h * st,
+                           foot_z + (float)(127 - o->piece[0]) * 0.004f};
+            const float U[3] = {(float)im.w / 8.0f, 0, 0}, V[3] = {0, -st * (float)im.h / 8.0f, 0};
+            s3d_emit(m, tl, U, V,
+                     (im.tile & (S3D_PACKED | S3D_ENTRY_MASK)) | S3D_OBJ |
+                         (uint32_t)S3D_N_SPRITE << S3D_NORMAL_SHIFT | S3D_RAISED,
+                     im.hflip, im.vflip);
+            for (int j = 0; j < o->n_pieces; j++)
+                owned[o->piece[j] & 127] = 1;
+            continue;
         }
         for (int j = 0; j < o->n_pieces; j++) {
             emit_piece(s, m, o->piece[j], foot_z, base_y, foot_sy, lift, p->stretch);

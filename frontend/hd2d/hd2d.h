@@ -119,10 +119,46 @@ void hd2d_pack_map(const uint16_t *map);
    or 4, read from the scene's vram and cgram. Returns the atlas entry
    index + 1 that replaces it, 0 for none. NULL: none. Sprites are
    replaced as whole OAM entries (the 2D path); the 3D path draws them as
-   8x8 pieces, so it doesn't replace them. */
+   8x8 pieces, so it doesn't replace them, except whole poses (scene3d.h
+   s3d_set_sprite_hook). */
 typedef int (*hd2d_tile_lookup)(void *user, unsigned chr, int pal, int bpp, const uint16_t *vram,
                                 const uint16_t *cgram);
 void hd2d_pack_tiles(hd2d_tile_lookup fn, void *user);
+
+/* port: models in the 3D diorama (asset packs' [[model]]): triangles in
+   world space (map px, y up, z the map's y), drawn with the map, lit by
+   the key light, in its shadow map and the ambient occlusion. Grouped in
+   parts, each a range of indices with one texture (or none) and a color
+   (multiplied by the vertex color, then the texture). */
+typedef struct {
+    float x, y, z, nx, ny, nz, u, v;
+    uint8_t rgba[4];
+} hd2d_mvertex;
+typedef struct {
+    int first, count;   /* indices */
+    int tex;            /* into hd2d_models.tex, -1 none */
+    int cutout;         /* drawn only where the texture's alpha is >= 0.5 */
+    float color[4];
+} hd2d_mpart;
+typedef struct {
+    const uint8_t *rgba;   /* w x h RGBA8, rows top first (glTF's v = 0) */
+    int w, h, linear;      /* linear: smooth, mipmapped; else nearest */
+} hd2d_mtex;
+typedef struct {
+    const hd2d_mvertex *v;
+    const uint32_t *idx;
+    const hd2d_mpart *part;
+    const hd2d_mtex *tex;
+    int nv, ni, nparts, ntex;
+} hd2d_models;
+/* The models' source. Whenever the 3D map is rebuilt (a new map, a
+   changed one, or hd2d_pack_models called again, as on F5) the renderer
+   calls fn twice: with out NULL before building the map's geometry (to
+   set its cell hook, scene3d.h), then with out after, to be filled for
+   this scene (its arrays valid until the next call). Returns the number of
+   triangles; 0: none. NULL: no models. */
+typedef int (*hd2d_model_fn)(void *user, const ct_scene *sc, hd2d_models *out);
+void hd2d_pack_models(hd2d_model_fn fn, void *user);
 
 /* port: an offset for the 3D diorama's camera (HD2D_3D), in degrees:
    dtilt more (> 0) or less tilted back than the preset's, dyaw turned
