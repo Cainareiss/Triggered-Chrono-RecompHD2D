@@ -10,7 +10,9 @@
  * into SNES pad bits and back-button actions. Then the device going away
  * and coming back, auto mode giving way to another controller, the
  * glyph set and the no-controller hint. No ROM, no window, Linux only for
- * the FIFO part.
+ * the FIFO part. port: rumble: the Deck's rumble command as SDL's driver
+ * builds it, the virtual controller's rumble only while it is on, and the
+ * frontend's pulse mixer (rumble_out.h).
  *
  * usage: test_hid_deck SCRATCH_DIR */
 #include <errno.h>
@@ -25,6 +27,7 @@
 #include "glyphs.h"
 #include "hid_deck.h"
 #include "input.h"
+#include "rumble_out.h"
 
 #if defined(__linux__) && !defined(__ANDROID__)
 #include <fcntl.h>
@@ -328,6 +331,29 @@ static void test_device(const char *dir)
         return;
     CHECK(!strcmp(SDL_GameControllerName(c), "ROG Ally Controller"), "name: %s",
           SDL_GameControllerName(c));
+    /* port: rumble: off, nothing is sent to the device; on, the
+       virtual pad's rumble becomes the Deck's rumble command, sent by a
+       thread (the FIFO refuses the feature report itself, which the
+       thread reports), the last setting followed by a stop. */
+    CHECK(SDL_GameControllerHasRumble(c), "the virtual pad offers rumble");
+    SDL_GameControllerRumble(c, 1000, 1000, 50);
+    SDL_Delay(30);
+    CHECK(hid_deck_rumble_writes() == 0, "rumble off: nothing sent");
+    hid_deck_set_rumble(1);
+    CHECK(SDL_GameControllerRumble(c, 2000, 3000, 40) == 0, "rumble on: taken");
+    for (int k = 0; k < 50 && hid_deck_rumble_writes() < 1; k++)
+        SDL_Delay(5);
+    CHECK(hid_deck_rumble_writes() >= 1, "rumble on: sent");
+    SDL_Delay(60);
+    SDL_GameControllerUpdate();   /* SDL's own stop when the 40 ms are up */
+    for (int k = 0; k < 50 && hid_deck_rumble_writes() < 2; k++)
+        SDL_Delay(5);
+    CHECK(hid_deck_rumble_writes() >= 2, "and stopped: %ld sent", hid_deck_rumble_writes());
+    hid_deck_set_rumble(0);
+    long sent = hid_deck_rumble_writes();
+    SDL_GameControllerRumble(c, 4000, 4000, 50);
+    SDL_Delay(30);
+    CHECK(hid_deck_rumble_writes() == sent, "rumble off again: nothing sent");
     CHECK(SDL_GameControllerGetVendor(c) == 0x28de && SDL_GameControllerGetProduct(c) == 0x12fd,
           "vendor:product %04x:%04x", SDL_GameControllerGetVendor(c),
           SDL_GameControllerGetProduct(c));
@@ -462,10 +488,52 @@ static void test_device(const char *dir)
 }
 #endif
 
+/* port: the rumble command's bytes (SDL_hidapi_steamdeck.c's
+   RumbleJoystick: FeatureReportMsg / MsgSimpleRumbleCmd after report
+   number 0) and the mixer. */
+static void test_rumble(void)
+{
+    uint8_t b[HID_DECK_RUMBLE_LEN];
+    memset(b, 0xAA, sizeof b);
+    hid_deck_rumble_report(b, 0x1234, 0xABCD);
+    static const uint8_t want[12] = {0x00, 0xEB, 0x00, 0x00, 0x00, 0x00,
+                                     0x34, 0x12, 0xCD, 0xAB, 0x02, 0x00};
+    CHECK(!memcmp(b, want, sizeof want), "rumble report header %02X %02X ... %02X %02X", b[0],
+          b[1], b[6], b[7]);
+    int rest = 0;
+    for (int k = 12; k < HID_DECK_RUMBLE_LEN; k++)
+        rest |= b[k];
+    CHECK(!rest, "the rest of the report is zero");
+
+    rumble_pulse p[2] = {{1000, 100, 10000, 4000}, {1050, 300, 6000, 9000}};
+    uint16_t lo, hi;
+    rumble_mix(p, 1, 1000, &lo, &hi);
+    CHECK(lo == 10000 && hi == 4000, "a pulse starts at full strength: %u %u", lo, hi);
+    rumble_mix(p, 1, 1030, &lo, &hi);
+    CHECK(lo == 10000, "and holds it a little: %u", lo);
+    rumble_mix(p, 1, 1099, &lo, &hi);
+    CHECK(lo > 2400 && lo < 3000, "then fades to a quarter: %u", lo);
+    rumble_mix(p, 1, 1100, &lo, &hi);
+    CHECK(lo == 0 && hi == 0, "and ends: %u %u", lo, hi);
+    rumble_mix(p, 1, 999, &lo, &hi);
+    CHECK(lo == 0, "not before it starts");
+    rumble_mix(p, 2, 1060, &lo, &hi);
+    CHECK(lo > 6000 && lo < 10000 && hi == 9000, "two: the stronger of each motor: %u %u", lo, hi);
+    CHECK(rumble_level_scale(RUMBLE_OFF) == 0 && rumble_level_scale(RUMBLE_LIGHT) > 0 &&
+              rumble_level_scale(RUMBLE_LIGHT) < rumble_level_scale(RUMBLE_MEDIUM) &&
+              rumble_level_scale(RUMBLE_MEDIUM) < rumble_level_scale(RUMBLE_STRONG) &&
+              rumble_level_scale(RUMBLE_STRONG) == 100,
+          "levels scale up");
+    CHECK(!strcmp(rumble_level_value(RUMBLE_LIGHT), "light") &&
+              !strcmp(rumble_level_value(RUMBLE_STRONG), "strong"),
+          "settings.ini names");
+}
+
 int main(int argc, char **argv)
 {
     test_parse();
     test_matching();
+    test_rumble();
 #ifdef HAVE_FIFO
     if (SDL_Init(SDL_INIT_GAMECONTROLLER)) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());

@@ -149,8 +149,8 @@ precedence = "override"
 SPDX-FileCopyrightText = "2011 Google Inc. (Roboto, Christian Robertson)"
 SPDX-License-Identifier = "Apache-2.0"
 
-# The Deck-format hidraw reader: its report parsing is ported from SDL's
-# Steam Deck driver (SDL_hidapi_steamdeck.c, 2023 Max Maisel) and
+# The Deck-format hidraw reader: its report parsing and rumble command are
+# ported from SDL's Steam Deck driver (SDL_hidapi_steamdeck.c, 2023 Max Maisel) and
 # steam/controller_structs.h (2020 Valve Corporation), zlib license, notice
 # kept in the file (THIRD_PARTY.md). The file's own header says the same.
 [[annotations]]

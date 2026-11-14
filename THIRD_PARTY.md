@@ -43,11 +43,15 @@ reads them to populate `funcs.toml` / `unresolved.toml`.
   `src/joystick/hidapi/SDL_hidapi_steamdeck.c` (Copyright (C) 2023 Max Maisel) and
   `src/joystick/hidapi/steam/controller_structs.h` (Copyright (C) 2020 Valve
   Corporation), zlib license (`LICENSES/Zlib.txt`). Rewritten as a byte-offset parser
-  in `hid_deck_parse`, without SDL's hidapi layer, lizard-mode reports, rumble or
-  sensors; the zlib notice is kept at the top of the file, which is
+  in `hid_deck_parse`, without SDL's hidapi layer, lizard-mode reports or
+  sensors. The simple rumble command (`hid_deck_rumble_report`: `ID_TRIGGER_RUMBLE_CMD`
+  in a `FeatureReportMsg` / `MsgSimpleRumbleCmd`, filled as
+  `HIDAPI_DriverSteamDeck_RumbleJoystick` fills it) is ported from the same two files
+  for simulated rumble. The zlib notice is kept at the top of the file, which is
   `GPL-3.0-or-later AND Zlib`. It reads the emulated Steam Deck controller that
-  InputPlumber offers on Bazzite handhelds (docs/HANDHELD.md, "Bazzite /
-  InputPlumber"). The rest of the file is ours.
+  InputPlumber offers on Bazzite handhelds, and sends it rumble only while rumble is
+  on (docs/HANDHELD.md, "Bazzite / InputPlumber"). The rest of the file (the rumble
+  thread included) is ours.
 
 ### `third_party/glyphs/`
 

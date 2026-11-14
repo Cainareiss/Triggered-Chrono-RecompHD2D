@@ -8,10 +8,13 @@
 #include <stdlib.h>
 
 #include "menu.h"
+#include "rumble_out.h"   /* the rumble step */
 
 enum {
     T_A, T_B, T_X, T_Y, T_UP, T_DOWN, T_LEFT, T_RIGHT, T_STICK, T_L1, T_R1, T_L2, T_R2,
-    T_VIEW, T_MENU, T_BACK_L, T_BACK_R, T_CHORD, T_COUNT
+    T_VIEW, T_MENU, T_BACK_L, T_BACK_R, T_CHORD,
+    T_RUMBLE,   /* last: once the rest are done, a pulse, and A or B says whether it was felt */
+    T_COUNT
 };
 
 /* Labels name the controller's buttons by position: south A, east B
@@ -35,7 +38,10 @@ static const char *const labels[T_COUNT] = {
     [T_BACK_L] = "Left back button: quick save",
     [T_BACK_R] = "Right back button: quick load",
     [T_CHORD] = "Click both sticks together: menu, then B",
+    [T_RUMBLE] = "Rumble: did you feel it? A = yes, B = no",
 };
+
+#define RUMBLE_EVERY_MS 2000   /* the pulse again until it is answered */
 
 static struct {
     int on;
@@ -43,7 +49,32 @@ static struct {
     long menu_opens0;
     int menu_known;
     Uint32 all_done_at;
+    Uint32 pulsed_at;   /* the rumble step's last pulse (0: none yet) */
+    int pulses;
 } P;
+
+/* Every step before the rumble one is done: it is the one asked. */
+static int rumble_asked(void)
+{
+    for (int k = 0; k < T_RUMBLE; k++)
+        if (!P.done[k])
+            return 0;
+    return !P.done[T_RUMBLE];
+}
+
+static void rumble_answer(int felt)
+{
+    if (!P.pulses)
+        return;   /* no pulse yet: nothing to answer */
+    fprintf(stderr, "ct_sdl: pad test: rumble: %s (after %d pulse%s)\n",
+            felt ? "felt it (A: yes)" : "not felt (B: no)", P.pulses, P.pulses == 1 ? "" : "s");
+    P.done[T_RUMBLE] = 1;
+    rumble_out_stop_all();
+    int left = 0;
+    for (int k = 0; k < T_COUNT; k++)
+        left += !P.done[k];
+    fprintf(stderr, "ct_sdl: pad test: ok %s (%d left)\n", labels[T_RUMBLE], left);
+}
 
 static void tick_off(int t)
 {
@@ -68,6 +99,12 @@ void padtest_event(const SDL_Event *ev)
 {
     if (!P.on)
         return;
+    if (ev->type == SDL_CONTROLLERBUTTONDOWN && rumble_asked() &&
+        (ev->cbutton.button == SDL_CONTROLLER_BUTTON_A ||
+         ev->cbutton.button == SDL_CONTROLLER_BUTTON_B)) {
+        rumble_answer(ev->cbutton.button == SDL_CONTROLLER_BUTTON_A);
+        return;
+    }
     if (ev->type == SDL_CONTROLLERBUTTONDOWN) {
         switch (ev->cbutton.button) {
         case SDL_CONTROLLER_BUTTON_A: tick_off(T_A); break;
@@ -121,6 +158,17 @@ int padtest_tick(long menu_opens)
     } else if (menu_opens > P.menu_opens0) {
         tick_off(T_CHORD);
     }
+    if (rumble_asked()) {   /* a pulse now, and again every 2 s until answered */
+        Uint32 now = SDL_GetTicks();
+        if (!P.pulsed_at || now - P.pulsed_at >= RUMBLE_EVERY_MS) {
+            if (!P.pulses)
+                fprintf(stderr, "ct_sdl: pad test: rumble: a pulse every 2 s; A if you feel it, "
+                                "B if not\n");
+            rumble_out_test(now);
+            P.pulsed_at = now | 1;
+            P.pulses++;
+        }
+    }
     int all = 1;
     for (int k = 0; k < T_COUNT; k++)
         all &= P.done[k];
@@ -139,7 +187,8 @@ void padtest_draw(int w, int h)
     for (int k = 0; k < T_COUNT && current < 0; k++)
         if (!P.done[k])
             current = k;
-    const char *footer = current < 0 ? "All done! Closing in a few seconds."
-                                     : "Press each control once, in any order.";
+    const char *footer = current < 0          ? "All done! Closing in a few seconds."
+                         : current == T_RUMBLE ? "A pulse every 2 seconds: A if you feel it, B if not."
+                                               : "Press each control once, in any order.";
     menu_draw_checklist(w, h, "Controller test", T_COUNT, labels, P.done, current, footer);
 }

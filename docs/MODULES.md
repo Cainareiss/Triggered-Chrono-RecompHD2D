@@ -70,6 +70,16 @@ The player's preferences come through `sched.h` too (`sched_pref`): the always-r
 `SCHED_PREF_ALWAYS_RUN`, and return 0 when it is off. Module ABI 6 added that API: a
 module with those patches needs it from the engine, so an older module is rebuilt.
 
+Simulated rumble (`runtime/rumble.h`) is the other way round: patches tell the engine
+something. They call `rumble_event(low, high, ms)` or `rumble_event_for(player, ...)`,
+which only queue an event (nothing in the machine changes), and the module may export a
+frame hook, `ct_module_info.rumble`, called at each frame edge while rumble is on, that
+raises events of its own and says whether the game is in a menu or other quiet screen, so
+the engine's generic detectors (screen shake, flashes, low booms in the sound) keep still
+there. `game/ct/rumble.c` patches the battle's damage routine, two event commands and the
+time gate (docs/SCENE.md, "Rumble"); each returns 0. Module ABI 8 added that API and
+export. The gato_win replay's frame hashes are the same with rumble on and off.
+
 ## Guarantees
 
 - `module_parity` (ctest, needs the ROM): the engine plus the module matches the static

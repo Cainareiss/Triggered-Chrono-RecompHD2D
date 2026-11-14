@@ -71,5 +71,6 @@ int ct_module_load(const char *path, const char **err)
     }
     ct_tables_install(&m->tables);   /* the module stays loaded for good */
     ct_scene_set_source(m->scene);
+    ct_rumble_set_source(m->rumble);
     return 0;
 }

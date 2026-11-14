@@ -19,7 +19,11 @@
  * opens it read-only and feeds an SDL virtual game controller with the
  * device's name, vendor and product, so the rest of the frontend (pads,
  * bindings, glyphs, back buttons, co-op, menu) uses it like any other.
- * It never writes to the device.
+ * It writes to the device only with rumble on (hid_deck_set_rumble), and
+ * only the Deck's simple rumble command: then the node is opened
+ * read-write, and the virtual controller's rumble (SDL_GameControllerRumble)
+ * becomes that command, sent as a feature report from a thread of its own
+ * (InputPlumber passes it on to the handheld's motors: docs/HANDHELD.md).
  *
  * Modes (settings.ini hid_deck=auto|on|off): auto uses it only while SDL
  * has no other game controller (Steam's virtual pad, a USB pad), and
@@ -78,6 +82,18 @@ int hid_deck_instance(void);
 const char *hid_deck_describe(void);
 /* Close the device and detach the virtual controller. */
 void hid_deck_close(void);
+
+/* Rumble (port): on, the device is opened read-write and the virtual
+   controller's rumble is sent to it; off (the default), read-only and no
+   rumble. Applies to the device open now too. */
+void hid_deck_set_rumble(int on);
+/* For tests: how many rumble commands the thread has sent (or tried). */
+long hid_deck_rumble_writes(void);
+/* The Deck's simple rumble command (ID_TRIGGER_RUMBLE_CMD, $EB) as the
+   feature report SDL's Deck driver sends: report number 0 first, then the
+   64-byte message. low drives the left (heavy) motor, high the right. */
+#define HID_DECK_RUMBLE_LEN 65
+void hid_deck_rumble_report(uint8_t out[HID_DECK_RUMBLE_LEN], uint16_t low, uint16_t high);
 
 /* For tests: the sysfs class directory and the device directory read
    instead of /sys/class/hidraw and /dev (NULL: those). */

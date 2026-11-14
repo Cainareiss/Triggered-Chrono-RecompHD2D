@@ -113,6 +113,7 @@ flatpak run io.github.jerbanpls.CtRecomp --hd2d
 | `--no-save` | Don't load or write the save file: in-game saves last only until you quit |
 | `--pack NAME` | Load an asset pack (replacement art; repeat to stack packs, first wins), remembered for next time; `--pack none` loads none (see [Asset packs](#asset-packs)) |
 | `--pack-dump NAME` | While you play, save each new tile and sprite into asset pack NAME |
+| `--rumble off\|light\|medium\|strong` | Rumble strength for this run (see [Rumble](#rumble)); `--log-rumble` prints every pulse |
 
 ## First launch
 
@@ -189,6 +190,33 @@ Deck, ROG Ally and most others) works as pad 1. Buttons are mapped by position:
 You can plug a controller in or out while the game runs. A Nintendo pad is read by
 position too: its bottom button (Nintendo's B) is SNES B.
 
+### Rumble
+
+The SNES had no rumble, so the game makes it from what happens, on any controller with
+motors (Xbox, PlayStation, Switch Pro, the Steam Deck, Steam's virtual pad under Steam
+Input, and a ROG Ally on Bazzite outside Steam: [HANDHELD.md](HANDHELD.md#bazzite--inputplumber-rog-ally-legion-go--outside-steam)).
+Short pulses only, and none in menus or text:
+
+| What | How it feels |
+| --- | --- |
+| A party member is hit | a thump on that player's controller, stronger the more of their HP it took; harder when a hit knocks them out |
+| Your hit lands on an enemy | a light tap; a critical hit sharper; a tech or magic heavier |
+| An enemy goes down | a heavier thud after the hit |
+| An earthquake (the field shaking in a scene) | a low rumble while it lasts |
+| Leene's Bell, a time gate | a long low toll; a swell as you go through |
+| The screen shaking or flashing (any scene) | a short pulse |
+
+**Rumble** in the menu's **Controls** tab (`settings.ini` `rumble=`) is `off`, `light`
+(the default), `medium` or `strong`; **Test rumble** under it plays a pulse. **Rumble from
+low sounds** (`rumble_sounds=on`, off by default) adds a pulse for explosions and thuds in
+the sound. In co-op each player feels their own party member's hits; the enemy's side
+goes to whoever made the hit, and scene events to everyone. Rumble stops while the game is
+paused, fast-forwarding or behind the menu, when you quit, and when a controller is
+unplugged. It changes nothing in the game: a run with it on is the same, frame for frame,
+as one with it off. `--rumble LEVEL` sets it for one run and `--log-rumble` prints every
+pulse. The hits come from the built game code (as for always run): with `--interp-only`
+only the screen's shaking and flashing rumble.
+
 ### Quick keys and back buttons
 
 | Key | Back button (Steam Deck) | What it does |
@@ -235,7 +263,7 @@ Closing the menu with a button doesn't press it in the game.
 | --- | --- |
 | Look | The renderer (original or HD-2D, from the next start), the HD-2D look, the picture shape, the 3D diorama's camera tilt and zoom, its render scale (AMD FSR 1), sharpening and ambient occlusion, gyro aiming and its strength, the debug view |
 | Display | Fullscreen, frame pacing (timer or vsync), the menu's text size, integer scale and the CRT look (original picture), the battery mode |
-| Controls | What each back button does, the quick keys (pick a row, then press the key), the Steam Controller driver, fast-forward (on until turned off) and its speed, always run, turbo per button, pausing in the background or when a controller goes |
+| Controls | What each back button does, the quick keys (pick a row, then press the key), the Steam Controller driver, fast-forward (on until turned off) and its speed, always run, turbo per button, pausing in the background or when a controller goes, rumble and **Test rumble** |
 | Co-op | Co-op auto / on / off, which player plays which party member, the experimental split screen |
 | Packs | The asset packs found in your packs folder: off, or on at a place in the order; reload; dump new art |
 | Save states | Load the quick slot, slots 1-4 or the resume point (with a picture of each; loading closes the menu), save to them (press twice), resume on start, take a screenshot |
@@ -483,6 +511,8 @@ All in the [menu](#the-menu) (Display, Controls and Save states tabs) and in
 | `crt` | `off` | the original picture only |
 | `integer_scale` | `on` | the original picture only |
 | `always_run` | `off` | |
+| `rumble` | `light` | `off`, `medium`, `strong` ([Rumble](#rumble)) |
+| `rumble_sounds` | `off` | pulses for low booms in the sound too |
 
 `--qol-set KEY=VALUE` sets one for a single run; `--states-dir DIR` keeps the states
 somewhere else; `--load-state FILE` starts from a state.

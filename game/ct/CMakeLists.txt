@@ -294,6 +294,15 @@ add_test(NAME always_run_module COMMAND $<TARGET_FILE:ct_boot_engine>
     --expect-wram 8900:1D2D=E0)
 list(APPEND ct_game_tests always_run always_run_off always_run_module)
 
+# port: simulated rumble (game/ct/rumble.c, runtime/rumble.h): the events
+# ct_boot --log-rumble lists on the gato_win replay are the battle's hits,
+# crits and the kill at the frames HP changes, and Leene's Bell; the
+# frame hashes with it equal those without; the module logs the same.
+add_test(NAME rumble_replay COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_rumble_replay.py
+    $<TARGET_FILE:ct_boot> $<TARGET_FILE:ct_boot_engine> $<TARGET_FILE:ct_game_module>
+    ${GAME_DIR}/test/replay/gato_win.txt 13450)
+list(APPEND ct_game_tests rumble_replay)
+
 # Battle sprites must not drop out on alternate frames (Gato's fight from
 # its start; broken until OAMADD kept its own reload value, test_hw_map).
 add_test(NAME battle_no_flicker COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_flicker.py
