@@ -59,6 +59,13 @@ int qol_setting(const char *key, const char *val);   /* settings.ini; 1 if it wa
 void qol_settings_write(FILE *f);
 int qol_option(int argc, char **argv, int *k);        /* --qol options; 1 if it was one, -1 bad */
 void qol_usage(FILE *out);
+/* port: the menu's rows for these settings and verbs (settings.h): save
+   state slots with their pictures, resume, screenshots (tab "Save
+   states"); integer scale, CRT, battery ("Display"); fast-forward, always
+   run, turbo, pausing ("Controls"). Their settings.ini lines stay
+   qol_setting's; a change saves through the registry's saver. Once, at
+   start-up, after main.c's categories. */
+void qol_register_settings(void);
 
 /* After the window, audio and the save RAM are set up, before the first
    frame. states: save states on (off with --no-save); replay: a --script
@@ -93,6 +100,8 @@ void qol_plain_draw(SDL_Renderer *ren, SDL_Texture *frame, int w, int h);
 int qol_plain_shot(SDL_Renderer *ren, SDL_Texture *frame, int w, int h, const char *path);
 /* The HD-2D preset to save in settings.ini: the user's, not the battery's. */
 int qol_user_preset(int current);
+/* port: the user picked a look (the menu): it beats the battery's from now on. */
+void qol_preset_chosen(void);
 void qol_osd(const char *msg);
 
 /* Verbs (input actions). Slots: 0 the quick slot, 1-4. */

@@ -7,6 +7,7 @@
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -22,6 +23,8 @@
 #include "saves.h"
 #include "savestate.h"
 #include "sched.h"
+#include "settings.h"   /* port: the menu's rows (qol_register_settings) */
+#include "pngio.h"      /* port: the save state thumbnails, for the menu */
 
 /* ---- settings (settings.ini; qol_setting) ---- */
 
@@ -1290,4 +1293,223 @@ int qol_plain_shot(SDL_Renderer *ren, SDL_Texture *frame, int w, int h, const ch
     if (t)
         SDL_DestroyTexture(t);
     return r;
+}
+
+/* ---- port: the menu's rows (settings.h; frontend/menu.h) ----
+
+   settings.ini stays qol_setting's and qol_settings_write's: the rows
+   have no key, and a change saves through host.save_settings (the
+   registry's saver, main.c's settings_save, which writes ours). */
+
+#define BOTH(field, v) (set.field = (v), saved.field = set.field)
+
+static int q_states(void *u) { (void)u; return states_on; }
+static int q_plain(void *u) { (void)u; return !hd2d; }
+
+/* Save state slots: 0 quick, 1-4, SLOT_AUTO the resume point. */
+static int slot_exists(int s)
+{
+    char p[4200];
+    slot_path(p, sizeof p, s, "state");
+    return !access(p, F_OK);
+}
+
+static int q_can_load(void *u) { return states_on && !recording && slot_exists((int)(intptr_t)u); }
+
+static const char *q_slot_text(void *u, char *buf, size_t n)
+{
+    char p[4200];
+    struct stat st;
+    slot_path(p, sizeof p, (int)(intptr_t)u, "state");
+    if (!states_on)
+        snprintf(buf, n, "Off (--no-save)");
+    else if (want_save == (int)(intptr_t)u)   /* not possible at this frame: soon after */
+        snprintf(buf, n, "Saved as the game goes on");
+    else if (stat(p, &st))
+        snprintf(buf, n, "Empty");
+    else
+        strftime(buf, n, "%b %d, %H:%M", localtime(&st.st_mtime));
+    return buf;
+}
+
+/* The slot's picture, read again when the file changes. */
+static const uint8_t *q_thumb(void *u, int *w, int *h, unsigned *gen)
+{
+    static struct { time_t mtime; off_t size; int w, h; uint8_t *bgrx; } cache[SLOT_AUTO + 1];
+    int s = (int)(intptr_t)u;
+    char p[4200];
+    struct stat st;
+    slot_path(p, sizeof p, s, "png");
+    if (!states_on || stat(p, &st) || !slot_exists(s))
+        return NULL;
+    if (!cache[s].bgrx || cache[s].mtime != st.st_mtime || cache[s].size != st.st_size) {
+        int iw, ih;
+        uint8_t *rgba = pngio_read_rgba(p, &iw, &ih, NULL);
+        free(cache[s].bgrx);
+        cache[s].bgrx = NULL;
+        if (!rgba)
+            return NULL;
+        for (int k = 0; k < iw * ih; k++) {   /* R G B A -> B G R x, in place */
+            uint8_t r = rgba[k * 4];
+            rgba[k * 4] = rgba[k * 4 + 2];
+            rgba[k * 4 + 2] = r;
+        }
+        cache[s].bgrx = rgba;
+        cache[s].w = iw, cache[s].h = ih;
+        cache[s].mtime = st.st_mtime, cache[s].size = st.st_size;
+    }
+    *w = cache[s].w, *h = cache[s].h;
+    *gen = (unsigned)cache[s].mtime ^ (unsigned)cache[s].size;
+    return cache[s].bgrx;
+}
+
+static void q_load(void *u) { qol_load_slot((int)(intptr_t)u); }
+static void q_save(void *u)
+{
+    int s = (int)(intptr_t)u;
+    if (s >= 1 && s <= 4)
+        slot = s;   /* the slot Shift + F6 / F9 use from now on */
+    qol_save_slot(s);
+}
+static int q_get_resume(void *u) { (void)u; return set.resume == ON; }
+static void q_set_resume(void *u, int v) { (void)u; BOTH(resume, v ? ON : OFF); }
+static void q_shot(void *u) { (void)u; qol_screenshot(); }
+static const char *q_pictures(void *u, char *buf, size_t n)
+{
+    (void)u;
+    qol_pictures_dir(buf, n);
+    return buf;
+}
+
+/* Display */
+static int q_get_integer(void *u) { (void)u; return set.integer; }
+static void q_set_integer(void *u, int v) { (void)u; BOTH(integer, v); }
+static int q_get_crt(void *u) { (void)u; return set.crt; }
+static void q_set_crt(void *u, int v) { (void)u; BOTH(crt, v); }
+static const char *const batt_labels[3] = {"Off", "Light", "Saver"};
+static int q_get_batt(void *u) { (void)u; return set.battery; }
+static void q_set_batt(void *u, int v)
+{
+    (void)u;
+    BOTH(battery, v);
+    batt_checked = 0;   /* look again at the next frame */
+}
+
+/* Controls */
+static int q_get_speed(void *u) { (void)u; return set.ffwd_speed; }
+static void q_set_speed(void *u, int v) { (void)u; BOTH(ffwd_speed, v); }
+static int q_get_ffwd(void *u) { (void)u; return ffwd_toggle; }
+static void q_set_ffwd(void *u, int v)
+{
+    (void)u;
+    if (!v != !ffwd_toggle)
+        qol_ffwd_toggle();
+}
+static int q_get_run(void *u) { (void)u; return set.always_run; }
+static void q_set_run(void *u, int v)
+{
+    (void)u;
+    BOTH(always_run, v);
+    sched_set_pref(SCHED_PREF_ALWAYS_RUN, set.always_run);
+}
+static const uint16_t turbo_bits[6] = {PAD_A, PAD_B, PAD_X, PAD_Y, PAD_L, PAD_R};
+static int q_get_turbo(void *u) { return (set.turbo & turbo_bits[(intptr_t)u]) != 0; }
+static void q_set_turbo(void *u, int v)
+{
+    uint16_t b = turbo_bits[(intptr_t)u];
+    BOTH(turbo, (uint16_t)(v ? set.turbo | b : set.turbo & ~b));
+}
+static const char *const tri_labels[3] = {"Auto", "On", "Off"};
+static int q_get_pfocus(void *u) { (void)u; return set.pause_focus; }
+static void q_set_pfocus(void *u, int v)
+{
+    (void)u;
+    BOTH(pause_focus, v);
+    focus_pause = set.pause_focus == AUTO ? !game_mode : set.pause_focus == ON;
+}
+static int q_get_ppad(void *u) { (void)u; return set.pause_pad == ON; }
+static void q_set_ppad(void *u, int v) { (void)u; BOTH(pause_pad, v ? ON : OFF); }
+
+void qol_preset_chosen(void) { user_preset = -1; }
+
+void qol_register_settings(void)
+{
+    static const char *const loads[] = {"Quick slot", "Slot 1", "Slot 2", "Slot 3", "Slot 4",
+                                        "Resume point"};
+    settings_register(&(setting){.label = "Load", .category = "Save states", .type = SETTING_INFO,
+                                 .flags = SETTING_HEADING});
+    for (int s = 0; s <= SLOT_AUTO; s++)
+        settings_register(&(setting){
+            .label = loads[s], .category = "Save states", .type = SETTING_ACTION,
+            .text = q_slot_text, .run = q_load, .enabled = q_can_load, .preview = q_thumb,
+            .user = (void *)(intptr_t)s, .flags = SETTING_CLOSE,
+            .help = s == SLOT_AUTO ? "Where you were when you last quit."
+                                   : "Load it and play on. (F9 the quick slot; Shift+F9 the "
+                                     "slot picked with F7)"});
+    static const char *const saves[] = {"Save to the quick slot", "Save to slot 1",
+                                        "Save to slot 2", "Save to slot 3", "Save to slot 4"};
+    settings_register(&(setting){.label = "Save", .category = "Save states", .type = SETTING_INFO,
+                                 .flags = SETTING_HEADING});
+    for (int s = 0; s <= 4; s++)
+        settings_register(&(setting){
+            .label = saves[s], .category = "Save states", .type = SETTING_ACTION,
+            .text = q_slot_text, .run = q_save, .enabled = q_states, .preview = q_thumb,
+            .user = (void *)(intptr_t)s, .flags = SETTING_CONFIRM,
+            .help = "The whole game as it is now. Press twice: it replaces what is there. (F6)"});
+    settings_register(&(setting){.label = "", .category = "Save states", .type = SETTING_INFO,
+                                 .flags = SETTING_HEADING});
+    settings_register(&(setting){
+        .label = "Resume where you left off", .category = "Save states", .type = SETTING_BOOL,
+        .get = q_get_resume, .set = q_set_resume, .enabled = q_states,
+        .help = "On quitting, the game is kept; the next start offers to go on from there."});
+    settings_register(&(setting){.label = "Take a screenshot", .category = "Save states",
+                                 .type = SETTING_ACTION, .run = q_shot,
+                                 .help = "The picture without this menu, as a PNG. (F8)"});
+    settings_register(&(setting){.label = "Screenshots folder", .category = "Save states",
+                                 .type = SETTING_INFO, .text = q_pictures});
+
+    settings_register(&(setting){
+        .label = "Integer scale", .category = "Display", .type = SETTING_BOOL,
+        .get = q_get_integer, .set = q_set_integer, .enabled = q_plain,
+        .help = "The original picture in whole multiples, sharp; off: as large as fits."});
+    settings_register(&(setting){.label = "CRT look", .category = "Display", .type = SETTING_BOOL,
+                                 .get = q_get_crt, .set = q_set_crt, .enabled = q_plain,
+                                 .help = "Scanlines and a soft glow over the original picture. "
+                                         "(Ctrl+R)"});
+    settings_register(&(setting){
+        .label = "Battery mode", .category = "Display", .type = SETTING_ENUM,
+        .options = batt_labels, .count = 3, .get = q_get_batt, .set = q_set_batt,
+        .help = "On battery: Light, the lighter HD-2D look; Saver, also a 30 Hz picture."});
+
+    settings_register(&(setting){.label = "Speed and turbo", .category = "Controls",
+                                 .type = SETTING_INFO, .flags = SETTING_HEADING});
+    settings_register(&(setting){.label = "Fast-forward", .category = "Controls",
+                                 .type = SETTING_BOOL, .get = q_get_ffwd, .set = q_set_ffwd,
+                                 .flags = SETTING_NO_SAVE,
+                                 .help = "On until turned off (the ` key); hold L5 or Tab for "
+                                         "a moment's worth."});
+    settings_register(&(setting){.label = "Fast-forward speed", .category = "Controls",
+                                 .type = SETTING_INT, .min = 2, .max = 4, .step = 1,
+                                 .format = "%dx", .get = q_get_speed, .set = q_set_speed});
+    settings_register(&(setting){.label = "Always run", .category = "Controls",
+                                 .type = SETTING_BOOL, .get = q_get_run, .set = q_set_run,
+                                 .help = "Run without holding the button; hold it to walk. "
+                                         "(Caps Lock)"});
+    static const char *const turbo_labels[6] = {"Turbo A", "Turbo B", "Turbo X", "Turbo Y",
+                                                "Turbo L", "Turbo R"};
+    for (int k = 0; k < 6; k++)
+        settings_register(&(setting){
+            .label = turbo_labels[k], .category = "Controls", .type = SETTING_BOOL,
+            .get = q_get_turbo, .set = q_set_turbo, .user = (void *)(intptr_t)k,
+            .help = "Held, the button presses itself 15 times a second. (Ctrl+T toggles the "
+                    "buttons held)"});
+    settings_register(&(setting){.label = "Pausing", .category = "Controls", .type = SETTING_INFO,
+                                 .flags = SETTING_HEADING});
+    settings_register(&(setting){
+        .label = "Pause in the background", .category = "Controls", .type = SETTING_ENUM,
+        .options = tri_labels, .count = 3, .get = q_get_pfocus, .set = q_set_pfocus,
+        .help = "When another window has the focus. Auto: on, except in Steam's Game Mode."});
+    settings_register(&(setting){.label = "Pause when a controller goes", .category = "Controls",
+                                 .type = SETTING_BOOL, .get = q_get_ppad, .set = q_set_ppad,
+                                 .help = "Unplugged, or out of battery."});
 }

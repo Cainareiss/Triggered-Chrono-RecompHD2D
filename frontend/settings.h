@@ -43,6 +43,7 @@ enum {
     SETTING_CONFIRM = 2,   /* action: a second press runs it ("press again") */
     SETTING_NO_SAVE = 4,   /* a change doesn't write settings.ini (session only) */
     SETTING_HEADING = 8,   /* info: a section heading */
+    SETTING_CLOSE = 16,    /* action: the menu closes after it runs (a state load) */
 };
 
 typedef struct setting {

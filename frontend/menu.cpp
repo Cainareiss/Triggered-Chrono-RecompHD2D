@@ -181,6 +181,8 @@ void activate(const setting *s, int index)
         M.confirm = -1;
         if (s->run)
             s->run(s->user);
+        if (s->flags & SETTING_CLOSE)
+            menu_close();
         break;
     case SETTING_KEY:
         M.capture = index;
@@ -660,6 +662,11 @@ void build_ui(float W, float H)
     float list_y0 = y, list_y1 = p1.y - footer_h - help_h;
     int idx[MAX_ROWS], sel;
     int n = current_rows(idx, &sel);
+    /* A tab with pictures (the save states) keeps a column on the right for them. */
+    bool pic_col = false;
+    for (int k = 0; k < n && !pic_col; k++)
+        pic_col = settings_at(idx[k])->preview != NULL;
+    float lx1 = pic_col ? x1 - (x1 - x0) * 0.34f : x1;
     float rh = px * 1.95f, head_h = px * 1.7f;
     /* row positions, for scrolling */
     float tops[MAX_ROWS + 1], acc = 0;
@@ -685,36 +692,36 @@ void build_ui(float W, float H)
             M.scroll = bot - view;
         M.ensure_visible = 0;
     }
-    if (ImGui::IsMouseHoveringRect(ImVec2(x0, list_y0), ImVec2(x1, list_y1)))
+    if (ImGui::IsMouseHoveringRect(ImVec2(x0, list_y0), ImVec2(lx1, list_y1)))
         M.scroll -= ImGui::GetIO().MouseWheel * rh;
     M.scroll = fmaxf(0.0f, fminf(M.scroll, acc - view));
     if (acc <= view)
         M.scroll = 0;
-    dl->PushClipRect(ImVec2(x0 - px * 0.3f, list_y0), ImVec2(x1 + px * 0.3f, list_y1), true);
+    dl->PushClipRect(ImVec2(x0 - px * 0.3f, list_y0), ImVec2(lx1 + px * 0.3f, list_y1), true);
     for (int k = 0; k < n; k++) {
         float ry = list_y0 + tops[k] - M.scroll;
         float h = tops[k + 1] - tops[k];
         if (ry + h < list_y0 || ry > list_y1)
             continue;
-        draw_row(dl, k, idx[k], k == sel, ImVec2(x0 - px * 0.3f, ry), x1 - x0 + px * 0.6f, h, px);
+        draw_row(dl, k, idx[k], k == sel, ImVec2(x0 - px * 0.3f, ry), lx1 - x0 + px * 0.6f, h, px);
     }
     if (!n)
         text_at(dl, px, ImVec2(x0, list_y0 + px), C_DIM, "Nothing here yet.");
     dl->PopClipRect();
     if (acc > view) {   /* a scroll bar */
-        float bx = x1 + px * 0.45f, frac = view / acc;
+        float bx = lx1 + px * 0.45f, frac = view / acc;
         float by0 = list_y0 + (view - view * frac) * (M.scroll / (acc - view));
         dl->AddRectFilled(ImVec2(bx, list_y0), ImVec2(bx + px * 0.12f, list_y1), IM_COL32(255, 255, 255, 18),
                           px * 0.06f);
         dl->AddRectFilled(ImVec2(bx, by0), ImVec2(bx + px * 0.12f, by0 + view * frac),
                           IM_COL32(255, 255, 255, 80), px * 0.06f);
         if (M.scroll > 1.0f)
-            dl->AddRectFilledMultiColor(ImVec2(x0, list_y0), ImVec2(x1, list_y0 + px * 0.6f),
+            dl->AddRectFilledMultiColor(ImVec2(x0, list_y0), ImVec2(lx1, list_y0 + px * 0.6f),
                                         IM_COL32(16, 19, 27, 230), IM_COL32(16, 19, 27, 230),
                                         IM_COL32(16, 19, 27, 0), IM_COL32(16, 19, 27, 0));
         if (M.scroll < acc - view - 1.0f)   /* more below: fade the cut-off row */
             dl->AddRectFilledMultiColor(ImVec2(x0 - px * 0.3f, list_y1 - px * 1.2f),
-                                        ImVec2(x1 + px * 0.3f, list_y1),
+                                        ImVec2(lx1 + px * 0.3f, list_y1),
                                         IM_COL32(16, 19, 27, 0), IM_COL32(16, 19, 27, 0),
                                         IM_COL32(16, 19, 27, 250), IM_COL32(16, 19, 27, 250));
     }
@@ -725,14 +732,24 @@ void build_ui(float W, float H)
     const setting *cur = sel >= 0 ? settings_at(idx[sel]) : NULL;
     update_preview(cur);
     float text_x1 = x1;
-    if (cur && M.preview_of == cur && M.preview) {
-        /* the picture to the right of the help, and up over the list */
-        float ih = help_h + px * 5.0f, iw = ih * M.preview->Width / M.preview->Height;
-        ImVec2 a(x1 - iw, hy + help_h - ih - px * 0.3f);
-        dl->AddRectFilled(ImVec2(a.x - 3, a.y - 3), ImVec2(x1 + 3, a.y + ih + 3), IM_COL32(0, 0, 0, 255),
-                          px * 0.15f);
-        dl->AddImage(M.preview->GetTexRef(), a, ImVec2(x1, a.y + ih));
-        text_x1 = a.x - px * 0.8f;
+    if (pic_col) {
+        /* the selected row's picture, 8:7 as the console's, in its column */
+        float cx0 = lx1 + px * 1.3f, cw = x1 - cx0, ch = cw * 7.0f / 8.0f;
+        ImVec2 a(cx0, list_y0 + px * 0.5f), b(x1, a.y + ch);
+        dl->AddRectFilled(a, b, IM_COL32(0, 0, 0, 255), px * 0.2f);
+        if (cur && M.preview_of == cur && M.preview) {
+            float iw = cw, ih = cw * M.preview->Height / M.preview->Width;
+            if (ih > ch)
+                ih = ch, iw = ch * M.preview->Width / M.preview->Height;
+            ImVec2 ia(a.x + (cw - iw) * 0.5f, a.y + (ch - ih) * 0.5f);
+            dl->AddImage(M.preview->GetTexRef(), ia, ImVec2(ia.x + iw, ia.y + ih));
+        } else {
+            const char *t = "No picture";
+            ImVec2 ts = text_size(px * 0.8f, t);
+            text_at(dl, px * 0.8f, ImVec2(a.x + (cw - ts.x) * 0.5f, a.y + (ch - ts.y) * 0.5f), C_FAINT,
+                    t);
+        }
+        dl->AddRect(a, b, C_LINE, px * 0.2f, 1.0f);
     }
     if (cur) {
         char help[512];

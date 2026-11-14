@@ -994,19 +994,23 @@ static const char *const renderer_labels[2] = {"Original", "HD-2D"};
 static int get_renderer(void *u) { (void)u; return renderer_saved >= 0 ? renderer_saved : hd2d_mode > 0; }
 static void set_renderer(void *u, int v) { (void)u; renderer_saved = v; }
 static int on_plain(void *u) { (void)u; return !hd2d_mode; }
-static int never(void *u) { (void)u; return 0; }
 
 /* Look */
 static const char *const preset_labels[HD2D_PRESETS] = {"Original", "HD-2D subtle", "HD-2D",
                                                         "HD-2D Steam Deck", "HD-2D 3D diorama"};
 static const char *preset_values[HD2D_PRESETS];
-static int get_preset(void *u) { (void)u; return preset_forced >= 0 ? preset_forced : hd2d_preset(); }
+static int get_preset(void *u)   /* the user's look, not the battery mode's (QOL) */
+{
+    (void)u;
+    return preset_forced >= 0 ? preset_forced : qol_user_preset(hd2d_preset());
+}
 static void set_preset(void *u, int v)
 {
     (void)u;
     preset_forced = -1;   /* the user's choice now */
     hd2d_set_preset(v);
     preset_saved = 1;     /* beats the device default */
+    qol_preset_chosen();  /* and the battery mode's */
     if (frontend_ready && hd2d_mode)
         sched_set_behind(hd2d_wants_behind());
 }
@@ -1494,28 +1498,9 @@ static void register_settings(void)
     /* Packs: packs_refresh, each time the menu opens */
     settings_on_refresh(packs_refresh);
 
-    /* Save states, turbo, always run, integer scale, CRT, battery: until
-       the quality-of-life code (frontend/qol.h) registers the real ones,
-       greyed-out rows say they are coming. */
-#ifndef CT_QOL_H
-    static const char *const soon = "Coming with the quality-of-life update.";
-    settings_register(&(setting){.label = "Integer scale", .category = "Display",
-                                 .type = SETTING_BOOL, .get = never, .enabled = never, .help = soon});
-    settings_register(&(setting){.label = "CRT look", .category = "Display", .type = SETTING_BOOL,
-                                 .get = never, .enabled = never, .help = soon});
-    settings_register(&(setting){.label = "Battery saver", .category = "Display",
-                                 .type = SETTING_BOOL, .get = never, .enabled = never, .help = soon});
-    settings_register(&(setting){.label = "Turbo", .category = "Controls", .type = SETTING_BOOL,
-                                 .get = never, .enabled = never, .help = soon});
-    settings_register(&(setting){.label = "Always run", .category = "Controls",
-                                 .type = SETTING_BOOL, .get = never, .enabled = never, .help = soon});
-    settings_register(&(setting){.label = "Resume where you left off", .category = "Save states",
-                                 .type = SETTING_BOOL, .get = never, .enabled = never, .help = soon});
-    static const char *const slot_names[] = {"Quick save", "Slot 1", "Slot 2", "Slot 3", "Slot 4"};
-    for (int k = 0; k < 5; k++)
-        settings_register(&(setting){.label = slot_names[k], .category = "Save states",
-                                     .type = SETTING_ACTION, .enabled = never, .help = soon});
-#endif
+    /* Save states, screenshots, fast-forward, turbo, always run, pausing,
+       integer scale, CRT, battery: QOL's own rows (qol.h). */
+    qol_register_settings();
 
     /* Audio */
     settings_register(&(setting){.key = "volume", .label = "Volume", .category = "Audio",
@@ -1618,8 +1603,11 @@ static void poll_input(long f)
     while (SDL_PollEvent(&ev)) {
         if (!menu_is_open() && touch_event(&ev, f))
             continue;   /* port: a touch, used by the overlay */
-        if (qol_event(&ev, f))
-            continue;   /* port: QOL keys, the pause and the resume prompt */
+        /* port: QOL keys, the pause and the resume prompt; while the menu
+           is open, only what it watches of the window and the pads */
+        if ((!menu_is_open() || ev.type == SDL_WINDOWEVENT ||
+             ev.type == SDL_CONTROLLERDEVICEREMOVED) && qol_event(&ev, f))
+            continue;
         if (log_input && (ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) && !ev.key.repeat)
             fprintf(stderr, "ct_sdl: frame %ld key %s %s (scancode %d)\n", f,
                     SDL_GetScancodeName(ev.key.keysym.scancode),
@@ -2153,32 +2141,37 @@ static void menu_test_tick(void)
     }
 }
 
-/* port: the menu is open (menu.h): the game waits at this frame edge, the
-   sound is paused, and the picture is drawn again each tick with the
+/* port: the menu is open (menu.h): the game waits between two frames
+   (main's loop; the frame the menu action came in has had its input set),
+   the sound is paused, and the picture is drawn again each tick with the
    menu over it until it closes. No frame runs, so the game's state, its
-   frame count and the hashes are as they were. */
+   frame count and the hashes are as they were, unless a save state is
+   loaded from it. Between frames is where QOL takes and loads states:
+   qol_after_frame each tick carries out what the menu asked for. */
 static void menu_run(long f)
 {
     long frames_at = sched_frame_count();
     long ticks = 0;
+    int loaded = 0;
     fprintf(stderr, "ct_sdl: frame %ld: menu open\n", f);
     if (audio)
         SDL_PauseAudioDevice(audio, 1);
     bindings_keys_release();   /* fast-forward and the like: not held through it */
+    qol_ffwd_set(0);
     uint64_t last = SDL_GetPerformanceCounter();
     while (running && menu_is_open()) {
         menu_test_tick();
-        poll_input(f);
+        poll_input(sched_frame_count());
         uint64_t now = SDL_GetPerformanceCounter();
         unsigned ms = fast ? 16u : (unsigned)((now - last) * 1000 / perf_freq);
         last = now;
         menu_tick(ms);
+        long before = sched_frame_count();
+        qol_after_frame();   /* QOL: a save, load or screenshot asked for in the menu */
+        loaded |= sched_frame_count() != before;
         if (!running || !menu_is_open())
             break;
-        if (hd2d_mode)
-            present_hd2d();
-        else
-            present_plain(turn_tag(sched_frame()));
+        present_now();
         ticks++;
         if (!fast) {   /* about 60 ticks a second */
             uint64_t end = last + perf_freq / 60;
@@ -2188,9 +2181,10 @@ static void menu_run(long f)
     }
     menu_close();
     menu_ticks_total += ticks;
-    menu_frames_advanced += sched_frame_count() - frames_at;
-    fprintf(stderr, "ct_sdl: frame %ld: menu closed after %ld ticks; frame count %ld (was %ld)\n",
-            f, ticks, sched_frame_count(), frames_at);
+    if (!loaded)
+        menu_frames_advanced += sched_frame_count() - frames_at;
+    fprintf(stderr, "ct_sdl: frame %ld: menu closed after %ld ticks; frame count %ld (was %ld)%s\n",
+            f, ticks, sched_frame_count(), frames_at, loaded ? ", a state loaded" : "");
     if (audio && playing)
         SDL_PauseAudioDevice(audio, 0);
     menu_hold_mask = 1;
@@ -2291,11 +2285,7 @@ static void on_frame(long f)
     }
     saves_frame(f);   /* port */
     poll_input(f);
-    menu_test_frame(f);   /* port: --menu-test */
-    while (menu_is_open() && running) {   /* port: the menu: the game waits here */
-        menu_run(f);
-        poll_input(f);   /* the pads as they are now */
-    }
+    menu_test_frame(f);   /* port: --menu-test (the menu opens after this frame: main) */
     set_input(f + 1);
 }
 
@@ -2957,6 +2947,10 @@ int main(int argc, char **argv)
        loop only keeps the scheduler running. port: QOL pauses it (qol_idle)
        and saves and loads states between frames. */
     while (running && (frames < 0 || sched_frame_count() < frames)) {
+        if (menu_is_open()) {   /* port: the menu (menu.h): the game waits */
+            menu_run(sched_frame_count());
+            continue;
+        }
         if (qol_paused()) {
             qol_idle();
             continue;

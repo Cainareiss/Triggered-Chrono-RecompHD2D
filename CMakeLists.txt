@@ -436,7 +436,7 @@ if(SDL2_FOUND)
     # folder, settings, turbo, the plain picture's rectangle
     add_executable(test_qol test/test_qol.c frontend/qol.c frontend/saves.c)
     target_include_directories(test_qol PRIVATE test)
-    target_link_libraries(test_qol ct_input ct_hd2d ct_sched ct_tables_empty)
+    target_link_libraries(test_qol ct_input ct_hd2d ct_sched ct_tables_empty ct_packs)   # port: ct_packs: the menu's thumbnails
     target_compile_options(test_qol PRIVATE ${CT_WARN})
     add_test(NAME qol COMMAND test_qol)
     # port: the settings registry the menu shows (frontend/settings.h)

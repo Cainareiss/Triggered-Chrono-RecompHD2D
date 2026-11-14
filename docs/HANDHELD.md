@@ -129,11 +129,14 @@ the 7-inch screen: large text, the Deck's or the Ally's button pictures at the b
 | L1 / R1 | The previous / next tab |
 
 The tabs: **Look** (renderer, HD-2D look, aspect, the 3D camera's tilt and zoom, gyro),
-**Display** (fullscreen, frame pacing, text size), **Controls** (what each back button
-does, the quick keys), **Co-op** (on / auto / off, who plays which party member),
-**Packs**, **Save states** (with save states), **Audio** (volume, mute in the
-background) and **About** (version, licenses, Quit). Every change is saved at once.
-The touchscreen works the menu too (tap a row; tap the left or right of a value).
+**Display** (fullscreen, frame pacing, text size, integer scale, CRT, battery mode),
+**Controls** (what each back button does, the quick keys, fast-forward, always run,
+turbo, pausing), **Co-op** (on / auto / off, who plays which party member), **Packs**,
+**Save states** (load and save the slots, with a picture of each; resume; screenshot),
+**Audio** (volume, mute in the background) and **About** (version, licenses, Quit).
+Every change is saved at once. The game waits between two frames while the menu is open,
+so a state saved from it is (nearly always) the picture behind it. The touchscreen works
+the menu too (tap a row; tap the left or right of a value).
 [USER-GUIDE.md](USER-GUIDE.md#the-menu) has the details.
 
 ### Back buttons and grips

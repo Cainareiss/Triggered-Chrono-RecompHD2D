@@ -9,9 +9,11 @@ Runs the frontend unpaced with a settings folder of its own, twice:
 - without the menu, writing per-frame hashes (--hash-log);
 - with a --menu-test script that opens the menu with the menu action at
   frame OPEN_AT, moves with the d-pad to the Look row and changes it,
-  goes to the Audio tab with R1 and turns the volume down, then closes
-  the menu with B.
+  goes to the Audio tab with R1 and turns the volume down, back to the
+  Save states tab with L1 and saves to slot 1 (A twice), then closes the
+  menu with B.
 Passes when the second run's settings.ini has the new look and volume,
+slot 1 has a state and its picture,
 the frame count did not move while the menu was open ("0 frames ran
 while open", "frame count N (was N)"), and the two runs' hashes match on
 every frame: the menu changes nothing in the game.
@@ -28,7 +30,7 @@ import tempfile
 
 def run(frontend, args, xdg, env_extra):
     env = dict(os.environ, XDG_DATA_HOME=xdg, SDL_AUDIODRIVER="dummy", **env_extra)
-    return subprocess.run([frontend, "--fast", "--no-save"] + args, env=env,
+    return subprocess.run([frontend, "--fast"] + args, env=env,
                           capture_output=True, text=True, timeout=600)
 
 
@@ -62,6 +64,16 @@ def main() -> int:
                         "button rightshoulder",
                         "button rightshoulder",
                         "button dpleft",          # volume 100 -> 95
+                        "button leftshoulder",    # Audio -> Save states
+                        "button dpdown",          # Quick slot -> ... Save to slot 1
+                        "button dpdown",
+                        "button dpdown",
+                        "button dpdown",
+                        "button dpdown",
+                        "button dpdown",
+                        "button dpdown",
+                        "button a",               # "Press again to confirm"
+                        "button a",               # saved (now, or once the game goes on)
                         "wait 2",
                         "button b",               # closes the menu
                     ]) + "\n")
@@ -90,6 +102,11 @@ def main() -> int:
             if want not in ini.split("\n"):
                 print(f"test_menu: settings.ini has no {want}:\n{ini}")
                 return 1
+        found = [os.path.join(d, f) for d, _, fs in os.walk(os.path.join(tmp, "menu"))
+                 for f in fs if f in ("slot1.state", "slot1.png")]
+        if len(found) != 2:
+            print(f"test_menu: slot 1 not saved from the menu: {found}\n" + err[-800:])
+            return 1
         a = open(logs["plain"]).read().splitlines()
         b = open(logs["menu"]).read().splitlines()
     if len(a) != len(b) or len(a) < int(frames) - 1:
@@ -99,7 +116,7 @@ def main() -> int:
         if x != y:
             print(f"test_menu: frame {x.split()[0]} differs with the menu: {x} vs {y}")
             return 1
-    print(f"test_menu: menu open {m.group(1)} ticks at frame {open_at}, settings saved, "
+    print(f"test_menu: menu open {m.group(1)} ticks at frame {open_at}, settings and slot 1 saved, "
           f"{len(a)} frame hashes unchanged{' (HD-2D)' if hd2d else ''}")
     return 0
 

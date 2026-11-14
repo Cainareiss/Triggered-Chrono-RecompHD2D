@@ -234,11 +234,11 @@ Closing the menu with a button doesn't press it in the game.
 | Tab | What is in it |
 | --- | --- |
 | Look | The renderer (original or HD-2D, from the next start), the HD-2D look, the picture shape, the 3D diorama's camera tilt and zoom, gyro aiming and its strength, the debug view |
-| Display | Fullscreen, frame pacing (timer or vsync), the menu's text size |
-| Controls | What each back button does, the quick keys (pick a row, then press the key), the Steam Controller driver |
+| Display | Fullscreen, frame pacing (timer or vsync), the menu's text size, integer scale and the CRT look (original picture), the battery mode |
+| Controls | What each back button does, the quick keys (pick a row, then press the key), the Steam Controller driver, fast-forward (on until turned off) and its speed, always run, turbo per button, pausing in the background or when a controller goes |
 | Co-op | Co-op auto / on / off, which player plays which party member, the experimental split screen |
 | Packs | The asset packs found in your packs folder: off, or on at a place in the order; reload; dump new art |
-| Save states | Arrives with save states |
+| Save states | Load the quick slot, slots 1-4 or the resume point (with a picture of each; loading closes the menu), save to them (press twice), resume on start, take a screenshot |
 | Audio | The volume, muting while another window has the focus |
 | About | The version, the licenses of everything in it, the bring-your-own-ROM note, and Quit (press twice) |
 
@@ -468,7 +468,8 @@ on the `--save` file when you give one.
 
 ### Settings
 
-All in `settings.ini`, with their defaults:
+All in the [menu](#the-menu) (Display, Controls and Save states tabs) and in
+`settings.ini`, with their defaults:
 
 | Setting | Default | |
 | --- | --- | --- |
