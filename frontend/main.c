@@ -1503,6 +1503,8 @@ static int get_volume(void *u) { (void)u; return volume; }
 static void set_volume(void *u, int v) { (void)u; volume = v; }
 static int get_mute_unfocused(void *u) { (void)u; return mute_unfocused; }
 static void set_mute_unfocused(void *u, int v) { (void)u; mute_unfocused = v; }
+static int get_audio_interp(void *u) { (void)u; return sched_audio_interp(); }
+static void set_audio_interp(void *u, int v) { (void)u; sched_set_audio_interp(v); }
 
 /* About */
 static const char *version_text(void *u, char *buf, size_t n)
@@ -1730,6 +1732,14 @@ static void register_settings(void)
                                  .category = "Audio", .type = SETTING_BOOL,
                                  .get = get_mute_unfocused, .set = set_mute_unfocused,
                                  .help = "Silent while another window has the focus."});
+    static const char *const interp_labels[] = {"Gaussian (console)", "Cubic", "Sinc"};
+    static const char *const interp_values[] = {"gaussian", "cubic", "sinc"};
+    settings_register(&(setting){
+        .key = "audio_interp", .label = "Sample interpolation", .category = "Audio",
+        .type = SETTING_ENUM, .options = interp_labels, .values = interp_values, .count = 3,
+        .get = get_audio_interp, .set = set_audio_interp,
+        .help = "How the sound chip blends its samples. Gaussian is the console's own, slightly "
+                "muffled; cubic and sinc are crisper."});
 
     /* About */
     settings_register(&(setting){.label = APP_NAME, .category = "About", .type = SETTING_INFO,

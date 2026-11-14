@@ -106,5 +106,47 @@ int main(void)
     }
     CHECK(peak == 0x7F, "attack peaks at 7FFh: ENVX %02X", peak);
     dsp_free(d);
+
+    /* port: dsp_interp. A sample alternating +7 / -7 (the highest
+       frequency it can hold), played at its own rate: the console's
+       Gaussian filter smooths it, cubic and sinc pass it at full height.
+       Gaussian is the default, and switching back gives the same output
+       as never having switched. */
+    CHECK(dsp_interp == DSP_INTERP_GAUSS, "Gaussian by default: %d", dsp_interp);
+    int16_t first[256];
+    int peaks[3];
+    for (int mode = 0; mode < 4; mode++) {
+        dsp_set_interp(mode == 3 ? DSP_INTERP_GAUSS : mode);
+        d = voice(10, 0);
+        memset(ram + 0x201, 0x79, 8);   /* nibbles 7, -7, 7, -7 ... */
+        dsp_write(d, V0ADSR1, 0x00);
+        dsp_write(d, V0GAIN, 0x7F);
+        dsp_write(d, V0VOLL, 0x7F);
+        dsp_write(d, V0VOLR, 0x7F);
+        dsp_write(d, MVOLL, 0x7F);
+        dsp_write(d, MVOLR, 0x7F);
+        dsp_write(d, KON, 0x01);
+        int top = 0, same = 1;
+        for (int k = 0; k < 512; k++) {
+            dsp_cycle(d);
+            int v = d->sampleBuffer[(d->sampleOffset - 1) * 2];
+            if (k >= 256) {
+                if (abs(v) > top)
+                    top = abs(v);
+                if (mode == 0)
+                    first[k - 256] = (int16_t)v;
+                else if (mode == 3 && first[k - 256] != v)
+                    same = 0;
+            }
+        }
+        if (mode < 3)
+            peaks[mode] = top;
+        else
+            CHECK(same, "Gaussian again after cubic and sinc: the same samples");
+        dsp_free(d);
+    }
+    CHECK(peaks[1] > peaks[0] * 5 / 4 && peaks[2] > peaks[0] * 5 / 4,
+          "cubic and sinc keep the high frequency: peaks %d %d, Gaussian %d", peaks[1],
+          peaks[2], peaks[0]);
     return th_report("dsp");
 }

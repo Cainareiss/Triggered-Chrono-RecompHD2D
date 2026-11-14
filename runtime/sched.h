@@ -70,6 +70,14 @@ long sched_run_frame(void);
    About 532.5 per frame. Up to 8192 are kept; older ones are dropped. */
 int sched_audio_take(int16_t *stereo, int max);
 
+/* port: how the DSP interpolates its voices' samples, a host preference
+   that save states and hashes don't depend on as long as it is
+   SCHED_INTERP_GAUSS (the hardware's filter, the default). Cubic and sinc
+   sound less muffled than the console. */
+enum { SCHED_INTERP_GAUSS = 0, SCHED_INTERP_CUBIC = 1, SCHED_INTERP_SINC = 2 };
+void sched_set_audio_interp(int mode);
+int sched_audio_interp(void);
+
 /* Last rendered frame: SCHED_WIDTH x SCHED_HEIGHT pixels, bytes B G R 0. */
 const uint8_t *sched_frame(void);
 

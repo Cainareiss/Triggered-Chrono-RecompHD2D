@@ -94,6 +94,12 @@ void dsp_reset(Dsp* dsp);
 void dsp_cycle(Dsp* dsp);
 // ct-recomp: called with each 32 kHz stereo output sample (NULL: none).
 extern void (*dsp_output_hook)(int16_t l, int16_t r);
+// ct-recomp: the voices' sample interpolation, a host option that save
+// states don't record: DSP_INTERP_GAUSS (the hardware's, the default),
+// DSP_INTERP_CUBIC or DSP_INTERP_SINC.
+enum { DSP_INTERP_GAUSS = 0, DSP_INTERP_CUBIC = 1, DSP_INTERP_SINC = 2 };
+extern int dsp_interp;
+void dsp_set_interp(int mode);
 uint8_t dsp_read(Dsp* dsp, uint8_t adr);
 void dsp_write(Dsp* dsp, uint8_t adr, uint8_t val);
 void dsp_getSamples(Dsp* dsp, int16_t* sampleData, int samplesPerFrame, int numChannels);

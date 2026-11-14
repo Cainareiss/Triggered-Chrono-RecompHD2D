@@ -32,6 +32,14 @@ and $F4-$F7 reads go through the host (`apu_inport_read`), so a CPU write
 landing after the middle of the reading cycle isn't seen yet.
 `dsp_output_hook` hands every 32 kHz output sample to the host
 (`runtime/sched.c`) instead of the fixed 534-sample frame buffer.
+`dsp_set_interp` (port, a host option): besides the hardware's Gaussian
+interpolation (the default, unchanged), a voice's samples can be
+interpolated with a 4-point Catmull-Rom cubic over the same four samples,
+or with an 8-tap Lanczos-windowed sinc two samples later (the taps after
+the point must be decoded already), from a 32-sample history per voice
+kept outside `Dsp` (save states don't change). `dsp_getSample` calls
+`interpOther` when the option isn't Gaussian; `dsp_decodeBrr` and key-on
+feed and clear the history.
 
 ## License
 

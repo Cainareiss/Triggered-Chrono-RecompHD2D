@@ -119,6 +119,8 @@
  * --require-render exit 1 if the last frame is all black
  * --wav FILE       write the audio (the DSP output, 32 kHz stereo) to FILE
  * --require-audio  exit 1 if every audio sample of the run is zero
+ * --audio-interp M port: the DSP's voice interpolation, gaussian (the
+ *                  console's, default), cubic or sinc (sched.h)
  * --behind         also draw the PPU's behind G-buffer (sched_behind), as
  *                  the HD-2D renderer does, to measure what it costs
  * --prov           also draw the PPU's provenance G-buffer (sched_prov), as
@@ -658,6 +660,12 @@ int main(int argc, char **argv)
             require_audio = 1;
         else if (!strcmp(argv[k], "--wav") && k + 1 < argc)
             wav_path = argv[++k];
+        else if (!strcmp(argv[k], "--audio-interp") && k + 1 < argc) {   /* port */
+            const char *m = argv[++k];
+            sched_set_audio_interp(!strcmp(m, "cubic") ? SCHED_INTERP_CUBIC
+                                   : !strcmp(m, "sinc") ? SCHED_INTERP_SINC
+                                                        : SCHED_INTERP_GAUSS);
+        }
         else if (!strcmp(argv[k], "--input") && k + 1 < argc) {
             if (replay_add(&input, argv[++k])) {
                 fprintf(stderr, "ct_boot: bad --input %s\n", argv[k]);
@@ -839,7 +847,7 @@ int main(int argc, char **argv)
             expect_pc[n_expect++] = (uint32_t)strtoul(argv[++k], NULL, 16);
         else {
             fprintf(stderr, "usage: ct_boot [--frames N] [--dump DIR] [--shot-every N DIR] [--thumbs FILE] [--resync REF LAG OUT] [--needed-hw FILE] "
-                            "[--min-nmis K] [--require-render] [--wav FILE] "
+                            "[--min-nmis K] [--require-render] [--wav FILE] [--audio-interp gaussian|cubic|sinc] "
                             "[--require-audio] [--input F1-F2:BUTTONS] [--script FILE] "
                             "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--scene FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE] [--behind] [--coop] [--coop-chars L] [--coop-chars3 L] [--coop-split] [--always-run] [--log-rumble FILE] [--rumble-sound] [--shot F:PATH] [--prov] [--save-state F:PATH] [--load-state PATH] [--state-roundtrip N]\n");
             return 2;
