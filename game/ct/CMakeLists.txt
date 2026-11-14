@@ -308,6 +308,19 @@ add_test(NAME coop_split COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_coo
     $<TARGET_FILE:ct_boot_engine> ${GAME_DIR}/test/replay/coop_split.txt
     --module $<TARGET_FILE:ct_game_module>)
 list(APPEND ct_game_tests coop_battle_chars coop_split)
+# port: the hand-off guard with pad 2 mashing A across it
+# (replay/coop_mash.txt): the press held through the hand-off is not one,
+# so her menu closes on the two after it (14479), not at 14470.
+add_test(NAME coop_mash COMMAND ct_boot --frames 14500 --coop
+    --script ${GAME_DIR}/test/replay/coop_mash.txt --expect-wram 14474:95D5=1
+    --expect-wram 14500:95D5=FF)
+# port: right in Crono's menu with the girl ready: one player moves to her
+# menu ($95D5 = 1 by 14406); with co-op she is player 2's, so it stays.
+add_test(NAME coop_cycle COMMAND ct_boot --frames 14420 --coop --script
+    ${GAME_DIR}/test/replay/coop_battle.txt --input 14400-14403:right --expect-wram 14420:95D5=0)
+add_test(NAME coop_cycle_off COMMAND ct_boot --frames 14420 --script
+    ${GAME_DIR}/test/replay/coop_battle.txt --input 14400-14403:right --expect-wram 14420:95D5=1)
+list(APPEND ct_game_tests coop_mash coop_cycle coop_cycle_off)
 
 if(SDL2_FOUND)
     # The frontend itself, headless (SDL dummy drivers), unpaced. port: every

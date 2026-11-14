@@ -134,6 +134,7 @@
 #include "saves.h"    /* port: save RAM on disk */
 #include "sched.h"
 #include "touch.h"      /* port: on-screen touch controller */
+#include "hd2d/osd_font.h" /* port: the co-op turn tag */
 #include "touch_gl.h"
 
 #define RATE 48000
@@ -304,6 +305,38 @@ static touch_rect picture_rect(int w, int h)
 
 /* port: the plain path: the frame integer-scaled and centered, the touch
    overlay over it. No logical size: SDL would clamp touches to it. */
+/* port: co-op: "P2" / "P3" over the picture while the game waits on that
+   player (sched_turn_player: the battle menu that player has is open),
+   by the command windows at the bottom left, in the 5x7 font at 2x. */
+static const uint8_t *turn_tag(const uint8_t *fb)
+{
+    static uint8_t out[SCHED_WIDTH * SCHED_HEIGHT * 4];
+    int p = coop_players > 1 ? sched_turn_player() : -1;
+    if (p < 1)
+        return fb;
+    memcpy(out, fb, sizeof out);
+    char text[3] = {'P', (char)('1' + p), 0};
+    static const uint8_t col[4][3] = {{0, 0, 0}, {80, 200, 255}, {255, 190, 60}, {120, 255, 120}};
+    int x0 = 6, y0 = 136;
+    for (int y = y0 - 3; y < y0 + 17; y++)   /* a dark box */
+        for (int x = x0 - 3; x < x0 + 26; x++) {
+            uint8_t *q = out + ((size_t)y * SCHED_WIDTH + x) * 4;
+            q[0] = q[0] / 4, q[1] = q[1] / 4, q[2] = q[2] / 4;
+        }
+    for (int k = 0; text[k]; k++) {
+        const uint8_t *rows = osd_glyph(text[k]);
+        for (int r = 0; r < 7; r++)
+            for (int b = 0; b < 5; b++)
+                if (rows[r] & (0x10 >> b))
+                    for (int d = 0; d < 4; d++) {
+                        int x = x0 + (k * 6 + b) * 2 + (d & 1), y = y0 + r * 2 + (d >> 1);
+                        uint8_t *q = out + ((size_t)y * SCHED_WIDTH + x) * 4;
+                        q[0] = col[p][2], q[1] = col[p][1], q[2] = col[p][0];
+                    }
+    }
+    return out;
+}
+
 /* port: split screen (--coop-split): this frame's second view, if any. */
 static int split_on;
 static uint8_t view2_px[SCHED_WIDTH * SCHED_HEIGHT * 4];
@@ -940,12 +973,22 @@ static void on_frame(long f)
         if (split_on != was)
             fprintf(stderr, "ct_sdl: frame %ld: split screen %s\n", f, split_on ? "on" : "off");
     }
+    {   /* port: co-op: whose turn, on screen in HD-2D (the plain picture has the tag) */
+        static int last_turn = -1;
+        int t = coop_players > 1 ? sched_turn_player() : -1;
+        if (t != last_turn && t > 0 && hd2d_mode) {
+            char msg[32];
+            snprintf(msg, sizeof msg, "P%d's turn", t + 1);
+            hd2d_osd(msg);
+        }
+        last_turn = t;
+    }
     if (hd2d_mode) {
         present_hd2d();
         /* The PPU's behind G-buffer only while the look uses it. */
         sched_set_behind(hd2d_wants_behind());
     } else {
-        present_plain(fb);   /* port: with the touch overlay */
+        present_plain(turn_tag(fb));   /* port: with the touch overlay, the co-op tag */
     }
     if (n_shots)
         take_shots(f);

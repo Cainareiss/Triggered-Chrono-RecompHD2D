@@ -217,6 +217,19 @@ controller.
   With a third controller, `coop_chars3=3` gives party member 3 to player 3 (pad 3).
   If a controller is unplugged, its characters go back to player 1 at once, and the
   battle doesn't wait.
+  - *One character each:* set `coop_chars=2` and `coop_chars3=3`. Player 2 then plays
+    party member 2 and player 3 plays member 3. With only two controllers, player 1
+    keeps member 3.
+  - While a menu belongs to another player, a tag in its colour (**P2** or **P3**) shows
+    by the command windows. In HD-2D, a short message names whose turn it is.
+  - Left and right in the command menu move to the next ready party member, but each
+    player only moves among their own. With none of yours ready, the menu stays where
+    it is.
+  - Only the battle menus are shared. Everything else (the field, the X menu, shops,
+    dialogue) takes pad 1, and so does the soft reset (L + R + Select + Start, held
+    together). Player 2 can't reset the game.
+  - Characters are assigned by party slot, not by who they are. If the party changes,
+    player 2 plays whoever is now in their slots.
 - **Field:** player 2 walks party member 2 with the d-pad (hold **B** to run). Walls stop
   them. When player 2 lets go, the character walks back into line behind the leader
   and follows as usual. It snaps back into line if it gets stuck, wanders more than a

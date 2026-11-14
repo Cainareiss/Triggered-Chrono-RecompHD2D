@@ -87,6 +87,7 @@ int ct_patch_coop_battle_pad(CPU *cpu)
     uint8_t *w = bus_wram();
     uint8_t slot = w[BTL_MENU_SLOT];
     int owner = slot < 3 ? sched_slot_player(slot) : 0;   /* the frontend's choice */
+    sched_set_turn_player(slot < 3 ? owner : -1);         /* for the frontend's tag */
     uint16_t held = owner ? remap_pad(w, sched_joypad_read(owner))
                           : (uint16_t)(w[PAD_HELD] | w[PAD_HELD + 1] << 8);
     if (owner != battle_owner) {
@@ -99,6 +100,44 @@ int ct_patch_coop_battle_pad(CPU *cpu)
     w[PAD_HELD + 1] = (uint8_t)(held >> 8);
     return 0;
 }
+
+/* $C111E1 / $C11218 BattleMenu_CycleActivePcPrev / Next (m1x0): left and
+   right in the command menu move it to the next ready member ($A6D9-$A6DB,
+   cursor $A6DD; $FF/$80 = not ready). With more than one player each
+   cycles only among their own: the other players' ready members are
+   hidden from the list while the routine runs (then put back), so with
+   none of one's own ready it stays where it is. */
+#define BTL_READY     0xA6D9
+static int cycling;
+
+static int cycle_own(CPU *cpu, uint16_t entry)
+{
+    if (cycling || sched_players() < 2)
+        return 0;
+    uint8_t *w = bus_wram();
+    uint8_t slot = w[BTL_MENU_SLOT], saved[3];
+    if (slot >= 3)
+        return 0;
+    int me = sched_slot_player(slot);
+    for (int k = 0; k < 3; k++) {
+        saved[k] = w[BTL_READY + k];
+        if (!(saved[k] & 0x80) && saved[k] < 3 && sched_slot_player(saved[k]) != me)
+            w[BTL_READY + k] = 0x80;
+    }
+    cycling = 1;   /* the routine itself, from its entry, to its return */
+    cpu->PB = 0xC1;
+    cpu->PC = entry;
+    ct_interp_rest(cpu, cpu->S);
+    cycling = 0;
+    for (int k = 0; k < 3; k++)
+        w[BTL_READY + k] = saved[k];
+    return 1;
+}
+
+int ct_patch_coop_cycle_prev(CPU *cpu);
+int ct_patch_coop_cycle_prev(CPU *cpu) { return cycle_own(cpu, 0x11E1); }
+int ct_patch_coop_cycle_next(CPU *cpu);
+int ct_patch_coop_cycle_next(CPU *cpu) { return cycle_own(cpu, 0x1218); }
 
 /* ---- field: follower 1 ---- */
 

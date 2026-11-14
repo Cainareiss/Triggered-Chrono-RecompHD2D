@@ -330,6 +330,10 @@ void sched_set_players(int n) { players = n < 1 ? 1 : n > 4 ? 4 : n; }
 int sched_players(void) { return players; }
 
 static uint8_t slot_player[8] = {0, 1, 1, 1, 1, 1, 1, 1};
+static int turn_player = -1;
+
+void sched_set_turn_player(int player) { turn_player = player; }
+int sched_turn_player(void) { return turn_player; }
 
 void sched_set_slot_player(int slot, int player)
 {

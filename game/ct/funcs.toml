@@ -727,6 +727,7 @@ addr = 0xC111E1
 states = ["m1x0"]
 e = 0
 module = "bankc1"
+patch = "coop_cycle_prev"   # port: co-op (game/ct/coop.c)
 
 [[func]]
 name = "BattleMenu_CycleActivePcNext"
@@ -734,6 +735,7 @@ addr = 0xC11218
 states = ["m1x0"]
 e = 0
 module = "bankc1"
+patch = "coop_cycle_next"   # port: co-op (game/ct/coop.c)
 
 [[func]]
 name = "BattleMenu_ConfirmCommand"

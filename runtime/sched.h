@@ -123,6 +123,10 @@ int sched_players(void);
    slot 0 player 0, every other slot player 1. */
 void sched_set_slot_player(int slot, int player);
 int sched_slot_player(int slot);
+/* The player (0-3) whose turn the game is waiting on, for the frontend to
+   show; -1 (the default) none. Set by the game's patches. */
+void sched_set_turn_player(int player);
+int sched_turn_player(void);
 /* The buttons port 0-3 returned at the last auto-joypad read ($4218-$421F
    as a word, sched_set_joypad's layout), without a bus access. */
 uint16_t sched_joypad_read(int port);
