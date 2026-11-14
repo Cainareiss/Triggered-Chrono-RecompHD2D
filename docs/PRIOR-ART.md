@@ -115,7 +115,10 @@ Where this page says "ours", see [HD2D.md](HD2D.md) (renderer), [SCENE.md](SCENE
   3. Sprite replacement in the SNES is different from NES: sprites are assembled from
      OAM pieces, and a character's frame is several pieces. Hash pieces, then offer a
      "group" tag. Mesen's NES packs do not need that (unverified for 16x16 and 32x32
-     OBJ sizes).
+     OBJ sizes). Done as `[[object]]` groups (a finding aid) and, with the game
+     module's frame decoder, `[[pose]]` entries: a whole frame as one picture, keyed by
+     the frame rather than its pieces ([ASSET-PACKS.md](ASSET-PACKS.md)). Mesen has no
+     equivalent, and no 3D models; `[[model]]` (glTF, placed on map cells) is our own.
 
 ### Dolphin texture packs, and RT64
 

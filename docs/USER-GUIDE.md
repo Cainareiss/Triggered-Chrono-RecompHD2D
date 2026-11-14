@@ -113,6 +113,7 @@ flatpak run io.github.jerbanpls.CtRecomp --hd2d
 | `--no-save` | Don't load or write the save file: in-game saves last only until you quit |
 | `--pack NAME` | Load an asset pack (replacement art; repeat to stack packs, first wins), remembered for next time; `--pack none` loads none (see [Asset packs](#asset-packs)) |
 | `--pack-dump NAME` | While you play, save each new tile and sprite into asset pack NAME |
+| `--pack-export-sheets NAME` | While you play, save every character pose seen onto sprite sheets in `sheets/NAME`, to paint over and import (`--pack-export-scale N`: their second size, default 4x) |
 
 ## First launch
 
@@ -325,12 +326,28 @@ workflow, the format and the rules are in [ASSET-PACKS.md](ASSET-PACKS.md).
 still is. It is for your personal use only: never share or upload it.** Pictures you
 paint yourself from scratch are yours.
 
+Besides single tiles, a pack can hold:
+
+- **Poses:** a character's whole animation frame as one picture, at any size. Play with
+  `--pack-export-sheets mysheets` to get each character's poses on a sprite sheet
+  (`ct/sheets/mysheets/sheet_pc00_4x.png` and its index), paint over it in Aseprite,
+  Krita or an image-to-image tool, and cut it back into a pack with
+  `python3 tools/pack_import_sheet.py EDITED.png --index sheet_pc00.json --pack mychars`.
+- **3D models:** glTF files (from Blender, Sprytile or Crocotile 3D) placed on map cells,
+  drawn in the 3D diorama look (`hd2d3d`), lit and shadowed like the map. Run with
+  `CT_PACK_WHERE=1` to see the map id and the cell you stand on.
+
+The formats, the axes and units for models, and the sheet workflow are in
+[ASSET-PACKS.md](ASSET-PACKS.md). **Sheets are the game's art too, and so is anything
+painted over them: for your personal use only.** Models you build from scratch, with
+your own textures, are yours.
+
 Packs need the GL renderer. Without `--hd2d` the game switches to it with the original
 look while a pack is loaded.
 
 | Key | What it does |
 | --- | --- |
-| F5 | Reload the asset packs (after editing their pictures) |
+| F5 | Reload the asset packs (after editing their pictures or models) |
 
 ## Quality of life
 
@@ -503,6 +520,7 @@ The engine keeps its files in your user data folder, `~/.local/share/ct-recomp/`
 | `hd2d/settings.ini` | Everything the menu sets: the look and picture shape, the window, co-op, the buttons and keys, the volume, the asset packs to load, the [quality-of-life settings](#settings) |
 | `ct/states/` | Save states and the resume point, each with a `.png` of the screen (see [Save states](#save-states)) |
 | `ct/packs/NAME/` | Asset pack NAME: `pack.toml` and its pictures. Made from the game's art unless you painted every picture yourself: **never share it.** |
+| `ct/sheets/NAME/` | Sprite sheets from `--pack-export-sheets`: the game's own frames, **never share them** |
 | `ct/gen/`, `ct/obj/` | Temporary build files, normally deleted after the build. If a build fails they can be left behind: they hold code generated from your ROM, so don't share them. Deleting them is safe. |
 
 The ROM itself is never copied: only its location is saved.

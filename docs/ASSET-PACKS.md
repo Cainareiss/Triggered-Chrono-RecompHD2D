@@ -6,7 +6,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 An asset pack replaces the game's art, one 8x8 background tile or one sprite at a time,
 with pictures of any resolution. The renderer draws them at the screen's resolution,
-not the console's 256×224.
+not the console's 256×224. A pack can also replace a character's whole animation frame
+(a **pose**) with one picture, and put **3D models** (glTF) into the 3D view.
 
 The project ships no packs and no art. You make a pack on your own computer, from your
 own ROM:
@@ -27,10 +28,18 @@ own ROM:
   and you can share it under any terms you choose. That includes a pack whose pictures
   are all your own work, keyed to the game's tiles. A picture traced over or edited from
   a dumped one is still derived from the game's art.
+- **Sprite sheets are the game's art too.** The sheets `--pack-export-sheets` writes
+  hold the game's own frames. A sheet you paint over, or feed to an AI image-to-image
+  tool, is still derived from them, and so is every pose picture cut from it. Keep
+  them to yourself, like a dumped pack.
+- **Models you build yourself are yours,** as long as nothing in them (textures,
+  shapes traced from screenshots) comes from the game. A texture cut from a dumped tile
+  makes the model derived from the game's art.
 - **The project's packages never contain a pack.** `tools/check_dist.py` fails any
   package that holds a `pack.toml`, or a picture named by a content key under
-  `tiles/`, `sprites/` or `objects/`
-  ([PACKAGING.md](PACKAGING.md)). Packs live only in your data folder.
+  `tiles/`, `sprites/` or `objects/`, a pose picture under `poses/`, or an exported
+  sheet (`sheet_NAME_4x.png`)
+  ([PACKAGING.md](PACKAGING.md)). Packs and sheets live only in your data folder.
 
 ## Where packs live
 
@@ -41,7 +50,8 @@ Packs are kept in the game's folder in your user data directory:
 ~/.var/app/io.github.jerbanpls.CtRecomp/data/ct-recomp/ct/packs/NAME/   (Flatpak)
 ```
 
-A `NAME` that contains a `/` is taken as a directory path instead, anywhere.
+A `NAME` that contains a `/` is taken as a directory path instead, anywhere. Exported
+sprite sheets go next to the packs, in `ct/sheets/NAME/`.
 
 ## The workflow
 
@@ -134,13 +144,133 @@ own and list it first: `--pack myart --pack my4x`. Copy the entry from the place
 pack's `pack.toml` into yours (the `[[tile]]` block with its `key`, `file`, `w` and `h`),
 and put your picture at `file`.
 
+## Poses: a whole frame as one picture
+
+The SNES draws a character from several OAM pieces, and a `[[tile]]` replaces one piece.
+A **pose** is the character's whole animation frame, as the game assembles it: one
+picture for all its pieces, so you can paint (or upscale) a character without seams
+between pieces, and at any size.
+
+- **Keys come from the game module.** The module reads each field object's current
+  frame from the ROM and the object table ([SCENE.md](SCENE.md), A1) and gives it a stable key
+  (`ct_scene_pose`, runtime/module.h). In this game it is
+  `1 << 24 | kind << 16 | id << 8 | frame`, written as 8 hex digits (`01000003`: kind 0,
+  a party member; id 0; frame 3). The same pose has the same key on every map and in any
+  object slot.
+- **The picture** is any whole multiple of the pose's size (`w` x `h` console pixels,
+  the bounding box of its OAM pieces), with alpha. Another shape is stretched to fit,
+  with a warning.
+- **Mirrors:** the game stores a left-facing frame as a frame of its own (it flips the
+  8x8 tiles inside it, not the whole frame). `flip = "h"` draws a picture mirrored, so
+  one picture can serve both facings: give the second pose's entry the first one's file.
+- **Fallback:** a pose wins over the `[[tile]]` replacements of its pieces; where there
+  is no pose, the pieces' own replacements are used; where neither, the original.
+- **2D:** the picture covers the bounding box of the object's OAM entries in the frame
+  drawn. Where it has pixels beyond the original's (a bigger hat, a smiley over the whole
+  box) they go over what is behind the character, by the PPU's priority (z level) and,
+  among sprites, OAM order: a roof or a sprite in front still hides it. Where the box
+  isn't the pose's size (the frame changed, a piece is hidden), the pose isn't used for
+  that frame.
+- **3D:** the character is one billboard of the picture instead of its 8x8 pieces, lit
+  and casting a shadow like them.
+
+Poses come from field objects. The world map's sprites, battles and menus keep their
+per-piece replacements.
+
+## Sprite sheets for artists
+
+`--pack-export-sheets NAME` writes every pose seen while you play onto sheets, one per
+character (sprite record), into `ct/sheets/NAME/` in your data folder:
+
+| File | What it holds |
+| --- | --- |
+| `sheet_pc00_1x.png`, `sheet_pc00_4x.png` | The character's poses, one per cell, 8 cells a row, all lined up on the foot point, at 1x and at `--pack-export-scale N` (default 4) |
+| `sheet_pc00.json` | The index: per pose its key, rectangle (1x pixels), size, foot point and, if it is another pose mirrored, `mirror_of` |
+| `poses/KEY.png`, `poses.txt` | Every pose as the game drew it, and the list; a later export into the same NAME starts from them |
+| `maps/map_005.txt` | Each map seen: per cell its class and tile words (for `[[model]] tiles`) |
+| `README.txt` | What these are, and the personal-use reminder |
+
+On a sheet, magenta lines run through the gutters between cells; cyan ticks in the gutter
+below and left of each cell mark the column and row of the foot point. Paint only inside
+the cells: the importer cuts each pose's rectangle and ignores everything else.
+
+The round trip:
+
+```
+# 1. Export: play (or replay a script) through the scenes you want.
+ct_sdl --pack-export-sheets crono --pack-export-scale 4
+
+# 2. Edit ~/.local/share/ct-recomp/ct/sheets/crono/sheet_pc00_4x.png in Aseprite, Krita,
+#    or an AI img2img tool (keep the size and the transparency), save it as a copy.
+
+# 3. Import: each edited cell becomes poses/KEY.png and a [[pose]] entry in the pack.
+python3 tools/pack_import_sheet.py ~/.local/share/ct-recomp/ct/sheets/crono/sheet_pc00_4x_edit.png \
+    --index ~/.local/share/ct-recomp/ct/sheets/crono/sheet_pc00.json \
+    --pack mychars --changed-from ~/.local/share/ct-recomp/ct/sheets/crono/sheet_pc00_4x.png
+
+# 4. Play with it (F5 reloads after another import).
+ct_sdl --pack mychars --pack my4x
+```
+
+The sheet's scale is worked out from its width (any whole multiple of the 1x size).
+Cells left fully transparent are skipped, unless the pose is the mirror of one you drew:
+then that picture is used with `flip = "h"`. `--changed-from` skips cells that are as
+exported, so only your edits become replacements. Importing again replaces the entries
+of the same keys.
+
+## Models
+
+A `[[model]]` puts a glTF 2.0 model (`.gltf` with its buffers, or `.glb`) into the 3D
+view (`hd2d3d`, `deck3d`), on the field and on the world map:
+
+- **Where:** by map id and a rectangle of cells (`cells = [x0, y0, x1, y1]`, or
+  `cell = [x, y]`), or on every cell whose tiles are given ones (`tiles = [layer, TL, TR,
+  BL, BR]`, the tile words of a 16 px field cell's four 8x8 tiles in that layer; on the
+  world map a cell is one tile: `[layer, word]`), with `size = [w, h]` cells for the
+  footprint. `map` may then be left out (any map).
+- **Units and axes:** map pixels, y up, x east, z south (toward the camera): glTF's own
+  axes, with +z the model's front. A field cell is 16 px, a world map cell 8 px. The
+  model's origin goes to the middle of the footprint, on the ground (the world map's
+  ground height there).
+- **Placing:** `scale` (map px per model unit, one number or `[x, y, z]`; default 1),
+  `rotate = [x, y, z]` in degrees (about x, then y, then z), `offset = [x, y, z]` in map
+  px after that.
+- **Looks:** the base color texture (PNG, nearest neighbour; `filter = "linear"` for
+  smooth, mipmapped), the material's base color factor, vertex colors (`COLOR_0`), and
+  `color = [r, g, b, a]` over all of it. Alpha modes MASK and BLEND are drawn as cut-outs
+  (alpha >= 0.5). No lighting model of the file's own: the model is lit by the scene's
+  key light, with its shadow map (it casts and takes shadows) and the ambient occlusion,
+  as the map's own walls are.
+- **`hide_cells = true`** removes the generated geometry of the footprint's cells
+  (floor, walls, roofs and their side walls), so the model replaces it instead of
+  standing in it.
+
+A model is read when a map first shows it, kept until F5 (which reloads it), and baked
+into the map's geometry once per map. Every node's transform is applied; animation,
+skins and morph targets are ignored.
+
+**From Blender:** model in map pixels (or in cells and set `scale = 16`), Y up in the
+glTF exporter (its default, `+Y Up`), the origin at the footprint's middle on the floor,
+and export glTF Binary (`.glb`) or glTF Separate. Blender's -Y (front view) is glTF's
++z, the side the camera sees. **Sprytile** and **Crocotile 3D** build models from tile
+sheets: export glTF/GLB (Crocotile can export glTF) with the tile size as the unit, then
+`scale` = the tile size in map pixels over the model's tile size (16 px tiles, 1 unit
+per tile: `scale = 16`). Keep the texture as a PNG, and keep its filtering nearest for
+pixel art.
+
+To find the cells: run with `CT_PACK_WHERE=1` set, which prints the map id and the
+player's cell once a second, or look in an export's `maps/map_ID.txt`.
+
 ## Using packs
 
 | Option or key | What it does |
 | --- | --- |
 | `--pack NAME` | Load a pack. Repeat it to stack packs, highest priority first. `--pack none` loads none. |
 | `--pack-dump NAME` | Dump new tiles and sprites into pack NAME while playing |
-| F5 | Reload the packs (after editing their PNGs) |
+| `--pack-export-sheets NAME` | Write every pose seen to sprite sheets in `sheets/NAME` (above) |
+| `--pack-export-scale N` | The sheets' second scale, 1 to 16 (default 4) |
+| F5 | Reload the packs (after editing their PNGs or models) |
+| `CT_PACK_WHERE=1` | (environment) Print the map and the player's cell once a second |
 
 The packs given with `--pack` are remembered in `settings.ini` (`packs=a,b`) and loaded
 on the next start without the option. `--pack none` clears the list.
@@ -171,14 +301,20 @@ saved look is kept. `--no-hd2d` with packs loads none.
    - The same tile in two palettes (day and night, or a fade the game does by changing
      the palette) gets two keys, as in Mesen's HD packs. Fades done with the brightness
      register don't change any key.
-   - **Whole-object keys** come later. A character's animation frame as one picture,
-     instead of the OAM pieces it is drawn with, needs a decoder for the game's own
-     sprite frame format (the `sprites` track). Until then, `[[object]]` groups are only
-     a finding aid.
+   - **Pose keys** name a character's whole animation frame, instead of the OAM pieces
+     it is drawn with. They come from the game module, which decodes the game's own
+     sprite frame format ([Poses](#poses-a-whole-frame-as-one-picture)). `[[object]]`
+     groups stay a finding aid.
 3. **Per frame**, `packs_map_frame` turns the provenance into a map: per console pixel,
    the atlas entry that replaces it, the texel it showed and the palette color it was
    drawn with. Keys are cached per frame by the provenance's raw identity (address,
-   palette, size), so each distinct tile is hashed once a frame.
+   palette, size), so each distinct tile is hashed once a frame. Poses go first
+   (`packs_set_poses`, from `frontend/pack_scene.c`): the objects of the scene the
+   module described at the previous frame edge (the OAM drawn now is the one uploaded
+   after it), each placed on its entries' bounding box in the frame's OAM; a pixel of
+   one of those entries maps to the pose picture's texel at that screen position, and so
+   does a pixel behind the object where the picture has cover (flag 64 in the map: that
+   pixel, not the behind G-buffer, shows under the picture's transparent texels).
 4. **The atlas**: every replacement PNG of the loaded packs, shelf-packed into pages of
    an array texture (256 to 4,096 texels square, as needed), mipmapped.
 5. **Compositing** (`shaders/upscale.frag`, compiled into the passes that read the
@@ -211,10 +347,27 @@ On the CPU, building the map takes about 0.13 ms per frame, and the provenance
 G-buffer about 0.4 ms in the PPU (`ct_boot --prov`: 39 s instead of 35 s for 9,200
 frames). The atlas is held in RAM and on the GPU (64 MB for the 4× Leene pack).
 
+Models and poses, on the same Ally in `hd2d3d` at `--scale 5` (1280×1120), the last 240
+frames before Leene Square's frame 8700 (unpaced, other builds running, so totals are
+noisy; `CT_HD2D_PROFILE`), median per pass:
+
+| | surfaces | shadow map | whole frame |
+| --- | --- | --- | --- |
+| No pack | 1.034 ms | 0.051 ms | 2.77 ms |
+| Three test models (two houses, a cube: 40 triangles, 2 textures) | 1.034 ms | 0.050 ms | 2.92 ms |
+| The same and the leader's poses (51 pictures at 4×) | 1.034 ms | 0.051 ms | 2.73 ms |
+
+The differences are within the noise: a model costs its triangles and one draw call per material part, twice (the shadow map
+and the surfaces); baking a map's models takes a fraction of a millisecond, once per map.
+On the CPU, poses add the scene capture and one pose lookup per object each frame: the
+2D map took 0.10-0.12 ms per frame with them, against 0.02-0.03 ms with only models
+loaded (the 0.13 ms above was with the full 4× pack).
+
 ## The format
 
-A pack is a directory holding `pack.toml` and PNGs. `pack.toml` is a small TOML subset:
-`[pack]`, then `[[tile]]`, `[[object]]` and `[[model]]` entries of `key = value` lines.
+A pack is a directory holding `pack.toml`, PNGs and glTF files. `pack.toml` is a small
+TOML subset: `[pack]`, then `[[tile]]`, `[[object]]`, `[[pose]]` and `[[model]]` entries
+of `key = value` lines.
 Values are strings, numbers or arrays of numbers. It is data only: nothing in a pack
 can run code.
 
@@ -247,18 +400,35 @@ pieces = [
   { key = "a8d096398c37d0df", x = 40, y = 56, hflip = 0, vflip = 0, oam = 0 },
 ]
 
-[[model]]                     # a 3D model for a map cell (the 3D path, later)
-map = 0x1F0                   # map id
-cell = [3, 4]                 # the cell, x and y
-file = "models/well.glb"      # glTF 2.0, .gltf or .glb
-scale = 16.0                  # model units to map pixels
-offset = [0.5, 0.0, 0.5]      # in cells
+[[pose]]                      # a whole animation frame as one picture
+key = "01000003"              # the module's pose key, 8 hex digits
+file = "poses/01000003.png"   # any whole multiple of w x h, with alpha
+w = 16                        # the pose's size in console pixels
+h = 32
+flip = "h"                    # optional: draw the picture mirrored ("v", "hv" too)
+
+[[model]]                     # a glTF model in the 3D view
+map = 0x005                   # map id
+cells = [27, 33, 29, 35]      # the footprint: x0, y0, x1, y1 (or cell = [x, y])
+file = "models/house.glb"     # glTF 2.0, .gltf or .glb
+scale = 1.0                   # map px per model unit, or [x, y, z]
+rotate = [0, 90, 0]           # degrees about x, then y, then z
+offset = [0, 0, 0]            # map px: x east, y up, z south
+filter = "nearest"            # or "linear"
+color = [1, 1, 1, 1]          # times the material's color
+hide_cells = true             # remove the footprint's generated geometry
+
+[[model]]                     # the same model on every cell showing these tiles
+tiles = [0, 0x0123, 0x0124, 0x0133, 0x0134]   # layer, then TL TR BL BR tile words
+size = [2, 2]                 # the footprint, in cells, from the matching cell
+file = "models/well.glb"
 ```
 
-Only `key`, `file`, `w` and `h` are needed for a `[[tile]]`. A replacement picture can
-be any size up to 2,048 pixels on a side. `[[model]]` entries are read and their files
-are checked with cgltf (`third_party/cgltf`) when a pack loads (`packs_models`,
-`packs_model_parse`), but nothing draws them yet.
+Only `key`, `file`, `w` and `h` are needed for a `[[tile]]` or a `[[pose]]`. A
+replacement picture can be any size up to 2,048 pixels on a side. A `[[model]]` needs
+`file` and a place (`map` with `cells`/`cell`, or `tiles`). Its file is checked with
+cgltf (`third_party/cgltf`) when the pack loads, and read into triangles when a map first
+shows it.
 
 ### Compared with Mesen's HD packs and RT64's texture packs
 
@@ -298,18 +468,23 @@ diorama (`hd2d3d`, `frontend/hd2d/scene3d.*`) draws tiles itself, as textured qu
   into a lookup texture, by VRAM address and palette, and `tileTexel` samples the
   atlas where there is an entry (with the quad's own derivatives, so distant floors
   are mipmapped) and the console's tile where there isn't.
-- **Sprites are not replaced in 3D.** Packs replace a sprite as a whole OAM entry,
-  while the 3D path splits sprites into 8×8 pieces. The map from a piece back to its
-  entry's texel is the next step.
+- **Sprites are replaced in 3D as whole poses only.** A character with a `[[pose]]` is
+  one billboard of the picture (`S3D_PACKED`: the tile value's low 18 bits are then an
+  atlas entry, sampled by `tileTexel` over the whole quad, in the shadow pass too),
+  placed by `s3d_set_sprite_hook`. Per-piece `[[tile]]` replacements of sprites still
+  aren't: the 3D path splits sprites into 8×8 pieces.
 - **The C API for other renderers:** `packs_key` / `packs_key_tile` and
   `packs_lookup_tile(key)` give a replacement's atlas rectangle (`packs_rect`: page, x,
   y, w, h, and the original's size); `packs_atlas` and `packs_entries` give the atlas
   and the entry table, which `hd2d_pack_atlas` uploads.
-- **`[[model]]` entries** are to go through `s3d_set_cell_hook`: for a cell with a
-  model, the hook adds the model's triangles to the cell's mesh instead of the
-  generated geometry. Loading and checking them is done (`packs_models`); drawing them
-  isn't yet. Bits 26-31 of the tile value, free in `scene3d.h`, can flag such
-  surfaces.
+- **`[[model]]` entries** are drawn as a mesh of their own (`hd2d_pack_models`): the
+  frontend (`frontend/pack_scene.c`) matches the entries to the scene's map, bakes the
+  meshes (`packs_model_mesh`) into world space once per map, and hides the cells with
+  `hide_cells` through `s3d_set_cell_hook` (which both the field's and the world map's
+  builders ask). The renderer draws them with `scene3d.frag` compiled with `MODEL`: the
+  same lighting, haze, point lights and outputs as the map's surfaces, with the vertex
+  normal (and the nearest of the fixed ones for the occlusion), one draw call per
+  material part, in the shadow map's pass too, at each copy of a wrapping world map.
 
 ## Limits
 
@@ -317,14 +492,24 @@ diorama (`hd2d3d`, `frontend/hd2d/scene3d.*`) draws tiles itself, as textured qu
 - Mid-frame palette or VRAM changes: keys use the VRAM and CGRAM at the end of the frame.
   A tile drawn with a palette that HDMA changes partway down the screen gets the key of
   the palette at the end.
-- A replacement covers exactly the original piece's pixels. It can't draw outside them
-  (a sprite can't get bigger than its original), and its transparent parts show the one
-  layer under it (the behind G-buffer), not every layer.
+- A `[[tile]]` replacement covers exactly the original piece's pixels. It can't draw
+  outside them (a sprite can't get bigger than its original), and its transparent parts
+  show the one layer under it (the behind G-buffer), not every layer. A pose covers its
+  whole box (below).
 - Each animation frame and each pair of characters standing together is a new
   `[[object]]`, so dumps have many of them.
 - The whole-line PPU renderer (unused in the game) doesn't record provenance.
 - The atlas holds every replacement at once. A full game's dump, upscaled 4×, could go
   past the 4,096² page and use several pages (each 64 MB). A packed, streamed container
   is the fix, later.
-- The 3D preset replaces BG tiles only, not sprites, and doesn't draw `[[model]]`s yet
-  (above).
+- The 3D preset replaces BG tiles and whole poses, not single sprite pieces.
+- A pose replaces the original only within the bounding box of the object's OAM
+  pieces: it can't be drawn bigger than the frame's box. Its size limit is 256 x 256
+  console pixels. Poses come from field objects only (the module's decoder): not the
+  world map's sprites, battles or menus. Frames of 12 pieces, which the game builds over
+  several frames, have no pose.
+- Models are drawn in the 3D view only, not in the 2D looks. They have no animation,
+  skinning or morph targets, take PNG textures only (no JPEG, no KTX2), and have no
+  transparency other than cut-outs. They are placed again whenever the map changes
+  (also in place, as when a door opens): one placed by `tiles` follows the tiles, one
+  placed by `cells` stays.

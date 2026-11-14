@@ -76,7 +76,9 @@ module with those patches needs it from the engine, so an older module is rebuil
   build frame for frame. It compares CPU, memory, video and audio hashes over 3,000
   frames of the Leene Square replay. It has also been verified over all 9,200 frames,
   for both the CMake-built and the script-built `-march=native` module.
-- The module exports only `ct_module_get`. The loader checks the module ABI and the
+- The module exports `ct_module_get`, and optionally `ct_module_pose` (a field object's
+  whole frame for asset packs, runtime/module.h; found by name, so an engine and a module
+  without it still fit, and the ABI is unchanged). The loader checks the module ABI and the
   struct layouts before installing the tables.
 - `ct_boot_engine` contains no generated functions (checked with
   `nm build/ct_boot_engine | grep ' f_'`).

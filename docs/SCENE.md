@@ -287,7 +287,11 @@ for **any** object, whether or not it is in OAM. `ct_sprite_frame(obj, rgba, max
 current frame as RGBA. It also returns the frame's size, the foot point inside the image, its pieces,
 its palette and a stable key. It only reads.
 `game/ct/test/test_sprites.c` (ctests `sprites_leene` and `sprites_follower`) checks it
-against what the console drew (A1.7).
+against what the console drew (A1.7). The module hands it to the engine as poses
+(`ct_game_pose` in `game/ct/scene.c`, the optional `ct_module_pose` export in
+`runtime/module.h`): asset packs replace a character's whole frame with one picture
+by that key, and the sprite sheet export draws every pose seen
+([ASSET-PACKS.md](ASSET-PACKS.md), "Poses").
 
 ### A1.1 The sprite record (bank $E4)
 
