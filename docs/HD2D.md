@@ -22,7 +22,7 @@ build/ct_sdl --hd2d --fullscreen    # or press F11; automatic under gamescope
 
 | Key | Action |
 | --- | --- |
-| F1 | Cycle the preset: `off`, `subtle`, `hd2d` (default), `deck`, `hd2d3d` (the 3D diorama, below) |
+| F1 | Cycle the preset: `off`, `subtle`, `hd2d` (default), `deck`, `hd2d3d` (the 3D diorama, below), `deck3d` (the 3D diorama for the Steam Deck) |
 | F2 | Cycle the debug view: layer classes, depth, blur amount, split compare (original pixels on the left), background plane, off |
 | F3 | Cycle the aspect: 4:3 (default), 8:7 pixel aspect, stretch |
 | F11 | Toggle fullscreen |
@@ -35,7 +35,10 @@ command-line options override them.
 
 | Option | Effect |
 | --- | --- |
-| `--preset off\|subtle\|hd2d\|deck\|hd2d3d` | Choose the starting preset |
+| `--preset off\|subtle\|hd2d\|deck\|hd2d3d\|deck3d` | Choose the starting preset |
+| `--render-scale 50-100\|auto` | The 3D diorama's render scale, in percent ([below](#render-scale-sharpening-and-ambient-occlusion)) |
+| `--sharpen 0-1\|auto` | Its sharpening |
+| `--ao 0-1\|auto` | Its ambient occlusion strength |
 | `--aspect 4:3\|pixel\|stretch` | Choose the picture shape |
 | `--debug-view N` | Start in debug view N (0 off, 1 classes, 2 depth, 3 blur, 4 split compare, 5 background plane) |
 | `--log-gpu` | Print the renderer's frame time every 60 frames (stalls the GPU to measure) |
@@ -49,7 +52,9 @@ uploads, and with `--log-gpu` the frame's total. It needs timer queries: OpenGL 
 OpenGL ES with `EXT_disjoint_timer_query`.
 
 To render headlessly, for example on CI or over SSH, set `SDL_VIDEODRIVER=offscreen`.
-That gives a GPU context through EGL with no window:
+That gives a GPU context through EGL with no window (add `CT_HD2D_GLES=1` for an OpenGL
+ES 3.0 context only, to try the ES path on a desktop driver; `CT_HD2D_GLERR=1` reports
+GL errors):
 
 ```
 SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy build/ct_sdl --hd2d --fast \
@@ -226,8 +231,9 @@ Where these are wrong:
 
 The camera can be changed with `CT_HD2D_3D`, a comma-separated list:
 `tilt=40` (degrees from straight down), `fov=30` (vertical field of view), `zoom=0.75`
-(1: the console's 256 px across at the focus), `hmax=3` (wall cap in cells) and
-`stretch=1.2` (billboard height scale; default from the tilt).
+(1: the console's 256 px across at the focus), `hmax=3` (wall cap in cells),
+`stretch=1.2` (billboard height scale; default from the tilt) and `aoradius=12` (the
+ambient occlusion's reach, in map pixels).
 
 ### Drawing
 
@@ -238,24 +244,110 @@ The camera can be changed with `CT_HD2D_3D`, a comma-separated list:
    show as the console changes them.
 2. A 1024×1024 shadow map from the key light, low from the south-west, of the raised
    geometry and the sprites (cut-outs tested per pixel).
-3. The surfaces into a picture-size target with a depth buffer: each pixel decodes its
-   tile's bitplanes and palette, is lit relative to the sunlit floor (which keeps the
-   original colors), shadowed with 4 PCF taps, lit by the 2D path's point-light map at
-   the screen position the console drew it, hazed with distance and scaled by the
-   console's brightness. Alpha holds the depth for the depth of field (0.5 at the focus).
-4. The UI from the console frame on top, flat and sharp.
-5. The 2D path's depth of field, bloom, grade and side fill, compiled again with
+3. The surfaces into a target with a depth buffer, at the render scale (the picture's
+   size by default): each pixel decodes its tile's bitplanes and palette, is lit
+   relative to the sunlit floor (which keeps the original colors), shadowed with 4 PCF
+   taps, lit by the 2D path's point-light map at the screen position the console drew
+   it, hazed with distance and scaled by the console's brightness. Alpha holds the depth
+   for the depth of field (0.5 at the focus); the material target holds the quad's
+   normal for the ambient occlusion.
+4. Ambient occlusion from that depth buffer, at half the render size, blurred
+   (below).
+5. Below a render scale of 100%: FSR 1's EASU up to the picture's size, which also
+   applies the occlusion.
+6. The UI from the console frame on top, flat and sharp, at the picture's size.
+7. The 2D path's depth of field, bloom, grade and side fill, compiled again with
    `scene3d_pic.frag` in place of the upscale: one plane, real depth. The tilt-shift band
-   is turned down to a quarter, as depth does most of the blur.
+   is turned down to a quarter, as depth does most of the blur. At the native render
+   scale this is where the occlusion is applied, and the final pass sharpens (RCAS after
+   EASU, or CAS).
 
-The `deck` preset has no 3D. A GPU or driver that cannot build the 3D programs keeps
-`hd2d3d` on the 2D path (the log says so).
+A GPU or driver that cannot build the 3D programs keeps `hd2d3d` and `deck3d` on the 2D
+path (the log says so).
 
 Two hook points are left for asset packs: the cell hook (`s3d_set_cell_hook` in
 `scene3d.h`), where a pack can replace a cell's generated geometry with its own, and the
 tile lookup (`tileTexel()` in `shaders/scene3d.frag`), the one function every 3D
 surface samples its texture through, keyed by the tile (VRAM address, which gives the
 tile id, and palette), where a pack can return its own texture.
+
+### Render scale, sharpening and ambient occlusion
+
+Four settings, in the menu's **Look** tab and in `settings.ini` (the command-line options
+override them for one run):
+
+| Setting | Values | Default | Effect |
+| --- | --- | --- | --- |
+| `render_scale` | `auto`, `50`, `60`, `67`, `75`, `85`, `100` | `auto`: 100 in `hd2d3d`, 67 in `deck3d` | The 3D scene is drawn at this percentage of the picture's size, then upscaled with AMD FSR 1 (EASU) and sharpened with its RCAS. The UI, the 2D path and everything outside map views stay at full size. |
+| `sharpen` | `auto`, `0`, `0.25`, `0.5`, `0.75`, `1` | `auto`: off at 100%, 0.5 below | At 100%, AMD CAS at that sharpness (0 is off). Below 100%, RCAS's strength (`FsrRcasCon`'s `exp2(-stops)`: 1 is the most, 0.5 one stop less). |
+| `ao` | `auto`, `0`, `0.25`, `0.5`, `0.75`, `1` | `auto`: 0.75 | Ambient occlusion strength. 0 turns it off and skips its passes. |
+| `ao_size` | `auto`, `half`, `quarter` | `auto`: half in `hd2d3d`, quarter in `deck3d` | The occlusion's resolution, of the render size each way. |
+
+**Where the upscale goes.** EASU runs right after the surfaces and the occlusion, before
+the UI, the depth of field, the bloom and the grade, which then read the upscaled
+picture as they read the native one:
+
+- *Quality.* The in-focus picture is the part a viewer looks at, and the part that needs
+  EASU's edges. The depth of field and the bloom are blurs: computed after the upscale,
+  they look the same at every render scale. The UI (text boxes, menus) is drawn over
+  the upscaled picture at full size, so it is never scaled. The grain and the vignette
+  are added at the output size. RCAS sharpens in the final pass, where the picture is
+  read: only its in-focus part, since the depth of field mixes in its own, unsharpened
+  blur where things are out of focus, and the bloom source reads the picture unsharpened
+  (sharpened bokeh and bloom only add ringing and noise). This follows AMD's guidance:
+  scale after the main render and before the noise-adding effects and the UI.
+- *Cost.* After the upscale the post passes cost what they cost at 100%, about 1.35 ms
+  at 1080p on the Ally. Upscaling after them would save part of that, but EASU would then spend its
+  work on the blurred picture, the grain and the vignette would have to be added before
+  it (and be scaled and sharpened), and the UI would need its own pass. The surfaces
+  pass is the one that scales with the render size (about 0.9 ms at 1080p, about 0.45 ms
+  at 67%), and the occlusion with it.
+
+To keep the extra pass cheap, EASU writes one 32-bit target (`RGB10_A2`: the color
+through FSR's reversible tonemap, so highlights over 1 survive, and the UI's mask in
+alpha); the passes after it take the depth and the material from the render-size
+targets, which hold them at that size anyway. At 1080p that brought EASU from 0.53 ms
+(half-float color plus material) to 0.28 ms.
+
+**FSR 1 and CAS** come from AMD's FidelityFX repositories (FSR v1.0.2, CAS v1.0.2, MIT;
+`third_party/fidelityfx/`, with the commits and hashes in its README). Their GLSL path
+needs GLSL 4.00 / ES 3.10 (`ffx_a.h` uses `bitfieldExtract`; EASU's reference callbacks
+use `textureGather`), which OpenGL 3.3 core and OpenGL ES 3.0 don't have, so the renderer
+compiles `ffx_fsr1_cas.glsl`, a port of the parts it uses to GLSL 3.30 / ES 3.00 at
+32-bit float: the headers' math unchanged, the taps fetched by the caller with
+`texelFetch`. It is MIT, like its source.
+
+**Ambient occlusion** (`shaders/aoprep.frag`, `ssao.frag`, `aoblur.frag`) is our own, a
+normal-oriented hemisphere: for each surface pixel, 12 samples (8 at quarter size) in
+the hemisphere around its normal, in view space, within 12 map pixels (`aoradius`),
+tested against the 3D depth buffer. A sample that something is in front of counts as
+occluded, faded out when that something is much nearer than the radius, so a wall in
+front of a far floor casts no halo on it. The normals aren't reconstructed from depth:
+every quad has one of six, which the surfaces pass writes to its material target. A
+first pass packs depth, normal and a sprite flag into one small texture, so each sample
+is one cached fetch; a 4×4 pattern rotates the samples per pixel, and a 5-tap bilateral
+blur each way, weighted ½ 1 1 1 ½, averages the pattern out exactly while keeping to
+its side of depth edges. A joint bilateral upsample (against the picture's depth)
+applies it, in EASU or, at 100%, where the picture is read. It darkens only the lit
+surfaces: sprites and billboards neither receive it nor occlude (the shadow map gives
+them their own shadows, and their flat cards would darken the floor behind them), and
+the UI and the void around the map get none. The result is the soft contact shadow of
+the HD-2D remakes where walls meet floors, along fences and stalls, in corners and
+under eaves.
+
+Why not AMD's CACAO (FidelityFX, MIT too): it is a set of compute shaders, and OpenGL
+3.3 and ES 3.0 have no compute. A port to fragment passes would keep little of it. GTAO
+gives physically better results on curved surfaces, but needs a horizon search along
+several directions per pixel; this scene is axis-aligned boxes with known normals, where
+a hemisphere with a range check and the true normals does as well, for less.
+
+### The Steam Deck variant (`deck3d`)
+
+`deck3d` is the `deck` look (the shorter depth of field, one bloom level, black bars at
+16:10) with the 3D diorama at a render scale of 67% and the occlusion at a quarter of the
+render size. The Steam Deck still starts in `deck`; choose `deck3d` with R3 or in the
+menu. Its cost is in [Performance](#performance): on the Ally, a little under what
+`hd2d3d` cost before these options.
 
 ## Performance
 
@@ -289,6 +381,42 @@ costs 0.05 ms. The CPU side (scene capture, sprite quads, uploads including VRAM
 0.18 ms; a map's mesh rebuild, on a map change, a few milliseconds once. Both presets
 showed 95th percentiles of 15–19 ms in that run: the GPU's clock drops while other work
 loads the machine, so those are the machine's, not the passes'.
+
+The 3D diorama's render scale and ambient occlusion, from `CT_HD2D_PROFILE` on the same
+Ally: replay frames 8400–9200 (Leene Square to the bell plaza), started from a save
+state at frame 8400 so each run is short; the median GPU time per frame of each run,
+then the median of 3 runs per row, the runs interleaved (their spread was within 2%).
+"Before" is `hd2d3d` built from the commit before these options; `hd2d` and `deck` (2D)
+are for comparison. Picture sizes: 1067×800 in a 1280×800 window (the Steam Deck's
+screen), 1440×1080 at 1080p, 1493×1120 as above.
+
+| GPU ms per frame | 1280×800 | 1920×1080 | 1706×1120 |
+| --- | --- | --- | --- |
+| `hd2d3d` before | 1.43 | 2.35 | 2.46 |
+| `hd2d3d` 100%, no occlusion (`--ao 0`) | 1.44 | 2.37 | 2.45 |
+| `hd2d3d` 100%, CAS (`--ao 0 --sharpen 0.5`) | 1.45 | 2.39 | 2.47 |
+| `hd2d3d` 100% with occlusion (the default) | 1.67 | 2.67 | 2.77 |
+| `hd2d3d` 67% + FSR, no occlusion | 1.26 | 2.09 | 2.23 |
+| `hd2d3d` 67% + FSR with occlusion | 1.40 | 2.32 | 2.48 |
+| `deck3d` (67% + FSR, occlusion at a quarter) | 1.32 | 2.24 | 2.34 |
+| `deck` (2D) | 0.61 | 1.07 | 1.07 |
+| `hd2d` (2D) | 0.67 | 1.11 | 1.16 |
+
+At 1080p, 67% with the occlusion breaks down as: surfaces 0.50 ms (0.92 at 100%),
+occlusion 0.15 (input 0.07, occlusion 0.04, blur 0.03; 0.30 at 100%, where it is at
+half the picture's size), EASU with the occlusion applied 0.34 (0.28 without), final pass
+with RCAS 0.42 (0.48 at 100%: it reads the 32-bit upscaled picture, not the half-float
+one). `deck3d`'s quarter-size occlusion costs 0.09 ms there. CAS adds about 0.01–0.02
+ms to the final pass. So 67% with FSR and the occlusion costs what `hd2d3d` cost before
+(−3% to +1%), and `deck3d` is 5–8% under it. With this branch's first versions (EASU
+writing half-float color plus the material, the occlusion sampling the render-size
+depth and material directly) the same configuration was about 0.5 ms over.
+
+The Steam Deck (RDNA2, 8 compute units at up to 1.6 GHz, against the 780M's 12 at up
+to 2.7 GHz, with similar memory bandwidth) wasn't measured; from those ratios `deck3d`
+at 800p should take roughly 2–3 ms there, against about 1 ms for `deck`. That fits in a
+60 Hz frame, so `deck3d` is offered, but the Deck still starts in `deck`, the lighter
+choice for its battery.
 
 The behind buffer costs CPU time in the PPU. Headless (`ct_boot`, 9,200 frames of the
 Leene Square replay), the game runs at about 388 frames per second without it and

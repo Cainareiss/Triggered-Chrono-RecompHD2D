@@ -36,13 +36,18 @@
  * controller button event.
  *
  * port additions (GPL-3.0-or-later):
- *   --hd2d [--preset off|subtle|hd2d|deck|hd2d3d] [--aspect 4:3|pixel|stretch]
+ *   --hd2d [--preset off|subtle|hd2d|deck|hd2d3d|deck3d] [--aspect 4:3|pixel|stretch]
  *          [--debug-view N] [--fullscreen] [--log-gpu]
+ *          [--render-scale N] [--sharpen X] [--ao X]
  *       draw through the HD-2D renderer (frontend/hd2d) in an OpenGL 3.3
  *       (or ES 3.0) window. F1 cycles the preset, F2 the debug view
  *       (layer classes, depth, blur), F3 the aspect, F11 fullscreen; on a
  *       controller, R3 cycles the preset and L3 the aspect. Preset and
  *       aspect are saved (SDL pref path ct-recomp/hd2d/settings.ini).
+ *       The 3D diorama's quality (hd2d.h, docs/HD2D.md): --render-scale
+ *       50-100 (percent of the picture; FSR 1 upscales), --sharpen 0-1
+ *       (CAS, or RCAS below 100%), --ao 0-1 (ambient occlusion); each
+ *       "auto" for the preset's. settings.ini render_scale, sharpen, ao.
  *   --shot F:PATH (repeatable) [--shot-size WxH]
  *       at the end of frame F, render the HD-2D picture offscreen at
  *       WxH (default 1920x1080) and write it to PATH as PNG; with
@@ -136,6 +141,7 @@
  *   --menu-test FILE, --hash-log FILE
  *       for tests: scripted menu use (menu_test_load), and per frame a hash
  *       of WRAM and the picture. */
+#include <math.h>     /* port: fabsf (the 3D quality settings) */
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -845,7 +851,8 @@ static int hd2d_key(SDL_Scancode sc)
         fprintf(stderr, "ct_sdl: hd2d preset %s\n", hd2d_preset_name(hd2d_preset()));
         static const char *const msg[HD2D_PRESETS] = {"Look: original", "Look: HD-2D subtle",
                                                       "Look: HD-2D", "Look: HD-2D Steam Deck",
-                                                      "Look: HD-2D 3D diorama"};
+                                                      "Look: HD-2D 3D diorama",
+                                                      "Look: 3D diorama, Steam Deck"};
         osd_show(msg[hd2d_preset()]);
         settings_save();
     } else if (sc == SDL_SCANCODE_F2) {
@@ -883,6 +890,30 @@ static char *settings_path(void)
 }
 
 static int parse_preset(const char *v);
+
+/* port: the 3D diorama's quality (hd2d.h): "auto" (the preset's: 0 for
+   the render scale, -1 for the others), a render scale in percent
+   (50-100, or 0.5-1) or an amount 0-1. Returns 0, or -1 if not one. */
+static int parse_quality(const char *v, int render_scale, float *out)
+{
+    if (!strcmp(v, "auto")) {
+        *out = render_scale ? 0.0f : -1.0f;
+        return 0;
+    }
+    char *end;
+    double d = strtod(v, &end);
+    if (end == v || (*end && *end != '%'))
+        return -1;
+    if (render_scale) {
+        d = d > 1.0 ? d / 100.0 : d;
+        if (d < 0.5 || d > 1.0)
+            return -1;
+    } else if (d < 0.0 || d > 1.0) {
+        return -1;
+    }
+    *out = (float)d;
+    return 0;
+}
 
 static void settings_load(void)
 {
@@ -997,7 +1028,8 @@ static int on_plain(void *u) { (void)u; return !hd2d_mode; }
 
 /* Look */
 static const char *const preset_labels[HD2D_PRESETS] = {"Original", "HD-2D subtle", "HD-2D",
-                                                        "HD-2D Steam Deck", "HD-2D 3D diorama"};
+                                                        "HD-2D Steam Deck", "HD-2D 3D diorama",
+                                                        "3D diorama, Steam Deck"};
 static const char *preset_values[HD2D_PRESETS];
 static int get_preset(void *u)   /* the user's look, not the battery mode's (QOL) */
 {
@@ -1045,7 +1077,11 @@ static void set_cam_zoom(void *u, int v)
     hd2d_camera(&t, &z);
     hd2d_set_camera(t, 0.75f * (float)v / 100.0f);
 }
-static int on_3d(void *u) { (void)u; return hd2d_mode && hd2d_preset() == HD2D_3D; }
+static int on_3d(void *u)
+{
+    (void)u;
+    return hd2d_mode && (hd2d_preset() == HD2D_3D || hd2d_preset() == HD2D_DECK3D);
+}
 static int get_gyro(void *u) { (void)u; return gyro_on; }
 static void set_gyro(void *u, int v)
 {
@@ -1063,6 +1099,45 @@ static const char *const debug_labels[HD2D_DEBUGS] = {"Off", "Layers", "Depth", 
                                                       "Behind"};
 static int get_debug(void *u) { (void)u; return hd2d_debug(); }
 static void set_debug(void *u, int v) { (void)u; hd2d_set_debug(v); }
+
+/* The 3D diorama's quality (hd2d.h). The menu shows and settings.ini
+   keeps the saved values (ini_*); --render-scale, --sharpen and --ao
+   change them for the run only. Each list's first entry is the preset's
+   own ("auto"). */
+static float ini_render_scale, ini_sharpen = -1.0f, ini_ao = -1.0f;
+static int ini_ao_size;
+static const char *const rscale_labels[7] = {"Auto", "50%", "60%", "67%", "75%", "85%", "100%"};
+static const char *const rscale_values[7] = {"auto", "50", "60", "67", "75", "85", "100"};
+static const float scale_of[7] = {0.0f, 0.5f, 0.6f, 0.67f, 0.75f, 0.85f, 1.0f};
+static const char *const amount_labels[6] = {"Auto", "Off", "25%", "50%", "75%", "100%"};
+static const char *const amount_values[6] = {"auto", "0", "0.25", "0.5", "0.75", "1"};
+static const float amount_of[6] = {-1.0f, 0.0f, 0.25f, 0.5f, 0.75f, 1.0f};
+static const char *const ao_size_labels[3] = {"Auto", "Half", "Quarter"};
+static const char *const ao_size_values[3] = {"auto", "half", "quarter"};
+static int nearest_of(const float *of, int n, float v)   /* the list entry nearest v */
+{
+    int best = 0;
+    for (int k = 1; k < n; k++)
+        if (fabsf(of[k] - v) < fabsf(of[best] - v))
+            best = k;
+    return best;
+}
+static int get_render_scale(void *u) { (void)u; return nearest_of(scale_of, 7, ini_render_scale); }
+static void set_render_scale(void *u, int v)
+{
+    (void)u;
+    hd2d_set_render_scale(ini_render_scale = scale_of[v]);
+}
+static int get_sharpen(void *u) { (void)u; return nearest_of(amount_of, 6, ini_sharpen); }
+static void set_sharpen(void *u, int v) { (void)u; hd2d_set_sharpen(ini_sharpen = amount_of[v]); }
+static int get_ao(void *u) { (void)u; return nearest_of(amount_of, 6, ini_ao); }
+static void set_ao(void *u, int v) { (void)u; hd2d_set_ao(ini_ao = amount_of[v]); }
+static int get_ao_size(void *u) { (void)u; return ini_ao_size == 4 ? 2 : ini_ao_size == 2; }
+static void set_ao_size(void *u, int v)
+{
+    (void)u;
+    hd2d_set_ao_size(ini_ao_size = v == 2 ? 4 : v == 1 ? 2 : 0);
+}
 
 /* Display */
 static int get_fullscreen(void *u) { (void)u; return wst.fs; }
@@ -1407,6 +1482,30 @@ static void register_settings(void)
                                  .enabled = on_3d,
                                  .help = "How close the 3D diorama's camera is (100%: about the "
                                          "console's view)."});
+    settings_register(&(setting){
+        .key = "render_scale", .label = "3D render scale", .category = "Look",
+        .type = SETTING_ENUM, .options = rscale_labels, .values = rscale_values, .count = 7,
+        .get = get_render_scale, .set = set_render_scale, .enabled = on_3d,
+        .help = "Draw the 3D scene smaller and upscale it with AMD FSR 1: faster on handhelds. "
+                "The UI stays sharp. Auto: 100%, 67% in the Steam Deck 3D look."});
+    settings_register(&(setting){
+        .key = "sharpen", .label = "Sharpening", .category = "Look", .type = SETTING_ENUM,
+        .options = amount_labels, .values = amount_values, .count = 6, .get = get_sharpen,
+        .set = set_sharpen, .enabled = on_3d,
+        .help = "AMD CAS on the 3D scene at 100%, FSR's RCAS below it. Auto: off at 100%, "
+                "50% below."});
+    settings_register(&(setting){
+        .key = "ao", .label = "Ambient occlusion", .category = "Look", .type = SETTING_ENUM,
+        .options = amount_labels, .values = amount_values, .count = 6, .get = get_ao,
+        .set = set_ao, .enabled = on_3d,
+        .help = "Soft contact shadows where walls meet floors, in corners and under eaves. "
+                "Auto: 75%."});
+    settings_register(&(setting){
+        .key = "ao_size", .label = "Occlusion quality", .category = "Look",
+        .type = SETTING_ENUM, .options = ao_size_labels, .values = ao_size_values, .count = 3,
+        .get = get_ao_size, .set = set_ao_size, .enabled = on_3d,
+        .help = "The occlusion's resolution: half or a quarter of the 3D scene's. Auto: half, "
+                "a quarter in the Steam Deck 3D look."});
     settings_register(&(setting){.key = "gyro", .label = "Gyro aiming", .category = "Look",
                                  .type = SETTING_BOOL, .get = get_gyro, .set = set_gyro,
                                  .enabled = on_hd2d,
@@ -2329,7 +2428,11 @@ static int open_window(const char *title, int scale, int fullscreen)
             {SDL_GL_CONTEXT_PROFILE_CORE, 3, 3, 0},
             {SDL_GL_CONTEXT_PROFILE_ES, 3, 0, 1},
         };
-        for (size_t k = 0; k < sizeof want_gl / sizeof *want_gl && !glctx; k++) {
+        /* port: CT_HD2D_GLES=1 asks for OpenGL ES 3.0 only (tests the ES path
+           on a desktop driver). */
+        const char *es_only = getenv("CT_HD2D_GLES");
+        for (size_t k = es_only && *es_only == '1' ? 1 : 0;
+             k < sizeof want_gl / sizeof *want_gl && !glctx; k++) {
             SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, want_gl[k].profile);
             SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, want_gl[k].major);
             SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, want_gl[k].minor);
@@ -2450,7 +2553,9 @@ static void usage(FILE *out)
     fprintf(out, "usage: ct_sdl [--scale N] [--frames N] [--dump DIR]\n         "
             "[--needed-hw FILE] [--fast] [--require-render] [--log-input]\n         "
             "[--interp-only] [--record FILE] [--script FILE] [--log-audio]\n         "
-            "[--require-no-underrun] [--hd2d] [--no-hd2d] [--preset off|subtle|hd2d|deck|hd2d3d]\n         "
+            "[--require-no-underrun] [--hd2d] [--no-hd2d]\n         "
+            "[--preset off|subtle|hd2d|deck|hd2d3d|deck3d] [--render-scale 50-100|auto]\n         "
+            "[--sharpen 0-1|auto] [--ao 0-1|auto]\n         "
             "[--aspect 4:3|pixel|stretch] [--debug-view N] [--fullscreen]\n         "
             "[--log-gpu] [--shot F:PATH]... [--shot-size WxH] [--module FILE]\n         "
             "[--rom FILE] [--touch] [--touch-hide SECS] [--touch-test FILE]\n         "
@@ -2652,11 +2757,26 @@ int main(int argc, char **argv)
         } else if (!strcmp(argv[k], "--preset") && k + 1 < argc) {
             int p = parse_preset(argv[++k]);
             if (p < 0) {
-                fprintf(stderr, "ct_sdl: --preset: off, subtle, hd2d, deck or hd2d3d\n");
+                fprintf(stderr, "ct_sdl: --preset: off, subtle, hd2d, deck, hd2d3d or deck3d\n");
                 return 2;
             }
             hd2d_set_preset(p);
             preset_given = 1;
+        } else if ((!strcmp(argv[k], "--render-scale") || !strcmp(argv[k], "--sharpen") ||
+                    !strcmp(argv[k], "--ao")) && k + 1 < argc) {   /* port: 3D quality */
+            float v;
+            int rs = !strcmp(argv[k], "--render-scale");
+            if (parse_quality(argv[k + 1], rs, &v)) {
+                fprintf(stderr, "ct_sdl: %s: %s or auto\n", argv[k], rs ? "50-100" : "0-1");
+                return 2;
+            }
+            if (rs)
+                hd2d_set_render_scale(v);
+            else if (!strcmp(argv[k], "--ao"))
+                hd2d_set_ao(v);
+            else
+                hd2d_set_sharpen(v);
+            k++;
         } else if (!strcmp(argv[k], "--aspect") && k + 1 < argc) {
             const char *v = argv[++k];
             hd2d_set_aspect(!strcmp(v, "pixel") ? HD2D_ASPECT_PIXEL
@@ -2837,7 +2957,9 @@ int main(int argc, char **argv)
         static char hello[64];
         snprintf(hello, sizeof hello, "Look: %s - [r3] to change",   /* F1 on a keyboard */
                  hd2d_preset() == HD2D_OFF ? "original" : hd2d_preset() == HD2D_SUBTLE ? "subtle"
-                 : hd2d_preset() == HD2D_DECK ? "HD-2D Steam Deck" : "HD-2D");
+                 : hd2d_preset() == HD2D_DECK ? "HD-2D Steam Deck"
+                 : hd2d_preset() == HD2D_3D ? "HD-2D 3D diorama"
+                 : hd2d_preset() == HD2D_DECK3D ? "3D diorama, Steam Deck" : "HD-2D");
         hd2d_osd(hello);
         /* port: the driver's first-draw work now, not on frame 1 with
            audio playing. */

@@ -12,7 +12,8 @@
 // shaded side of a box more), with the key light's shadow map, the 2D
 // path's point-light map looked up where the console drew the pixel, and
 // haze with distance. Outputs the lit color with the depth of field's
-// depth in alpha (0.5 at the focus), and the material (as light.frag's).
+// depth in alpha (0.5 at the focus), and the material (as light.frag's,
+// with the surface's normal in alpha for the ambient occlusion).
 //
 // With SHADOW_PASS defined: only the cut-out test, for the shadow map.
 #ifdef GL_ES
@@ -169,6 +170,8 @@ void main()
     bool raised = (vTile & (1u << 24)) != 0u;
     float cls = obj ? 4.0 : raised ? 3.0 : 2.0;
     oLit = vec4(lit, depth);
-    oMat = vec4(0.0, obj ? 1.0 : 0.0, cls / 8.0, 0.0);
+    // a: the normal for the ambient occlusion (ssao.frag), index + 1 over 8;
+    // 0 for sprites, which get none.
+    oMat = vec4(0.0, obj ? 1.0 : 0.0, cls / 8.0, obj ? 0.0 : float(min(ni, 5) + 1) / 8.0);
 }
 #endif

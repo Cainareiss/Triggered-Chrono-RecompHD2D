@@ -207,8 +207,11 @@ if(SDL2_FOUND)
     # through SDL; shaders are embedded as strings at build time.
     set(CT_HD2D_SHADERS fullscreen.vert emit.frag light.frag upscale.frag coc.frag dofblur.frag
         bright.frag gauss.frag final.frag
-        scene3d.vert scene3d.frag scene3d_pic.frag ui3d.frag)   # the 3D diorama (scene3d.h)
+        scene3d.vert scene3d.frag scene3d_pic.frag ui3d.frag   # the 3D diorama (scene3d.h)
+        aoprep.frag ssao.frag aoblur.frag fsr_easu.frag)   # its ambient occlusion and FSR 1 upscale
     list(TRANSFORM CT_HD2D_SHADERS PREPEND ${CMAKE_SOURCE_DIR}/frontend/hd2d/shaders/)
+    # AMD FidelityFX FSR 1 and CAS, ported to GLSL 3.30 / ES 3.00 (MIT).
+    list(APPEND CT_HD2D_SHADERS ${CMAKE_SOURCE_DIR}/third_party/fidelityfx/ffx_fsr1_cas.glsl)
     set(CT_HD2D_GEN ${CMAKE_BINARY_DIR}/hd2d_gen/hd2d_shaders.h)
     if(CT_ANDROID)   # port: no Python: the same header from a CMake script
         add_custom_command(

@@ -66,6 +66,18 @@ reads them to populate `funcs.toml` / `unresolved.toml`.
   uses it to read and check the models asset packs name in `[[model]]` entries
   (docs/ASSET-PACKS.md). Details and the file's hash in `third_party/cgltf/README.md`.
 
+### `third_party/fidelityfx/`
+
+- **GPUOpen-Effects/FidelityFX-FSR**, tag `v1.0.2`, commit
+  `a21ffb8f6c13233ba336352bdff293894c706575` (`ffx_fsr1.h` FSR 1 v1.20210629, `ffx_a.h`),
+  and **GPUOpen-Effects/FidelityFX-CAS**, tag `v1.0.2`, commit
+  `9fabcc9a2c45f958aff55ddfda337e74ef894b7f` (`ffx_cas.h` CAS 1.20190610). MIT, Advanced
+  Micro Devices, Inc.; vendored unmodified with their license files, and not compiled.
+  `ffx_fsr1_cas.glsl` is our port of EASU, RCAS and CAS to GLSL 3.30 / ES 3.00 (the
+  headers' GLSL needs GLSL 4.00 / ES 3.10), MIT like its source. The HD-2D renderer's 3D
+  diorama uses it for its render scale and sharpening (docs/HD2D.md). URLs, hashes and
+  the port's differences in `third_party/fidelityfx/README.md`.
+
 ### `third_party/imgui/`
 
 - **ocornut/imgui** (Dear ImGui), release `v1.92.9b`

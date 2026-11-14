@@ -7,6 +7,7 @@
 uniform sampler2D uColor;    // the console's frame (.bgr), nearest
 uniform usampler2D uLayer;   // its layer G-buffer
 uniform int uUiZ;            // z level that is UI, -1: none
+uniform int uEncode;         // 1: into the upscaled picture (fsr_easu.frag's encoding, a = UI)
 in vec2 vUV;
 layout(location = 0) out vec4 oLit;
 layout(location = 1) out vec4 oMat;
@@ -19,6 +20,7 @@ void main()
     uint l = texelFetch(uLayer, p, 0).r;
     if (uUiZ < 0 || int(l >> 4u) != uUiZ || int(l & 7u) >= 4)
         discard;
-    oLit = vec4(texelFetch(uColor, p, 0).bgr, 0.5);
+    vec3 c = texelFetch(uColor, p, 0).bgr;
+    oLit = uEncode == 1 ? vec4(c / (max(c.r, max(c.g, c.b)) + 1.0), 1.0) : vec4(c, 0.5);
     oMat = vec4(1.0, 0.0, 5.0 / 8.0, 0.0);
 }

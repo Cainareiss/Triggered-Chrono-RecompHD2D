@@ -16,7 +16,7 @@
 // Compiled after upscale.frag: planesLinear() gives the two planes
 // (composite = foreground color; background rgb, a = foreground coverage)
 // as a bilinear read of picture-size copies would; uLitBack.a is the
-// background plane's depth and uMat (r = UI, g = actor) is nearest.
+// background plane's depth and matAt() (r = UI, g = actor) is nearest.
 uniform vec4 uFocus;        // focus y (0 top .. 1), half band, ramp, focal depth
 uniform vec3 uDof;          // tilt amount, depth amount, foreground depth
 in vec2 vUV;
@@ -33,7 +33,7 @@ void main()
 {
     vec4 s, b;
     planesLinear(vUV, s, b);
-    vec4 m = texture(uMat, vUV);
+    vec4 m = matAt(vUV);
     float coc = cocAt(vUV.y, texture(uLitBack, vUV).a);   // texture order: 0 is the top
     // Actors stay mostly readable wherever they stand.
     coc *= mix(1.0, 0.3, m.g);
