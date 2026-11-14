@@ -429,6 +429,12 @@ if(SDL2_FOUND)
         $<TARGET_FILE:ct_sdl_engine> --module $<TARGET_FILE:ct_game_module>)
     set_tests_properties(sdl_hdtext PROPERTIES SKIP_RETURN_CODE 77)
     list(APPEND ct_game_tests sdl_hdtext)
+    # port: the 3D diorama look only where the console shows the map: a
+    # black narration screen over a loaded map stays black (frontend/hd2d).
+    add_test(NAME sdl_hidden_map_3d COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_hidden_map_3d.py
+        $<TARGET_FILE:ct_sdl_engine> --module $<TARGET_FILE:ct_game_module>)
+    set_tests_properties(sdl_hidden_map_3d PROPERTIES SKIP_RETURN_CODE 77)
+    list(APPEND ct_game_tests sdl_hidden_map_3d)
     # port: quality of life (frontend/qol.h): save states, the resume point
     # (SIGTERM, sleep, the prompt), screenshots, pause, fast-forward,
     # battery mode, save RAM import/export; headless, scripted.
