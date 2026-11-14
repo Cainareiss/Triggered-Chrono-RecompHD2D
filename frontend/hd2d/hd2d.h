@@ -13,10 +13,13 @@
 
 #include <stdint.h>
 
+#include "module.h"
 #include "sched.h"
 
-/* HD2D_DECK: HD2D_FULL made lighter for the Steam Deck's GPU (device.h). */
-enum { HD2D_OFF, HD2D_SUBTLE, HD2D_FULL, HD2D_DECK, HD2D_PRESETS };
+/* HD2D_DECK: HD2D_FULL made lighter for the Steam Deck's GPU (device.h).
+   HD2D_3D: HD2D_FULL with map views rebuilt as a 3D diorama (scene3d.h)
+   where the game describes its scene; everything else as HD2D_FULL. */
+enum { HD2D_OFF, HD2D_SUBTLE, HD2D_FULL, HD2D_DECK, HD2D_3D, HD2D_PRESETS };
 enum { HD2D_DEBUG_NONE, HD2D_DEBUG_CLASSES, HD2D_DEBUG_DEPTH, HD2D_DEBUG_BLUR, HD2D_DEBUG_SPLIT,
        HD2D_DEBUG_BEHIND, HD2D_DEBUGS };
 enum { HD2D_ASPECT_4_3, HD2D_ASPECT_PIXEL, HD2D_ASPECT_STRETCH, HD2D_ASPECTS };
@@ -50,6 +53,12 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
    driver's first-draw shader builds and the target setup happen before
    the game (and its audio) starts, not on its first frame. */
 void hd2d_warmup(int out_w, int out_h);
+
+/* The scene the next hd2d_render shows (runtime/module.h, ct_scene_capture;
+   NULL: none). Only read while hd2d_wants_scene() says the preset uses
+   it; the pointer must stay valid through that render. */
+void hd2d_set_scene(const ct_scene *scene);
+int hd2d_wants_scene(void);
 
 /* Whether the current preset uses the behind G-buffer, so the caller can
    turn the PPU's (sched_set_behind) on only while it is needed. */

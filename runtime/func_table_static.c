@@ -2,9 +2,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Static builds: install the tables linked into this program (a game's
- * generated ct_funcs.c and ct_overlays.c) before main runs. */
+ * generated ct_funcs.c and ct_overlays.c) before main runs, and the game's
+ * scene description if it has one (module.h). */
 #define CT_TABLES_DEFINE
 #include "func_table.h"
+#include "module.h"
+
+__attribute__((weak)) int ct_game_scene(ct_scene *out);   /* NULL: none linked */
 
 __attribute__((constructor)) static void install_linked_tables(void)
 {
@@ -12,4 +16,5 @@ __attribute__((constructor)) static void install_linked_tables(void)
                          ct_jumptables, ct_jumptable_count, ct_overlay_funcs,
                          ct_overlay_func_count};
     ct_tables_install(&t);
+    ct_scene_set_source(ct_game_scene);
 }

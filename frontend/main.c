@@ -36,7 +36,7 @@
  * controller button event.
  *
  * port additions (GPL-3.0-or-later):
- *   --hd2d [--preset off|subtle|hd2d] [--aspect 4:3|pixel|stretch]
+ *   --hd2d [--preset off|subtle|hd2d|deck|hd2d3d] [--aspect 4:3|pixel|stretch]
  *          [--debug-view N] [--fullscreen] [--log-gpu]
  *       draw through the HD-2D renderer (frontend/hd2d) in an OpenGL 3.3
  *       (or ES 3.0) window. F1 cycles the preset, F2 the debug view
@@ -277,6 +277,21 @@ static void present_plain(const uint8_t *bgrx)
     SDL_RenderPresent(ren);
 }
 
+/* port: the scene the 3D diorama look draws (module.h), captured once per
+   frame edge and only while the look uses it. */
+static const ct_scene *scene_now(void)
+{
+    static ct_scene sc;
+    static long at = -1;
+    if (!hd2d_wants_scene() || !ct_scene_available())
+        return NULL;
+    if (sched_frame_count() != at) {
+        at = sched_frame_count();
+        ct_scene_capture(&sc);
+    }
+    return &sc;
+}
+
 /* One screenshot of a frame: HD-2D at shot_w x shot_h, else as is. */
 static int write_shot(const char *path, const uint8_t *bgrx, const uint8_t *layers,
                       const uint8_t *behind, const uint8_t *behind_layers,
@@ -285,6 +300,7 @@ static int write_shot(const char *path, const uint8_t *bgrx, const uint8_t *laye
     int ok;
     if (hd2d_mode) {
         uint8_t *buf = malloc((size_t)shot_w * shot_h * 4);
+        hd2d_set_scene(st ? scene_now() : NULL);   /* none on the setup screens */
         hd2d_render(bgrx, layers, behind, behind_layers, st, shot_w, shot_h, 1);
         ok = buf && !hd2d_read(buf, shot_w, shot_h) &&
              (!touch_gl_ok || !touch_gl_shot(buf, shot_w, shot_h, picture_rect(shot_w, shot_h))) &&
@@ -318,6 +334,7 @@ static void present_hd2d(void)
 {
     int w, h;
     SDL_GL_GetDrawableSize(win, &w, &h);
+    hd2d_set_scene(scene_now());
     hd2d_render(sched_frame(), sched_layers(), sched_behind(), sched_behind_layers(),
                 sched_ppu_state_get(), w, h, 0);
     if (touch_gl_ok)
@@ -397,7 +414,8 @@ static int hd2d_key(SDL_Scancode sc)
         hd2d_set_preset((hd2d_preset() + 1) % HD2D_PRESETS);
         fprintf(stderr, "ct_sdl: hd2d preset %s\n", hd2d_preset_name(hd2d_preset()));
         static const char *const msg[HD2D_PRESETS] = {"Look: original", "Look: HD-2D subtle",
-                                                      "Look: HD-2D", "Look: HD-2D Steam Deck"};
+                                                      "Look: HD-2D", "Look: HD-2D Steam Deck",
+                                                      "Look: HD-2D 3D diorama"};
         hd2d_osd(msg[hd2d_preset()]);
         settings_save();
     } else if (sc == SDL_SCANCODE_F2) {
@@ -877,6 +895,7 @@ static void present_status(const uint8_t *bgrx)
     if (hd2d_mode) {
         int w, h;
         SDL_GL_GetDrawableSize(win, &w, &h);
+        hd2d_set_scene(NULL);
         hd2d_render(bgrx, status_layers, NULL, NULL, NULL, w, h, 0);
         SDL_GL_SwapWindow(win);
     } else {
@@ -906,7 +925,7 @@ static void usage(FILE *out)
     fprintf(out, "usage: ct_sdl [--scale N] [--frames N] [--dump DIR]\n         "
             "[--needed-hw FILE] [--fast] [--require-render] [--log-input]\n         "
             "[--interp-only] [--record FILE] [--script FILE] [--log-audio]\n         "
-            "[--require-no-underrun] [--hd2d] [--no-hd2d] [--preset off|subtle|hd2d|deck]\n         "
+            "[--require-no-underrun] [--hd2d] [--no-hd2d] [--preset off|subtle|hd2d|deck|hd2d3d]\n         "
             "[--aspect 4:3|pixel|stretch] [--debug-view N] [--fullscreen]\n         "
             "[--log-gpu] [--shot F:PATH]... [--shot-size WxH] [--module FILE]\n         "
             "[--rom FILE] [--touch] [--touch-hide SECS] [--touch-test FILE]\n         "
@@ -923,7 +942,7 @@ static void usage(FILE *out)
           "  Z                 B                Q / W       L / R\n"
           "  A / S             Y / X\n"
           "  F11               fullscreen on / off\n"
-          "  F1                HD-2D look: original, subtle, HD-2D, Steam Deck\n"
+          "  F1                HD-2D look: original, subtle, HD-2D, Steam Deck, 3D\n"
           "  F2                HD-2D debug view      F3  aspect: 4:3, pixel 8:7, stretch\n"
           "  Ctrl+Q            quit\n"
           "Controllers: south = B, east = A, west = Y, north = X, shoulders = L / R,\n"
@@ -1026,7 +1045,7 @@ int main(int argc, char **argv)
         } else if (!strcmp(argv[k], "--preset") && k + 1 < argc) {
             int p = parse_preset(argv[++k]);
             if (p < 0) {
-                fprintf(stderr, "ct_sdl: --preset: off, subtle, hd2d or deck\n");
+                fprintf(stderr, "ct_sdl: --preset: off, subtle, hd2d, deck or hd2d3d\n");
                 return 2;
             }
             hd2d_set_preset(p);

@@ -50,6 +50,9 @@
  * --vram FILE      likewise the 64 KB of VRAM, then CGRAM (512 bytes) and
  *                  OAM (544 bytes)
  * --aram FILE      likewise the SPC700's 64 KB of RAM
+ * --scene FILE     likewise the scene the game module describes (module.h,
+ *                  ct_scene_capture), as text: map, camera, layer tilemaps,
+ *                  cells and objects (test_scene.py checks it)
  * --profile N[@F]  at the end, print the native share of instructions and
  *                  the N functions most interpreted instructions ran in,
  *                  with why each didn't run natively (and, for entries run
@@ -370,15 +373,19 @@ static void write_thumb(FILE *out, const uint8_t *bgrx)
     fwrite(t, 1, sizeof t, out);
 }
 static FILE *wav, *hash_log, *ref_log;
-static const char *wram_path, *vram_path, *aram_path;
+static const char *wram_path, *vram_path, *aram_path, *scene_path;
 static long last_frame;
 static int dumped_state;
+
+static void dump_scene(void);
 
 /* --wram / --vram: WRAM, then VRAM, CGRAM and OAM, as they are at the
    last frame edge (a native call still running there doesn't move it). */
 static void dump_state(void)
 {
     dumped_state = 1;
+    if (scene_path)
+        dump_scene();
     if (vram_path) {
         Ppu *ppu = snes_hw_ppu();
         FILE *f = fopen(vram_path, "wb");
@@ -404,6 +411,54 @@ static void dump_state(void)
             fclose(f);
     }
 }
+/* --scene: the scene (module.h) as text, one record per line. */
+static void dump_scene(void)
+{
+    static ct_scene s;
+    memset(&s, 0, sizeof s);
+    FILE *f = fopen(scene_path, "w");
+    if (!f) {
+        fprintf(stderr, "ct_boot: cannot write %s\n", scene_path);
+        return;
+    }
+    int ok = !ct_scene_capture(&s);
+    fprintf(f, "mode %d\n", ct_scene_available() ? s.mode : -1);   /* -1: no source */
+    if (ok && s.mode == CT_SCENE_FIELD) {
+        fprintf(f, "map %u %u cell %u id %u gen %u\n", s.map_w, s.map_h, s.cell_px, s.map_id,
+                s.map_generation);
+        fprintf(f, "camera %d %d\nplayer %d\n", (int)s.camera_x, (int)s.camera_y,
+                s.player == 0xFF ? -1 : s.player);
+        for (int l = 0; l < CT_SCENE_LAYERS; l++) {
+            const ct_scene_layer *L = &s.layer[l];
+            fprintf(f, "layer %d present %u bpp %u chr %04X pal %u\n", l, L->present, L->bpp,
+                    L->chr_base, L->pal_base);
+            for (int y = 0; y < 2 * s.map_h; y++) {
+                fprintf(f, "tiles %d %d", l, y);
+                for (int x = 0; x < 2 * s.map_w; x++)
+                    fprintf(f, " %04X", L->tiles[y * CT_SCENE_STRIDE + x]);
+                fputc('\n', f);
+            }
+        }
+        for (int y = 0; y < s.map_h; y++) {
+            fprintf(f, "cells %d", y);
+            for (int x = 0; x < s.map_w; x++) {
+                const ct_scene_cell *c = &s.cells[y * CT_SCENE_MAX_CELLS + x];
+                fprintf(f, " %u.%u.%u.%02X", c->cls, c->flags, c->plane, c->raw);
+            }
+            fputc('\n', f);
+        }
+        for (int k = 0; k < s.n_objects; k++) {
+            const ct_scene_object *o = &s.object[k];
+            fprintf(f, "object %d %d %d %d %d", k, (int)o->x, (int)o->y, o->z,
+                    o->facing == 0xFF ? -1 : o->facing);
+            for (int p = 0; p < o->n_pieces; p++)
+                fprintf(f, " %d", o->piece[p]);
+            fputc('\n', f);
+        }
+    }
+    fclose(f);
+}
+
 static long dumped, audible;
 
 /* Frame edge: input for the next frame, then this frame's audio, dump
@@ -447,7 +502,7 @@ static void on_frame(long f)
         write_thumb(thumbs, sched_frame());
     if (hash_log)
         write_state_hashes(hash_log, f);
-    if (f == last_frame && (wram_path || vram_path || aram_path))
+    if (f == last_frame && (wram_path || vram_path || aram_path || scene_path))
         dump_state();
     if (ref_log)
         fprintf(ref_log, "%ld %016llx %016llx%s\n", f,
@@ -516,6 +571,8 @@ int main(int argc, char **argv)
             aram_path = argv[++k];
         } else if (!strcmp(argv[k], "--vram") && k + 1 < argc) {
             vram_path = argv[++k];
+        } else if (!strcmp(argv[k], "--scene") && k + 1 < argc) {
+            scene_path = argv[++k];
         } else if (!strcmp(argv[k], "--wram") && k + 1 < argc) {
             wram_path = argv[++k];
         } else if (!strcmp(argv[k], "--ref-log") && k + 1 < argc) {
@@ -630,7 +687,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "usage: ct_boot [--frames N] [--dump DIR] [--shot-every N DIR] [--thumbs FILE] [--resync REF LAG OUT] [--needed-hw FILE] "
                             "[--min-nmis K] [--require-render] [--wav FILE] "
                             "[--require-audio] [--input F1-F2:BUTTONS] [--script FILE] "
-                            "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE] [--behind]\n");
+                            "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--scene FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE] [--behind]\n");
             return 2;
         }
     }
@@ -702,7 +759,7 @@ int main(int argc, char **argv)
         fclose(ref_log);
     if (ppu_log)
         fclose(ppu_log);
-    if ((wram_path || vram_path) && !dumped_state)
+    if ((wram_path || vram_path || scene_path) && !dumped_state)
         dump_state();   /* stopped before the last frame edge (fatal) */
     printf("ct_boot: %ld frames, %ld NMIs, %ld frames dumped, %ld with audio, PC $%02X%04X\n",
            sched_frame_count(), sched_nmi_count(), (long)dumped, (long)audible, cpu.PB, cpu.PC);

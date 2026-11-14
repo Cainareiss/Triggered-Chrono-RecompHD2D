@@ -63,7 +63,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 
 # The tables (func_table.h), as objects so they precede ct_interp.
-add_library(ct_gen_tables OBJECT ${CT_OUT}/ct_funcs.c ${CMAKE_SOURCE_DIR}/runtime/func_table_static.c)
+# scene.c: the scene description (runtime/module.h), an object so the
+# weak reference in func_table_static.c finds it.
+add_library(ct_gen_tables OBJECT ${CT_OUT}/ct_funcs.c ${CMAKE_SOURCE_DIR}/runtime/func_table_static.c
+    scene.c)
 target_compile_definitions(ct_gen_tables PRIVATE CT_TABLES_DEFINE)
 target_include_directories(ct_gen_tables PUBLIC ${CT_OUT})
 target_link_libraries(ct_gen_tables PUBLIC ct_runtime)
@@ -95,7 +98,7 @@ endif()
 # port: the same game code as a loadable module (runtime/module.h), and
 # engine-only programs that load it with --module. The engine programs
 # contain no game code: built from the runtime and the empty tables only.
-add_library(ct_game_module MODULE ${CT_GEN_SOURCES} hooks.c ${CT_OUT}/ct_funcs.c
+add_library(ct_game_module MODULE ${CT_GEN_SOURCES} hooks.c scene.c ${CT_OUT}/ct_funcs.c
     ${CMAKE_SOURCE_DIR}/runtime/module_entry.c)
 target_include_directories(ct_game_module PRIVATE ${CT_OUT} ${CMAKE_SOURCE_DIR}/runtime)
 target_compile_definitions(ct_game_module PRIVATE CT_TEST_BUILD CT_TABLES_DEFINE)
@@ -117,6 +120,13 @@ add_test(NAME module_parity COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_
     $<TARGET_FILE:ct_boot> $<TARGET_FILE:ct_boot_engine> $<TARGET_FILE:ct_game_module>
     ${GAME_DIR}/test/replay/leene_square.txt 3000)
 list(APPEND ct_game_tests module_parity)
+
+# The scene description (scene.c) against an independent decoding of the
+# same WRAM and OAM (tools/scene_probe.py --text), static and as a module.
+add_test(NAME scene_decode COMMAND ${Python3_EXECUTABLE} ${GAME_DIR}/test/test_scene.py
+    $<TARGET_FILE:ct_boot> $<TARGET_FILE:ct_boot_engine> $<TARGET_FILE:ct_game_module>
+    ${GAME_DIR}/test/replay ${GAME_DIR}/tools/scene_probe.py)
+list(APPEND ct_game_tests scene_decode)
 
 # port: the package scan (tools/check_dist.py) passes the engine-only
 # programs and fails the module, the static programs, and ROM pieces.

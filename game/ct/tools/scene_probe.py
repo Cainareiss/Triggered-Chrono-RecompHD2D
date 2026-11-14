@@ -154,6 +154,80 @@ def print_oam(s, oam):
               f' prio {(a >> 4) & 3} {"16x16" if hi & 2 else "8x8"} -> obj {owners.get(tile9 & 0x1F8, "?")}')
 
 
+CELL_FLOOR, CELL_SOLID, CELL_WALLISH, CELL_STAIRS, CELL_UNKNOWN = 1, 2, 3, 5, 0
+OBJ_SIZES = [(8, 16), (8, 32), (8, 64), (16, 32), (16, 64), (32, 64), (16, 32), (16, 32)]
+
+
+def scene_text(w, oam, obj_size):
+    """The scene as ct_boot --scene writes it (runtime/module.h, game/ct/scene.c),
+    decoded here independently from a WRAM dump and the OAM: the test
+    (test/test_scene.py) compares the two. Field only; 'gen' is the module's
+    own counter and is written as '?'."""
+    if w[0x500:0x504] != bytes([0x5C, 0x63, 0xEA, 0xC0]):
+        return ['mode 0']
+    mw, mh = max(w[L1_W], w[L2_W]), max(w[L1_H], w[L2_H])
+    s = scene(w)
+    lines = ['mode 1', f"map {mw} {mh} cell 16 id {s['location']} gen ?",
+             'camera %d %d' % s['camera_px']]
+    live = [o for o in s['objects'] if not o['type'] & 0x80 and o['type'] != 7]
+    lead = w[LEADER]
+    player = next((k for k, o in enumerate(live) if not lead & 0x80 and 2 * o['slot'] == lead), -1)
+    lines.append(f'player {player}')
+    for layer in range(3):
+        present = 1 if layer < 2 or w[L3_ON] & 1 else 0
+        lines.append(f"layer {layer} present {present} bpp {4 if layer < 2 else 2} "
+                     f"chr {0x1000 if layer < 2 else 0x5000:04X} pal 0")
+        for ty in range(2 * mh):
+            y, qy = ty >> 1, ty & 1
+            row = []
+            for tx in range(2 * mw):
+                x, qx = tx >> 1, tx & 1
+                off = MAP + y * 256 + x
+                if layer < 2:
+                    idx = w[off + 0x40 * layer] | ((w[off + 0xC0] >> layer) & 1) << 8
+                    base = META12 + idx * 8
+                else:
+                    base = 0xC000 + w[off + 0x80] * 8
+                row.append('%04X' % u16(w, base + 2 * (qy * 2 + qx)))
+            lines.append(f'tiles {layer} {ty} ' + ' '.join(row))
+    for y in range(mh):
+        row = []
+        for x in range(mw):
+            off = MAP + y * 256 + x
+            raw = w[off + 0xC0] >> 2
+            cls = (CELL_FLOOR if raw == 0 else CELL_SOLID if raw == 1 else
+                   CELL_WALLISH if raw <= 0x15 else CELL_STAIRS if raw in (0x18, 0x19, 0x1D)
+                   else CELL_UNKNOWN)
+            over = 0
+            for layer in range(2):
+                idx = w[off + 0x40 * layer] | ((w[off + 0xC0] >> layer) & 1) << 8
+                if any(u16(w, META12 + idx * 8 + 2 * q) & 0x2000 for q in range(4)):
+                    over = 1
+            a, b = w[PROPS + y * 256 + x], w[PROPS + 0x40 + y * 256 + x]
+            trig = 2 if a & 0x10 or w[PROPS + 0x80 + y * 256 + x] != 0x80 else 0
+            row.append(f'{cls}.{over | trig}.{b & 3}.{raw:02X}')
+        lines.append(f'cells {y} ' + ' '.join(row))
+    groups = {}
+    for k, o in enumerate(live):
+        if o['active']:
+            groups.setdefault((o['oam_tile'] & 0x1F8) >> 3, k)
+    pieces = {k: [] for k in range(len(live))}
+    for e in range(128):
+        y, a, t = oam[4 * e + 1], oam[4 * e + 3], oam[4 * e + 2]
+        hi = (oam[512 + e // 4] >> (2 * (e % 4))) & 3
+        size = obj_size[(hi >> 1) & 1]
+        k = groups.get((t | (a & 1) << 8) >> 3)
+        if k is None or (y >= 224 and y + size <= 256):
+            continue
+        if len(pieces[k]) < 16:
+            pieces[k].append(e)
+    for k, o in enumerate(live):
+        facing = o['facing'] if o['facing'] <= 3 else -1
+        lines.append(' '.join([f"object {k} {o['x16'] >> 4} {o['y16'] >> 4} 0 {facing}"]
+                              + [str(e) for e in pieces[k]]))
+    return lines
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('wram')
@@ -161,8 +235,15 @@ def main(argv):
     ap.add_argument('--png')
     ap.add_argument('--oam', action='store_true')
     ap.add_argument('--chr', default='1000', help='BG1/BG2 character base, VRAM word (hex; $210B)')
+    ap.add_argument('--text', help='write the scene as ct_boot --scene does (needs --vram)')
+    ap.add_argument('--obsel', default='0', help='OBJ size select, OBSEL bits 5-7 (for --text)')
     a = ap.parse_args(argv)
     w = open(a.wram, 'rb').read()
+    if a.text:
+        v = open(a.vram, 'rb').read()
+        with open(a.text, 'w') as f:
+            f.write('\n'.join(scene_text(w, v[0x10200:0x10420], OBJ_SIZES[int(a.obsel)])) + '\n')
+        return 0
     s = scene(w)
     print_scene(s)
     if a.vram:
