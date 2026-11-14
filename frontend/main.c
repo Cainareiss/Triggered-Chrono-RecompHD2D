@@ -348,6 +348,12 @@ static SDL_GameController *open_controller(void)
 }
 
 static replay script;
+static long poke_frame = -1;   /* port: --poke-wram F:ADDR^M: XOR a WRAM byte at frame F's edge */
+static uint32_t poke_addr;
+static uint8_t poke_val;
+static long set_from = 1, set_to = 0;   /* port: --set-wram F1-F2:ADDR=V: a WRAM byte held at each edge */
+static uint32_t set_addr;
+static uint8_t set_val;
 static replay_rec rec;
 
 /* Host state shared by main and the frame hook. */
@@ -2588,6 +2594,10 @@ static void menu_report(void)
 static void on_frame(long f)
 {
     exit_frame = f;
+    if (f == poke_frame)   /* port: --poke-wram, a research aid (as ct_boot's) */
+        bus_wram()[poke_addr] ^= poke_val;
+    if (f >= set_from && f <= set_to)   /* port: --set-wram */
+        bus_wram()[set_addr] = set_val;
     if (hash_log)   /* port */
         write_hash(f);
     int show = qol_frame(f);   /* port: QOL: fast-forward and the battery's 30 Hz skip some */
@@ -3027,6 +3037,24 @@ int main(int argc, char **argv)
             module_path = argv[++k];
         } else if (!strcmp(argv[k], "--rom") && k + 1 < argc) {
             rom_arg = argv[++k];
+        } else if (!strcmp(argv[k], "--poke-wram") && k + 1 < argc) {   /* port */
+            unsigned a, v;
+            if (sscanf(argv[++k], "%ld:%x^%x", &poke_frame, &a, &v) != 3 || poke_frame < 1 ||
+                a > 0x1FFFF || !v || v > 0xFF) {
+                fprintf(stderr, "ct_sdl: --poke-wram F:ADDR^M\n");
+                return 2;
+            }
+            poke_addr = a;
+            poke_val = (uint8_t)v;
+        } else if (!strcmp(argv[k], "--set-wram") && k + 1 < argc) {   /* port */
+            unsigned a, v;
+            if (sscanf(argv[++k], "%ld-%ld:%x=%x", &set_from, &set_to, &a, &v) != 4 ||
+                set_from < 1 || set_to < set_from || a > 0x1FFFF || v > 0xFF) {
+                fprintf(stderr, "ct_sdl: --set-wram F1-F2:ADDR=V\n");
+                return 2;
+            }
+            set_addr = a;
+            set_val = (uint8_t)v;
 #ifdef CT_FIRSTRUN
         } else if (!strcmp(argv[k], "--data-dir") && k + 1 < argc) {
             data_dir = argv[++k];
