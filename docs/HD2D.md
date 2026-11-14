@@ -224,6 +224,13 @@ Where these are wrong:
 - BG3 (in map views mostly fog, light shafts and other color-math overlays) and color
   math in general aren't drawn in 3D; the UI from BG3's top level is laid flat over the
   picture as in the 2D path. Translucent or tinted sprites are opaque.
+- What the console draws into its BG1 tilemap only (a text box's window) isn't in the
+  scene, which is the map as the game keeps it. Each frame, per 8x8 tile of BG1 on the
+  screen, the console's BG1 pixels are compared with the scene's tile decoded from VRAM
+  and CGRAM (`s3d_box_mask` in `hd2d.c`); a run of at least 16 differing tiles across a
+  row is a box, and the console's pixels there are laid flat with the UI. Scattered
+  differences (tiles the game changed, color math) are left alone, and so is a frame
+  where most tiles differ.
 - Sprites are flat cut-outs; one that the original split between priorities (half
   behind a roof edge) is drawn whole at its foot point.
 - The camera sees further and wider at the top of the picture than the console's, so
@@ -562,8 +569,8 @@ uploaded only when it changes, premultiplied and linearly filtered. The console'
 pixels are taken out of the source picture before the upscale, so the lighting and the
 grade see an empty box. The lines are found on the screen from the provenance G-buffer,
 as asset packs' tiles are. With no font, the pass is as before (one branch not taken).
-In the 3D diorama the dialogue box's window is part of BG1, which the 3D scene replaces,
-so there, as without HD text, the text floats over the scene without its box.
+In the 3D diorama the dialogue box's window is part of BG1, which the 3D scene replaces;
+the renderer lays the box's tiles flat over the scene (below), and the text over them.
 
 ## Limits and next steps
 
