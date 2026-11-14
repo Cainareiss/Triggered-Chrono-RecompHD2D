@@ -33,6 +33,7 @@ ROM-derived: keep it in the build dir and never commit it.
 | OAM | **Culled** to the camera window (+4 tiles); one VRAM sprite slot per active object. Only the current frame is uploaded. |
 | Any object's sprite frame without OAM? | **Yes** (A1): from ROM and WRAM, for 4- and 8-piece frames (`game/ct/sprites.c`), checked pixel for pixel against the PPU. |
 | (A) 3D rebuild of the field | **Yes.** All inputs are resident. A height map has to be *inferred*, because the game has none (see A0.9). |
+| 3D world map (1000 A.D., `$1F0`)? | **Yes.** Mode 1, no HDMA, whole 1536x1024 px map and 8 px terrain classes in WRAM (W1-W3, W9). Mountain vs forest needs the picture. Vehicles and mode 7 scenes unverified. |
 | (B1) battle co-op | **Yes.** One hook on the battle's pad word, keyed by the active-menu byte. |
 | (B2) P2 steers a follower | **Partial.** Hook the follower routine. Proper wall collision needs the leader's collision code, which is tied to the camera. |
 | (B3) true split screen | **Partial (feasible with module work).** Background: yes, from WRAM/VRAM alone. Sprites: no from VRAM. They need a module-side sprite renderer, or a hook that widens the activation window. Map exits, triggers and battles stay tied to the leader. |
@@ -591,6 +592,285 @@ flag. Sprites for the second view use hook 1(a).)
   leader's test. On returning control, reset the ring indices so follower replay resumes
   cleanly (Obj_RecordMovement's reset path at C09DC3 zeroes `$01AB-$01AD`).
 
+## World map
+
+The world map is a different engine from the field. It is the bank-$C2 "menu shell"
+(funcs.toml names it `Overworld_*` and `Menu_*`), not the field loop. Everything below was
+read on `world_map_save.txt` (frames 7252-7720, location `$1F0`, "1000 A.D."), with the
+main repo's `ct_boot`. Method as above: WRAM, VRAM and PPU-write dumps (`--wram`,
+`--vram`, `--log-ppu`), `--watch`, `--snap-at`, and `ldis.py` for the code. **Verified**
+means a run or a dump agrees. **Code** means read from the disassembly only. The probe is
+`game/ct/tools/worldmap_probe.py` (end of this section). World-map code runs with D = $0000.
+
+### W1. Video mode: mode 1, no HDMA, no mode 7 (on `$1F0`)
+
+- `$2105` = `$09`: **mode 1 with BG3 priority**. *Verified* (`--log-ppu 2105:2133@7599`,
+  one frame of every PPU write): `$211B-$2120` only ever get the identity values the NMI
+  shadow holds. No mode 7 sampling, no window, no mosaic.
+- **No HDMA.** The NMI handler clears `$420C` (C20181) whenever it updates the screen,
+  and the logged frame has no PPU write outside the NMI's own timing (lines 228-230).
+  The world map has nothing per scanline.
+- Layers: `$212C` = `$17` (BG1, BG2, BG3, OBJ on the main screen); `$212D` = `$13`
+  (BG1, BG2, OBJ on the subscreen); `$2130` = `$02` (color math against the subscreen);
+  `$2131` = `$44` (half-add, **BG3 only**). So BG3 is a translucent **cloud layer** blended
+  with what is under it. BG1 draws over BG2.
+- The NMI at `$C2015E` copies a DP shadow to the PPU every frame, so read the shadow:
+  `$1E` BGMODE, `$20/$22/$24` BG1/2/3 HOFS, `$26/$28/$2A` BG1/2/3 VOFS, `$2C-$37` the
+  mode 7 matrix and center (identity, unused), `$38-$49` window, layer and color-math
+  registers. Set once at entry (frame 7252) and left alone, *verified* with
+  `--log-ppu 210B:210C@1`: `$2107-$2109` = `$61`, `$69`, `$79` (BG1 map at VRAM word
+  `$6000`, BG2 `$6800`, BG3 `$7800`, each 64x32); **`$210B` = `$22`: BG1 and BG2 tiles
+  (4 bpp) at word `$2000`**; `$210C` = `$77`: BG3 tiles at `$7000`; `$2101` (OBSEL) =
+  `$60`: OBJ tiles at words 0 and `$1000`, small objects 16x16, large 32x32.
+
+**Other world maps, and mode 7.** The overworld ids are `$1F0-$1F7`
+(Overworld_SetMapDescPtr C2274D reads `$C6FD00 + 2*(id-$1F0)`). The eight descriptors
+all decompress to the same sizes (tile defs 4096, map 12288, props 512, regions 3072), so
+one engine and one layout apply; only `$1F0` was run. A **separate mode 7 engine** exists:
+`Mode7Engine_Entry` ($C30000) is entered by EventCmd_Mode7Scene ($C03FAF) with a scene id
+below `$90`. It decompresses a 34,175-byte overlay from `$C31313` into `$7E3000`
+(ct_decompress.py), installs its own NMI (`$C30548`, `$C30529`) and dispatches on
+`id & $1F` through a 16-word table at `$7E3043` (11 distinct handlers). The overlay writes
+`$211B-$2120` at 30+ sites (e.g. `$7E3096`, `$7E565A`, `$7E5C59`, `$7E73D5`, `$7E9E31`),
+writes `$420C` at seven (`$7E879E`, `$7E87DA`, `$7E8A18`, `$7E8B0C`, `$7E8BC0`, `$7E8C25`,
+`$7E8CDD`) and sets HDMA channel registers at 13, so it does use per-scanline matrices.
+**No replay reaches one of these scenes.** The only time that engine ran
+(frames 65-1516, the opening) the frame logged had no BGMODE write at all (a pendulum
+on black, CGRAM and VRAM uploads only). So which scenes use mode 7 (Epoch flight? the
+end cutscenes?) and what their tables look like are **not verified**. docs/PRIOR-ART.md's
+"the world map is partly mode 7" does not hold for the 1000 A.D. overworld.
+
+### W2. Where the map and its graphics live
+
+All eight maps share one layout in bank $7E, loaded by Overworld_LoadAllMapGfx (C22CC1)
+from the descriptor at `$ED` (`$C6:$FD10 + $17*n`; `$00ED` held `$FD10` for `$1F0`). Each
+piece is a Gfx_DecompressVector call (`$C30002`) with the destination in `$0303-$0305`:
+
+| What | Where | Size | Source (descriptor byte, table) |
+| --- | --- | --- | --- |
+| BG1 metatile definitions | `$7E3000` | 256 x 8 bytes | `+$10`, `$C6FF00` (one 4 KB blob, both halves) |
+| BG2 metatile definitions | `$7E3800` | 256 x 8 bytes | (second half of that blob) |
+| **BG1 map**, sparse (0 = nothing) | `$7E4000` | 96 x 64 bytes | `+$11`, `$C6FF20` (one 12 KB blob, both layers) |
+| **BG2 map**, the ground | `$7E5800` | 96 x 64 bytes | (second half) |
+| Terrain properties | `$7E7000` | 512 bytes | `+$12`, `$C6FF80` |
+| Region nibbles | `$7E7200` | 64 rows x `$30` bytes | `+$13`, `$C6FFA0` |
+| Exit records | `$7E7E00` | 7 bytes each, count `$7E1B38` | `+$15`, `$C6FFC0` (staged at `$7F0400`) |
+| Event triggers | `$7E8300` | 3 bytes each, count `$7E1B39` | same blob |
+| BG tile graphics | VRAM word `$2000` | 4 x `$1000` bytes, staged at `$7F9000` | `+$0C..+$0F`, `$C6FDF0` |
+
+- **96 x 64 metatiles of 16 px = 1536 x 1024 px**, the whole map in WRAM, and
+  **toroidal**: Overworld_WrapStepTarget (C23A8F) wraps x at `$0600` and y at `$0400`, and
+  the camera wraps at 192 x 128 tiles of 8 px (Overworld_InitCameraScroll C22720). A map
+  byte is a metatile index.
+- A metatile definition is four SNES tilemap words in the order **TL, TR, BL, BR**
+  (tile 0-9, palette 10-12, priority 13, flips 14-15), as in A0.2.
+- **How the layer assignment was verified.** On the dump at frame 7600, for every non-empty
+  word of the BG1 tilemap in VRAM (`$6000`, 64x32) and of BG2 (`$6800`), expand the WRAM map
+  with each candidate map base (`$4000`/`$5800`), definition base (`$3000`/`$3800`) and
+  quadrant order (all 24), and count the words found at the matching 8 px position
+  (columns mod 64, rows mod 32). BG1 = `$4000` + `$3000` + TL,TR,BL,BR: **307 of 307**.
+  BG2 = `$5800` + `$3800`: **1152 of 1152**. Every other choice matched about half or less.
+- **VRAM holds every tile the map uses**, so `worldmap_probe.py --png` redraws the whole
+  1536x1024 world from WRAM + VRAM alone (checked by eye against `--shot` screens). The BG
+  tilemaps in VRAM are only the camera window, streamed as the party walks
+  (Overworld_ScrollLayer*, Overworld_Build*Strip*, C20568-C20ADC), as in the field.
+- BG1 holds the trees, mountains and buildings over the ground: 5,280 of its 6,144 cells
+  are empty on `$1F0`. Water/tile animation and palette cycling were **not examined**.
+- Region nibbles: `$7200 + y*$30 + x/2`, high nibble for even x (Overworld_GetRegionId
+  C262ED; `$00` = x metatile, `$01` = y metatile). Mostly 0 on `$1F0`, with ids 1-2 in
+  places. What they drive (music? the place name?) is **not verified**.
+
+### W3. Terrain properties
+
+`$7E7000` has two bytes per **ground** metatile index (the `$5800` map byte). The byte is
+`idx*2 + (tile_y & 1)` and the nibble is the high one for even `tile_x`, the low one for
+odd, with x, y in 8 px tiles (a 192 x 128 grid): Overworld_FetchTileProps C239D5 with
+HwMath_MulBy60 C262AE. The properties come from BG2 only. A nibble:
+
+| Value | Meaning | Verified |
+| --- | --- | --- |
+| 0 | walkable | yes |
+| bit 0 (1) | blocked: mountains, dense forest, the shore band | yes (runs below) |
+| bit 1 (2) | water: blocked on foot (C239C3 tests bits 0-1); every ocean tile is 2 | code + the data |
+| bit 2 (4) | cover: walkable, the party sprite draws partly hidden (C239AE) | yes: stepped through |
+
+**Collision rule.** When the party steps to tile (x,y), the game fetches the nibbles of
+(x-1,y-1), (x,y-1), (x-1,y), (x,y) into `node+$22..$25` and refuses the step if either of
+the two **upper** ones (row y-1) has bit 0 or 1 (C239C3: `AND #$0303`). Four runs on `$1F0`
+from tile (55,35), one held direction each (`--script`, then `--wram`): *right* stopped at
+tile 56 (the target's probes were `[0,1]`); *up* stopped at row 34 (probes `[1,1]`);
+*left* stopped at tile 46 (probes `[1,0]`); *down* went on to row 36 (probes `[0,0]`).
+The class-4 tiles at (55,34) were walked through. The rule predicts all four stops.
+`worldmap_probe.py --terrain` draws the classes: sea blue, land green, mountain, forest
+and cliff band red, small rectangles at towns and castles yellow.
+
+Bit 0 does not tell a mountain from a forest from a cliff. The renderer needs the ground
+metatile index (which picture it is) for that.
+
+### W4. Camera and scroll
+
+- Party position in world px: `$7E0283` (x), `$7E0285` (y), u16. Tile position (8 px):
+  `$0102/$0103` (Overworld_StorePartyTilePos C23ACB). The party **moves 1 px per frame in
+  8 px steps** (Overworld_SetStepTarget C23A56 targets ±8 px).
+- **Camera top-left, in world px, = (px_x - 128, px_y - 112)**, mod (1536, 1024): the party
+  is always at screen (128,112). *Verified* over 100 frames of walking (`--snap-at
+  C2015E@7330`): BG1 HOFS 312, 315, 318, 320 for px 440, 443, 446, 448; VOFS 168, 171, 174,
+  176 for py 280, 283, 286, 288. `$E3/$E7` hold that / 8 (u16). The BG1 shadow `$20`/`$26`
+  is the exact camera until the wrap (the PPU keeps 10 bits), so derive it from `$0283`,
+  `$0285`.
+- BG2 scrolls with BG1. **BG3 (the clouds) scrolls alone** (`$24`, `$2A`; the dump had
+  HOFS `$FFB4`, VOFS `$26`).
+
+### W5. Party marker, other sprites, vehicles
+
+- **Sprites are plain OAM.** The NMI (C20192) DMAs `$7E0700` (`$220` bytes) to OAM each
+  frame; the shell fills it from its sprite-node list (Menu_BuildSpriteOam C20D08, shared
+  with the menus). So a renderer takes them as in the field scene: OAM entries, VRAM tiles
+  (OBJ at words 0 and `$1000`), CGRAM `$80+`. All pieces are 16x16 (OBSEL `$60`).
+  **Verified** on the dump: the party is OAM entry 7, tile `$10E`, palette 4, priority 2,
+  at screen (120,95), i.e. world position - camera - **(8,17)** (440,280 - 312,168 =
+  128,112). A 4-piece ferry (entries 3-6, palette 2, at screen 168..184 x 148..164) is an
+  ordinary sprite object, not part of the map. The "1000 A.D." caption is 3 entries at
+  y = 192, priority 3.
+- Sprite graphics: Overworld_LoadPartySpriteGfx (C22B61) decompresses a sheet to `$7F9000`,
+  copies a 1 KB page per party member (ids from `$7E2980-$7E2982`, as in the field) to
+  `$7FB000/$B400/$B800` and a palette row each to `$7FBC00/BC40/BC80`; a DMA puts them in
+  VRAM word `$1000+`. Code, consistent with the dump (tile `$10E` is in the second table).
+- The leader's node is at **`$7E0D70`** (pointer in `$4E`): `+$14` x px, `+$18` y px,
+  `+$1C/$20` velocity, `+$22..$25` the four terrain nibbles, `+$26`, `+$28` animation and
+  facing, `+$2A/$2C` the step target. *Verified:* `+$14/+$18` equal `$0283/$0285` through
+  a walk (443, 446, 448). `$28` read 1 walking down and 3 walking right; the order
+  0 up, 1 down, 2 left, 3 right is likely (C239AA) but 0 and 2 were not seen.
+- **Followers** (code only: every replay has a one-PC party): each step the leader pushes
+  its position in a 16-entry ring, x at `$7E1B5B`, y at `$7E1B7B`, head byte offset
+  `$7E1B5A` (Overworld_PushPosHistory C23934, init C2391C). Magus (PC id 6) has his own
+  animation offset (+12, C23974).
+- **Vehicles (Epoch): not found.** The 1000 A.D. dump has no vehicle but the ferry, and no
+  vehicle state byte was identified. World event flags are cached from `$7F01F0` (16
+  bytes) to `$7E1BA7` (Overworld_CacheEventFlags C226D6; `$7F0000` goes to `$1BA6`), so
+  the Epoch is probably a flag there plus its own sprite, or a mode 7 scene (W1). Reaching
+  it needs a save with the Epoch. Treat it as unknown.
+
+### W6. Entrances (exits) and event triggers
+
+- **Exit records**, `$7E7E00 + 7*i`, `i < $7E1B38` (80 slots on `$1F0`, 77 active):
+  `+0` bit 7 = active, bits 0-6 = x; `+1` bits 0-5 = y (both in 16 px **metatiles**);
+  `+2` a parameter (to `$1B58`, Overworld_FetchExitParam C26263); `+3/+4` the destination
+  location id (word & `$1FF`), `+4 >> 1` its facing (`$0104`); `+5/+6` the destination
+  field tile x, y (`$0102/$0103`) (C224A5-C224C4, the world-to-field `$0100` write).
+  *Verified:* the record at (27,17) says location `$001`, Crono's house, which is where
+  the replay came out of (`--watch 100:2`: `$001 -> $1F0` at frame 7252, and the party
+  stands at world px 440,280 = metatile 27,17). Neighbouring cells repeat a destination
+  (a town covers several metatiles). Others on `$1F0`: (26,14) -> `$005`, (26,16) -> `$00F`.
+- **Detection:** the party's pixel position / 16 is compared with every active record
+  (Overworld_FindTriggersAtPos C232CD, called at C23299; the match index goes to `$7E1B32`,
+  `$FFFF` = none), then Overworld_DispatchTriggers (C23349) acts. An entrance is the
+  **metatile under the party**: no facing, no button, no terrain class. Two more tables use
+  the same scheme: event triggers at `$7E8300` (3-byte records, count `$1B39`; the active
+  bit is cleared when one fires, so each fires once) and a third at `$7E8180` (count
+  `$1B3A`). Those two are read from code only.
+
+### W7. What identifies the world map
+
+- **NMI vector `$7E0500`** (a JML to the loop's NMI): `$C2015E` while the world map runs.
+  *Verified* with `--watch 501:3` over 7,800 frames of `world_map_save`: `$C0EA63`
+  (field), `$C30548`/`$C308C9` (the opening's engine, frames 65-1516), `$C2840E` (the name
+  entry, and the pause menu), `$C2015E` for frames 1946-3543 and 7252-7720, `$C2840E`
+  again from 7720 when the menu opens. So the vector alone separates the world map from its
+  pause menu. Menu_InstallInterruptVectors (C20110) installs it.
+- Also read `$7E0100` in `$1F0-$1F7` for the map id. A map-change counter: hash
+  `$7E3000-$7E6FFF` (16 KB), as the field one hashes its grids. Nothing writes those while
+  walking; a reload under the same id re-runs Overworld_LoadAllMapGfx (C22CC1).
+
+### W8. Proposed `ct_scene` extension for the world map
+
+The current struct (`runtime/module.h`, ABI 6) already has most of it: layers as expanded
+8x8 tilemaps (`tiles`, `chr_base`, `bpp`), `cells` with a class, objects as OAM entry
+lists, the camera, `map_id`/`map_generation`. What is missing is a mode, bigger and finer
+maps, a wrap flag, the exits and the cloud layer. Proposal (a `CT_MODULE_ABI` bump):
+
+```c
+enum { CT_SCENE_OTHER = 0, CT_SCENE_FIELD = 1, CT_SCENE_WORLD = 2 };   /* ct_scene.mode */
+/* The map side limit becomes 192 x 128 for CT_SCENE_WORLD (8 px cells), 64 for the field. */
+enum { CT_CELL_COVER = 1 << 2 };   /* ct_scene_cell.flags: walkable, the walker draws partly hidden */
+
+typedef struct {
+    uint16_t x, y;                 /* in 16 px metatiles, as the game keeps them */
+    uint32_t dest_map;             /* the game's id for where it leads */
+} ct_scene_exit;
+
+typedef struct {                   /* valid when mode == CT_SCENE_WORLD */
+    uint8_t  wrap;                 /* the map wraps at both edges */
+    uint8_t  n_exits;
+    int32_t  party_x, party_y;     /* world px of the party's foot point (the camera centre) */
+    int32_t  cloud_x, cloud_y;     /* layer[2] scrolls on its own (px) */
+    uint8_t  cloud_blend;          /* sixteenths of the layer under it added: 8 here */
+    ct_scene_exit exit[128];
+} ct_scene_world;
+```
+
+How this game fills it: `mode` from the NMI vector (W7); `map_id` = `$0100`; `map_w`,
+`map_h`, `cell_px` = 192, 128, 8 and `cells` from W3 (floor for 0, solid for bit 0, water
+for bit 1, `CT_CELL_COVER` for bit 2, `raw` = the nibble); `layer[0]` = BG1 and `layer[1]`
+= BG2, tilemap words expanded from W2 over the full 192 x 128 tiles (BG1 empty cells 0),
+`chr_base` `$2000`, `bpp` 4; `layer[2]` = the BG3 clouds (VRAM `$7800`, `chr_base` `$7000`,
+2 bpp) scrolled by `cloud_*` from `$24/$2A`; `camera` and `party` from W4; objects from OAM
+(W5: foot point = OAM screen position + (8,17) + camera); `exit` from W6;
+`cloud_blend` from `$2131`. Pixels still travel in VRAM and CGRAM. The `CT_SCENE_OTHER`
+fallback (draw the 2D picture) keeps working for every other screen.
+
+### W9. Feasibility: a 3D world map
+
+**Verdict: feasible, and easier than the field.** It is plain mode 1 with no HDMA; the
+whole map is resident, flat, in two tile layers; the camera is the party's position;
+sprites are ordinary OAM; collision is an explicit grid; entrances are an explicit list.
+What the renderer does with it:
+
+- A ground mesh from BG2 and a decoration pass from BG1. The classes give the skeleton of
+  a **heightfield**: water at sea level, walkable (0, 4) flat, class 1 raised. But class 1
+  mixes mountains, dense forest and the cliff band, so the height should come from the
+  picture as well: a per-metatile-index table built at load from the tile pixels
+  (no shipped data), or the BG1 cell on top (mountain and tree art sit on BG1). A first
+  version can use sea 0, land 1 level, class-1 cells raised a fixed step and smoothed, with
+  BG1's non-empty cells stood up as billboards (trees, towns, mountains).
+- **Wrapping:** 1536 x 1024 px, so render the neighbouring tiles of the camera or sample
+  modulo.
+- Sprites as billboards from OAM (the party, the ferry); the caption stays 2D.
+- The BG3 clouds as a scrolling translucent plane above the ground (half-add).
+- An orbit camera is easy: the party's position is exact. The 8 px steps and the 1 px/frame
+  speed belong to the game state, not the view.
+
+Risks: classes do not separate mountains from forests (above); vehicles and flight are
+unknown and flight may be the mode 7 engine (W1); the 2D picture's per-tile priority (the
+"cover" look, trees over the sprite) has no direct mesh equivalent; water and palette
+animation are not examined; only `$1F0` was run (the others share the layout but were not
+drawn).
+
+### W10. For an HD mode 7 renderer (bsnes-hd style)
+
+- The **1000 A.D. overworld never uses mode 7**, so no HD mode 7 path is needed for it:
+  draw it from W2-W4 in 3D or as the plain mode 1 picture.
+- Per-scanline matrix: none on `$1F0` (no HDMA, W1). The mode 7 engine overlay (W1) holds
+  the matrix stores and HDMA tables; none of its scenes was reached. A later spike needs a
+  replay or a state poke that reaches one, then `--log-ppu 2105:2133` and
+  `--log-ppu 211A:2120` over one frame to get the per-line writes (HDMA writes are
+  logged with their line), and `--trace` on the overlay to find the table the HDMA reads.
+- Sprites over mode 7: the engine's own NMI is a different handler (`$C30548`); whether it
+  also DMAs `$0700` to OAM was not checked.
+
+### Probe
+
+```
+./ct_boot --frames 7600 --script ../game/ct/test/replay/world_map_save.txt \
+    --wram spike/w.wram --vram spike/w.vram
+python3 ../game/ct/tools/worldmap_probe.py spike/w.wram --vram spike/w.vram \
+    --png spike/world.png --terrain spike/terrain.png --regions spike/regions.png
+```
+
+It prints whether the dump is the world map (vector and id), the party, the camera, the BG
+scroll, the active exits and the OAM entries as screen and world positions. The PNGs are
+ROM-derived: build dir only.
+
 ## Proposed `ct_scene` (generic, for runtime/module.h)
 
 **Since implemented,** in a refined form: `ct_scene` in `runtime/module.h`, filled by
@@ -700,8 +980,9 @@ Pixels never travel through the struct. The engine already has VRAM and CGRAM.
 - A reliable "player has control" flag (events lock movement). `$0138`
   (checked by Player_ApplyPadMoveIntent) is a candidate. It has not been verified.
 - A field / battle / world map / menu mode byte for `ct_scene.mode`.
-- The world map ($1F0) uses a different engine (bank $C2/$C3 code wrote `$0100`). None of
-  the above has been checked there.
+- The world map ($1F0-$1F7) is a different engine: see "World map". Open there: vehicles
+  (the Epoch), which scenes use the mode 7 engine and its per-scanline tables, animated
+  water, what the region nibbles drive, the other seven world maps, followers' ring.
 - The sprite frame format in bank $E4 and the palette source: answered in A1. Format 2
   (12-piece) frames are still open.
 - Whether Marle (PC 1) can be forced into the party by a poke at the fair. Her object there is
