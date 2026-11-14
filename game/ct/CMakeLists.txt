@@ -269,6 +269,29 @@ add_test(NAME lockstep_soft_reset COMMAND ${Python3_EXECUTABLE}
     --script ${GAME_DIR}/test/replay/soft_reset.txt --expect-pc C28523)
 list(APPEND ct_game_tests soft_reset_replay lockstep_soft_reset)
 
+# The mode 7 cutscene engine's bike race (scene 0; 9 is its variant),
+# reached from reset by editing the boot script's own `FF 02` (its argument
+# at $7F2061, read at frame 60: XOR 2 ^ id; docs/SCENE.md W11). From frame
+# 141 the race patches its own main loop (the JSR at $7E3023) while that
+# loop runs natively, so the interpreter takes over the rest of it (the
+# overlay fallback); this stopped at frame 225 with `more than 64 nested
+# overlay functions` until the fallback stopped nesting itself. 1200
+# frames, native and interpreted, then native vs interpreter (with the
+# fallback: strict mode stops at the patch by design).
+set(ct_mode7_race --script ${GAME_DIR}/test/replay/world_map_save.txt --frames 1200
+    --overlay-fallback)
+add_test(NAME mode7_race COMMAND ct_boot ${ct_mode7_race} --poke-wram 59:12061^2
+    --expect-pc C30D9A --require-render)
+add_test(NAME mode7_race_interp COMMAND ct_boot ${ct_mode7_race} --poke-wram 59:12061^2
+    --interp-only --expect-pc C30D9A --require-render)
+add_test(NAME lockstep_mode7_race COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_SOURCE_DIR}/tools/lockstep.py $<TARGET_FILE:ct_boot> ${ct_mode7_race}
+    --poke-wram 59:12061^2 --expect-pc C30D9A)
+add_test(NAME lockstep_mode7_race9 COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_SOURCE_DIR}/tools/lockstep.py $<TARGET_FILE:ct_boot> ${ct_mode7_race}
+    --poke-wram 59:12061^b --expect-pc C30D6D)
+list(APPEND ct_game_tests mode7_race mode7_race_interp lockstep_mode7_race lockstep_mode7_race9)
+
 # port: save states (runtime/savestate.h, test/test_savestate.py): on the
 # Leene Square replay, a state saved at frame N and loaded must run on
 # exactly as the run that saved it (every frame's state hashes and

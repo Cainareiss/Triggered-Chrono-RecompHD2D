@@ -1414,6 +1414,7 @@ static void overlay_bail(CPU *c, overlay_act *a, uint32_t at)
 {
     if (ct_overlay_strict)
         ct_fatal("$%06X: the code of overlay %s changed while it ran natively", at, a->f->name);
+    overlay_drop_stale(a);
     ct_exec_until u = {~0u, a->s0};
     while (!ct_exec_done(c, &u))
         exec_one();

@@ -11,6 +11,9 @@ ranges.
 
 usage: lockstep.py PROBE [probe args...]
 
+Both runs get --overlay-strict unless the probe args have
+--overlay-fallback (for code that changes its own bytes as it runs).
+
 Exit 0 when every frame matches and both runs exit 0; 1 on the first
 divergent frame (reported with both hashes), when the runs end
 differently, or when they fail alike; 2 on bad usage.
@@ -81,8 +84,12 @@ def main() -> int:
         logs = {m: os.path.join(tmp, m + ".log") for m in ("native", "interp")}
         procs = {}
         for mode, log in logs.items():
-            # native overlay code must never outlive a change to its bytes here
-            cmd = [probe, *args, "--hash-log", log, "--overlay-strict"]
+            # native overlay code must never outlive a change to its bytes
+            # here, unless the run asks for the fallback (code that patches
+            # itself while it runs: the interpreter must take over)
+            cmd = [probe, *args, "--hash-log", log]
+            if "--overlay-fallback" not in args:
+                cmd.append("--overlay-strict")
             if mode == "interp":
                 cmd.append("--interp-only")
             procs[mode] = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

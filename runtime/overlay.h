@@ -107,6 +107,15 @@ static inline void overlay_leave(overlay_act *a)
 
 /* The outermost active function whose bytes no longer match, or NULL. */
 overlay_act *overlay_stale_active(void);
+/* The interpreter takes over from a stale active function a until it
+   returns (sched.c overlay_bail): a and every function entered after it
+   go dormant, as none of their native code runs again (the jump back to
+   a's dispatch drops them). Without this a change already seen would be
+   seen again at the next native instruction run meanwhile, and each time
+   nest another takeover: a function that never returns, such as a main
+   loop that patches its own per-frame call, stacked one per check until
+   OVERLAY_MAX_ACT. */
+void overlay_drop_stale(overlay_act *a);
 /* No function active (reset). */
 void overlay_reset_active(void);
 /* ct_interp_rest for overlay code (the emitter uses it there): the calling
