@@ -102,6 +102,9 @@ vec2 sharpUV(vec2 uv, vec2 size)
 }
 
 int classOf(vec4 m) { return int(m.b * 8.0 + 0.5); }
+// The material at uv, for the passes that read it directly (coc.frag,
+// bright.frag); scene3d_pic.frag has its own.
+vec4 matAt(vec2 uv) { return texture(uMat, uv); }
 int zOf(vec4 m) { return int(m.a * 31.0 + 0.5) & 15; }
 bool behindValid(vec4 m) { return int(m.a * 31.0 + 0.5) >= 16; }
 

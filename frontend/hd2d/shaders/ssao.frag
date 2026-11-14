@@ -12,31 +12,25 @@
 //
 // The normals aren't reconstructed from depth: every quad has one of six
 // (scene3d.h's S3D_N_*), which scene3d.frag writes to the material's
-// alpha, (index + 1) / 8, and 0 for what gets no occlusion (sprites, UI,
-// the void around the map). Sprites aren't occluders either: the shadow
-// map gives them their own, and their flat billboards would darken the
-// floor behind them.
+// alpha, and 0 for what gets no occlusion (sprites, UI, the void around
+// the map). Sprites aren't occluders either: the shadow map gives them
+// their own, and their flat billboards would darken the floor behind them.
+// All of it comes from aoprep.frag's texture, at this pass's size.
 //
-// Output: r = openness (1: unoccluded), g = view depth (map px), b = 1
-// where this is an occluded-or-not surface, 0 where it gets none (the
-// blur and the upsample skip those).
-uniform highp sampler2D uDepth;   // render size: the 3D depth buffer
-uniform sampler2D uMat;           // render size: a = normal index + 1, over 8; g = sprite
+// Output: r = openness (1: unoccluded), g = the depth of field's depth
+// (what the blur and the upsample compare), b = 1 where this is a surface
+// that gets occlusion, 0 where it gets none (they skip those).
+uniform highp sampler2D uPrep;    // aoprep.frag's: view depth - focus, normal + 1, sprite, depth
 uniform mat4 uView;
 uniform vec4 uProj;               // P[0][0], P[1][1], near, far
-uniform vec2 uRadius;             // radius (map px), samples
+uniform vec3 uRadius;             // radius (map px), samples, the focus distance
+uniform vec3 uKernel[16];         // the samples, in radii (tangent, bitangent, normal)
 in vec2 vUV;
 out vec4 oAo;
 
 const vec3 NORMALS[6] = vec3[6](vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(1.0, 0.0, 0.0),
                                 vec3(-1.0, 0.0, 0.0), vec3(0.0, 0.0, -1.0),
                                 vec3(0.0, 0.5, 0.866));
-
-float viewDepth(float d)
-{
-    float z = d * 2.0 - 1.0, n = uProj.z, f = uProj.w;
-    return 2.0 * n * f / (f + n - z * (f - n));
-}
 
 vec3 viewPos(vec2 uv, float w)
 {
@@ -56,12 +50,11 @@ float pattern(ivec2 p)
 
 void main()
 {
-    float d = texture(uDepth, vUV).r;
-    vec4 m = texture(uMat, vUV);
-    int ni = int(m.a * 8.0 + 0.5) - 1;
-    float w = viewDepth(d);
-    if (d >= 1.0 || ni < 0 || ni > 5) {
-        oAo = vec4(1.0, w, 0.0, 1.0);
+    vec4 c = texture(uPrep, vUV);
+    int ni = int(c.g + 0.5) - 1;
+    float w = c.r + uRadius.z;
+    if (ni < 0 || ni > 5) {
+        oAo = vec4(1.0, c.a, 0.0, 1.0);
         return;
     }
     vec3 P = viewPos(vUV, w);
@@ -77,29 +70,26 @@ void main()
     t = dot(t, t) < 1e-4 ? normalize(cross(n, vec3(0.0, 0.0, 1.0))) : normalize(t);
     vec3 b = cross(n, t);
 
+    // The kernel (hd2d.c s3d_ao_kernel): a golden-angle spiral over the
+    // disc lifted to a cosine-weighted hemisphere, z along the normal, in
+    // units of the radius; nearer samples are denser (they matter more).
     int count = int(uRadius.y);
     float occ = 0.0;
     for (int k = 0; k < 16; k++) {
         if (k >= count)
             break;
-        // Golden-angle spiral over the disc, lifted to a cosine-weighted
-        // hemisphere; nearer samples are denser (they matter more).
-        float q = (float(k) + 0.5) / float(count);
-        float phi = float(k) * 2.3999632;
-        float rad = sqrt(q);
-        vec3 h = vec3(cos(phi) * rad, sin(phi) * rad, sqrt(max(1.0 - q, 0.0)));
-        float len = mix(0.2, 1.0, q * q) * radius;
-        vec3 s = P + (t * h.x + b * h.y + n * h.z) * len;
+        vec3 h = uKernel[k] * radius;
+        vec3 s = P + t * h.x + b * h.y + n * h.z;
         vec2 uv = vec2(s.x * uProj.x, s.y * uProj.y) / -s.z * 0.5 + 0.5;
         if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
             continue;
-        float sw = viewDepth(texture(uDepth, uv).r);
-        // Sprites stand on the floor but don't occlude it.
-        if (texture(uMat, uv).g > 0.5)
+        vec4 at = texture(uPrep, uv);
+        if (at.b > 0.5)   // sprites stand on the floor but don't occlude it
             continue;
+        float sw = at.r + uRadius.z;
         float in_front = -s.z - sw;   // > 0: the scene is nearer than the sample
         float range = smoothstep(0.0, 1.0, radius / max(abs(w - sw), 1e-3));
         occ += step(0.02 * radius, in_front) * range;
     }
-    oAo = vec4(1.0 - occ / float(count), w, 1.0, 1.0);
+    oAo = vec4(1.0 - occ / float(count), c.a, 1.0, 1.0);
 }

@@ -38,7 +38,7 @@ void main()
         oColor = vec4(c, 1.0);
         return;
     }
-    float ui = texture(uMat, vUV).r;
+    float ui = matAt(vUV).r;
     float l = max(c.r, max(c.g, c.b));
     float knee = 0.2;
     float soft = clamp(l - uThreshold + knee, 0.0, 2.0 * knee);
