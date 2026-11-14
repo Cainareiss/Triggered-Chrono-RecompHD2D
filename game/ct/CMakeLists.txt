@@ -281,6 +281,18 @@ add_test(NAME savestate_replay_interp COMMAND ${Python3_EXECUTABLE}
     ${GAME_DIR}/test/replay/leene_square.txt 3000 3600 5 --interp-only)
 list(APPEND ct_game_tests savestate_replay savestate_replay_interp)
 
+# port: always run (game/ct/always_run.c, sched_pref): walking up to the bell
+# without the run button, the leader's Y velocity ($7E1D2D) is -$10; with
+# --always-run, -$20 (running). The module build takes the same patches.
+set(ct_always_run --frames 8900 --script ${GAME_DIR}/test/replay/leene_square.txt)
+add_test(NAME always_run COMMAND ct_boot ${ct_always_run} --always-run
+    --expect-wram 8900:1D2D=E0)
+add_test(NAME always_run_off COMMAND ct_boot ${ct_always_run} --expect-wram 8900:1D2D=F0)
+add_test(NAME always_run_module COMMAND $<TARGET_FILE:ct_boot_engine>
+    --module $<TARGET_FILE:ct_game_module> ${ct_always_run} --always-run
+    --expect-wram 8900:1D2D=E0)
+list(APPEND ct_game_tests always_run always_run_off always_run_module)
+
 # Battle sprites must not drop out on alternate frames (Gato's fight from
 # its start; broken until OAMADD kept its own reload value, test_hw_map).
 add_test(NAME battle_no_flicker COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_flicker.py

@@ -24,8 +24,10 @@
    index past the recorded entries read from the bus and dispatched; 4 is
    the scene export (ct_module_info.scene and scene_size, ct_scene); 5 is
    game patches (funcs.toml `patch`) and the players API they call
-   (sched.h). */
-#define CT_MODULE_ABI 5
+   (sched.h); 6 is the preferences API patches call (sched_pref: a module
+   with the always-run patches needs it from the engine), and save
+   states record it (savestate.h). */
+#define CT_MODULE_ABI 6
 
 /* ---- the scene: what the game is showing, for renderers (docs/SCENE.md) ----
    A module may describe its current view as a map of cells, tile layers

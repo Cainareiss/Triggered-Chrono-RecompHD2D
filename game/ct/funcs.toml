@@ -6675,6 +6675,7 @@ addr = 0xC08925
 states = ["m1x1"]
 e = 0
 module = "bankc0"
+patch = "always_run_e"   # port: always run (game/ct/always_run.c)
 
 [[func]]
 name = "Sub_C08944"
@@ -6682,6 +6683,7 @@ addr = 0xC08944
 states = ["m1x1"]
 e = 0
 module = "bankc0"
+patch = "always_run_w"   # port: always run (game/ct/always_run.c)
 
 [[func]]
 name = "Sub_C08963"
@@ -6689,6 +6691,7 @@ addr = 0xC08963
 states = ["m1x1"]
 e = 0
 module = "bankc0"
+patch = "always_run_n"   # port: always run (game/ct/always_run.c)
 
 [[func]]
 name = "Sub_C08982"
@@ -6696,6 +6699,7 @@ addr = 0xC08982
 states = ["m1x1"]
 e = 0
 module = "bankc0"
+patch = "always_run_s"   # port: always run (game/ct/always_run.c)
 
 [[func]]
 name = "Sub_C089A1"
@@ -6703,6 +6707,7 @@ addr = 0xC089A1
 states = ["m1x1"]
 e = 0
 module = "bankc0"
+patch = "always_run_se"   # port: always run (game/ct/always_run.c)
 
 [[func]]
 name = "Sub_C089D2"
@@ -6710,6 +6715,7 @@ addr = 0xC089D2
 states = ["m1x1"]
 e = 0
 module = "bankc0"
+patch = "always_run_sw"   # port: always run (game/ct/always_run.c)
 
 [[func]]
 name = "Sub_C08A07"
@@ -6717,6 +6723,7 @@ addr = 0xC08A07
 states = ["m1x1"]
 e = 0
 module = "bankc0"
+patch = "always_run_ne"   # port: always run (game/ct/always_run.c)
 
 [[func]]
 name = "Sub_C08A3C"
@@ -6724,6 +6731,7 @@ addr = 0xC08A3C
 states = ["m1x1"]
 e = 0
 module = "bankc0"
+patch = "always_run_nw"   # port: always run (game/ct/always_run.c)
 
 [[func]]
 name = "Field_UpdateDrawObjects"

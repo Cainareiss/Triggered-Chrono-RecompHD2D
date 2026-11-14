@@ -101,6 +101,8 @@
  * --coop-chars L / --coop-chars3 L  the party slots (1-3, comma list) player
  *                  2 / player 3 command (default: 2 and 3 to player 2);
  *                  --coop-chars3 also turns on a third player (pad 3)
+ * --always-run     port: the always-run preference on (sched_set_pref): a
+ *                  game module's patches that honour it invert the run button
  * --coop-split     --coop with the experimental split screen
  *                  (sched_set_views(2))
  * --shot F:PATH    write frame F as a PNG to PATH (repeatable); with
@@ -716,6 +718,8 @@ int main(int argc, char **argv)
                 }
             if (player == 2)
                 sched_set_players(3);
+        } else if (!strcmp(argv[k], "--always-run")) {
+            sched_set_pref(SCHED_PREF_ALWAYS_RUN, 1);   /* port */
         } else if (!strcmp(argv[k], "--coop-split")) {
             /* port: --coop and the experimental split screen */
             sched_set_players(sched_players() > 2 ? sched_players() : 2);
@@ -772,7 +776,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "usage: ct_boot [--frames N] [--dump DIR] [--shot-every N DIR] [--thumbs FILE] [--resync REF LAG OUT] [--needed-hw FILE] "
                             "[--min-nmis K] [--require-render] [--wav FILE] "
                             "[--require-audio] [--input F1-F2:BUTTONS] [--script FILE] "
-                            "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--scene FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE] [--behind] [--coop] [--coop-chars L] [--coop-chars3 L] [--coop-split] [--shot F:PATH] [--prov] [--save-state F:PATH] [--load-state PATH] [--state-roundtrip N]\n");
+                            "[--expect-pc ADDR] [--expect-wram F:ADDR=V] [--poke-wram F:ADDR^M] [--log-ppu LO:HI[@F] FILE] [--hash-log FILE] [--ref-log FILE] [--wram FILE] [--vram FILE] [--aram FILE] [--scene FILE] [--profile N[@F]] [--min-native P] [--max-stack N] [--watch A[:N]] [--at ADDR] [--log-entry ADDR[:MEM]] [--snap-at ADDR[@F] DIR] [--wram-entries FILE] [--overlay-strict|--overlay-fallback] [--first-exec FILE] [--trace LO:HI[@N] FILE] [--ref-quirk NAME] [--interp-only] [--module FILE] [--behind] [--coop] [--coop-chars L] [--coop-chars3 L] [--coop-split] [--always-run] [--shot F:PATH] [--prov] [--save-state F:PATH] [--load-state PATH] [--state-roundtrip N]\n");
             return 2;
         }
     }
