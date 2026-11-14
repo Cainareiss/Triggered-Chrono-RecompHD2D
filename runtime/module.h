@@ -20,7 +20,8 @@
    a change to what they do counts too: 2 is decimal-mode ADC/SBC (a module
    built for 1 stops on the first ADC/SBC run with D=1); 3 is a compiled
    callee that comes back elsewhere handing the caller's rest to the
-   executor (ops.h cpu_return_ok) instead of stopping. */
+   executor (ops.h cpu_return_ok) instead of stopping, and a jump table
+   index past the recorded entries read from the bus and dispatched. */
 #define CT_MODULE_ABI 3
 
 typedef struct {

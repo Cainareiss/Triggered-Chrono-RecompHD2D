@@ -455,8 +455,22 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
                         body.append(f'case 0x{2 * n:04X}: ct_run(cpu, {callee(tg, cst)}); break;')
                     else:
                         body.append(f'case 0x{2 * n:04X}: ct_tail(cpu, {callee(tg, cst)}); return;')
-                body.append(f'default: ct_fatal("${i.addr:06X}: jump table index $%04X out of range", '
-                            'cpu->X);')
+                # past the recorded entries: the CPU reads whatever word is
+                # there (bus reads, as for a table of unknown length) and goes
+                # on through the dispatcher; strict without the scheduler
+                bank = i.addr >> 16
+                read = [f'uint16_t p = (uint16_t)(0x{i.operand:04X} + cpu->X);',
+                        f'uint32_t t = read8(0x{bank:02X}0000u | p);',
+                        f't = 0x{bank:02X}0000u | t | (uint32_t)read8(0x{bank:02X}0000u | '
+                        '(uint16_t)(p + 1)) << 8;']
+                if is_call:
+                    cond = ' || '.join([f'!ct_call_interp(cpu, t, 0x{back:06X}, 2)'] + mx)
+                    rest = [f'if ({cond}) {{ ct_interp_rest(cpu, s0); return; }}', 'break;']
+                else:
+                    rest = ['cpu->PC = (uint16_t)t;', 'ct_interp_rest(cpu, s0);', 'return;']
+                body.append(f'default: if (!ct_exec_hook) ct_fatal("${i.addr:06X}: jump table index '
+                            '$%04X out of range", cpu->X);')
+                body.append('    { ' + ' '.join(read + rest) + ' }')
                 body.append('}')
                 if is_call:
                     body.append(f'if (!cpu_return_ok(cpu, 0x{i.addr:06X}, 0x{(ret + 1) & 0xFFFF:04X})) '
