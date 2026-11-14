@@ -75,6 +75,7 @@ uint8_t *savestate_save(size_t *len, const char **why)
     if (savestate_ready(why))
         return NULL;
     ss_io s = {0};
+    s.version = SAVESTATE_VERSION;
     uint8_t head[HEAD_LEN];
     memcpy(head, SAVESTATE_MAGIC, 8);
     put32(head + 8, SAVESTATE_VERSION);
@@ -114,7 +115,7 @@ int savestate_load(const uint8_t *blob, size_t len, const char **why)
     rom_sha1_bin(sha);
     if (savestate_peek(blob, len, NULL))
         w = "not a save state";
-    else if (get32(blob + 8) != SAVESTATE_VERSION)
+    else if (get32(blob + 8) != SAVESTATE_VERSION && get32(blob + 8) != 1)
         w = "a save state of another format version";
     else if (get32(blob + 12) > CT_MODULE_ABI || get32(blob + 12) < SAVESTATE_ABI_MIN)
         w = "a save state from another engine version (module ABI)";
@@ -130,6 +131,7 @@ int savestate_load(const uint8_t *blob, size_t len, const char **why)
     for (int pass = 2; pass >= 1; pass--) {
         ss_io s = {0};
         s.loading = pass;
+        s.version = get32(blob + 8);
         s.in = blob;
         s.in_len = len;
         s.pos = HEAD_LEN;

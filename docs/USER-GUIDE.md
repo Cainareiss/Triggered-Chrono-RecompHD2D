@@ -436,8 +436,8 @@ live](#where-your-files-live)): `quick.state`, `slot1.state` to `slot4.state` an
 They are your files, like your saves: they are never part of the project and never
 shared. A state is about 600 KB.
 
-- A state is taken at the end of a frame. Very rarely the sound chip is in the middle of an
-  instruction there, and the save happens a frame or two later.
+- A state is taken at the end of the frame you press the key in, wherever the game is
+  (field, world map, battle, menus).
 - Loading a state does not change your in-game saves. The cartridge's save memory stays as
   it is on disk, so loading an old state never undoes a save you made in the game.
 - A state only loads in the same engine version and with the same ROM. Another one is

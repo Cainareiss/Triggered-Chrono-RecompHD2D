@@ -143,6 +143,13 @@ static void go_dormant(void)
     }
 }
 
+void overlay_drop_stale(overlay_act *a)
+{
+    for (overlay_act *k = a; k < ct_ovl_act + ct_ovl_n; k++)
+        k->dormant = 1;
+    rewatch();
+}
+
 void ct_overlay_rest(CPU *cpu, uint16_t s0)
 {
     go_dormant();

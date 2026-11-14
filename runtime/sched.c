@@ -1423,6 +1423,7 @@ static void overlay_bail(CPU *c, overlay_act *a, uint32_t at)
 {
     if (ct_overlay_strict)
         ct_fatal("$%06X: the code of overlay %s changed while it ran natively", at, a->f->name);
+    overlay_drop_stale(a);
     ct_exec_until u = {~0u, a->s0};
     while (!ct_exec_done(c, &u))
         exec_one();
@@ -1765,8 +1766,8 @@ int sched_state_ready(const char **why)
     const char *w = NULL;
     if (in_cpu)
         w = "the CPU is running (save between frames)";
-    else if (!spc_host_at_boundary())
-        w = "the sound CPU is between instructions (the next frame edge may do)";
+    else if (!spc_host_can_save())
+        w = "the sound CPU is in SLEEP or STOP";
     if (why)
         *why = w;
     return w != NULL;
