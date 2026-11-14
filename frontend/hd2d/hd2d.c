@@ -370,7 +370,7 @@ static const settings presets[HD2D_PRESETS] = {
                  .dof_radius = 6.0f, .bloom = 0.45f, .bloom_threshold = 0.7f,
                  .exposure = 1.06f, .saturation = 1.12f, .contrast = 1.04f, .vignette = 0.35f,
                  .grain = 0.018f, .split = 0.35f, .side_dim = 0.42f, .tilt = 0.022f,
-                 .effects = 1, .scene3d = 1, .render_scale = 1.0f, .ao3d = 0.6f, .ao_div = 2},
+                 .effects = 1, .scene3d = 1, .render_scale = 1.0f, .ao3d = 0.75f, .ao_div = 2},
     /* HD2D_DECK with the 3D diorama: the surfaces at 67% of the picture's
        size and FSR 1 up to it, the ambient occlusion at a quarter. */
     [HD2D_DECK3D] = {.relief = 0.55f, .shadow = 0.85f, .ao = 0.7f, .rim = 0.6f, .haze = 0.5f, .point_light = 1.2f,
@@ -379,7 +379,7 @@ static const settings presets[HD2D_PRESETS] = {
                      .exposure = 1.06f, .saturation = 1.12f, .contrast = 1.04f, .vignette = 0.35f,
                      .grain = 0.018f, .split = 0.35f, .side_dim = 0.42f, .tilt = 0.022f,
                      .effects = 1, .bloom_quarter_only = 1, .side_fill_wide_only = 1,
-                     .scene3d = 1, .render_scale = 0.67f, .ao3d = 0.6f, .ao_div = 4},
+                     .scene3d = 1, .render_scale = 0.67f, .ao3d = 0.75f, .ao_div = 4},
 };
 
 static const char *const preset_names[HD2D_PRESETS] = {"off",  "subtle", "hd2d",
@@ -473,6 +473,7 @@ static struct {
         float ao_amt;                 /* and its occlusion strength */
         GLuint t_shadow, fbo_shadow;
         float dtilt, dyaw;   /* port: hd2d_set_camera_offset (gyro), degrees */
+        float ao_radius;                  /* ambient occlusion's reach, map px */
         float tilt, fov, zoom, stretch;   /* camera: degrees from straight down, vertical fov,
                                              zoom; sprites' height scale */
         int hmax;
@@ -1286,7 +1287,7 @@ static void post(const settings *s, int px, int py, int pw, int ph, int ow, int 
 
 #define S3D_SHADOW_SIZE 1024
 #define S3D_FADE_STEP   0.125f   /* 8 frames */
-#define S3D_AO_RADIUS   14.0f    /* ambient occlusion's reach, map px (a cell is 16) */
+#define S3D_AO_RADIUS   12.0f    /* ambient occlusion's reach, map px (a cell is 16) */
 
 static void s3d_params_init(void)
 {
@@ -1295,7 +1296,8 @@ static void s3d_params_init(void)
     g.s3.zoom = user_zoom;   /* 1: the console's 256 px across at the focus (0.75) */
     g.s3.hmax = 3;       /* wall height cap, cells */
     g.s3.stretch = -1.0f;   /* sprites: < 0 picks the scale that keeps their proportions */
-    /* CT_HD2D_3D=tilt=40,fov=30,zoom=0.75,hmax=3,stretch=1.2 overrides them. */
+    g.s3.ao_radius = S3D_AO_RADIUS;
+    /* CT_HD2D_3D=tilt=40,fov=30,zoom=0.75,hmax=3,stretch=1.2,aoradius=12 overrides them. */
     const char *e = getenv("CT_HD2D_3D");
     for (const char *p = e; p && *p;) {
         char key[16];
@@ -1307,6 +1309,7 @@ static void s3d_params_init(void)
             else if (!strcmp(key, "zoom")) g.s3.zoom = v < 0.25f ? 0.25f : v > 4 ? 4 : v;
             else if (!strcmp(key, "hmax")) g.s3.hmax = (int)v;
             else if (!strcmp(key, "stretch")) g.s3.stretch = v < 0.5f ? 0.5f : v > 2 ? 2 : v;
+            else if (!strcmp(key, "aoradius")) g.s3.ao_radius = v < 2 ? 2 : v > 48 ? 48 : v;
             p += n;
         } else {
             p++;
@@ -1802,7 +1805,7 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
         float kernel[16 * 3];
         s3d_ao_kernel(kernel, n);
         p_glUniform3fv(U(P3_AO, "uKernel"), n, kernel);
-        p_glUniform3f(U(P3_AO, "uRadius"), S3D_AO_RADIUS, (float)n, dist);
+        p_glUniform3f(U(P3_AO, "uRadius"), g.s3.ao_radius, (float)n, dist);
         draw_to(g.s3.ao[0].fbo, g.s3.ao[0].w, g.s3.ao[0].h);
         prof_mark("s3d_ao");
         p_glUseProgram(g.prog[P3_AOBLUR]);

@@ -34,7 +34,7 @@ enum { HD2D_ASPECT_4_3, HD2D_ASPECT_PIXEL, HD2D_ASPECT_STRETCH, HD2D_ASPECTS };
    - sharpen, 0-1: CAS at a render scale of 1 (0: off), RCAS's strength
      below it. < 0: the preset's (0 at 1, 0.5 below).
    - ambient occlusion strength, 0-1 (0: off, and the pass is skipped).
-     < 0: the preset's (0.6).
+     < 0: the preset's (0.75).
    - ambient occlusion size: the render size / 2 or / 4 each way. 0: the
      preset's (2 in hd2d3d, 4 in deck3d).
    Settings (settings.ini render_scale, sharpen, ao); out-of-range values

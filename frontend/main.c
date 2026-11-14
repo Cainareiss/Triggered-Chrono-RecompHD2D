@@ -1499,7 +1499,7 @@ static void register_settings(void)
         .options = amount_labels, .values = amount_values, .count = 6, .get = get_ao,
         .set = set_ao, .enabled = on_3d,
         .help = "Soft contact shadows where walls meet floors, in corners and under eaves. "
-                "Auto: 60%."});
+                "Auto: 75%."});
     settings_register(&(setting){
         .key = "ao_size", .label = "Occlusion quality", .category = "Look",
         .type = SETTING_ENUM, .options = ao_size_labels, .values = ao_size_values, .count = 3,
