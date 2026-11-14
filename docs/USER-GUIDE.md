@@ -184,7 +184,29 @@ Deck, ROG Ally and most others) works as pad 1. Buttons are mapped by position:
 | Select | Back / View / Share |
 | D-pad | D-pad or left stick |
 
-You can plug a controller in or out while the game runs.
+You can plug a controller in or out while the game runs. A Nintendo pad is read by
+position too: its bottom button (Nintendo's B) is SNES B.
+
+### Quick keys and back buttons
+
+| Key | Back button (Steam Deck) | What it does |
+| --- | --- | --- |
+| F6 | L4 | Quick save |
+| F9 | R4 | Quick load |
+| Tab (hold) | L5 | Fast-forward while held |
+| F10 | R5 | Menu (for now: a message listing these) |
+| F8 | | Screenshot |
+
+These are hooks for features still being written: until then they say "*not available
+yet*" on screen. A Steam Controller's grips are R4 and L4 (paddle1 and paddle2), an Xbox
+Elite pad's paddles P1-P4 likewise. `settings.ini` changes them: `bind_paddle1=` ...
+`bind_paddle4=`, `bind_misc1=`, `bind_touchpad=` take an action (`none`, `quicksave`,
+`quickload`, `ffwd`, `menu`, `screenshot`), and `key_quicksave=F6` and the like take a
+key name (`none` for no key). Details, and how this works with Steam Input:
+[HANDHELD.md](HANDHELD.md#back-buttons-and-grips).
+
+Messages on screen show the buttons of what you used last, a controller's (Steam Deck,
+Steam Controller, Xbox, PlayStation, Switch) or the keyboard's, as small pictures.
 
 ### The HD-2D look
 
@@ -372,4 +394,9 @@ without OpenGL 3.3 can still play without `--hd2d`.
   that the output device is right in your system's sound settings.
 - **Controller:** run from a terminal. At startup the program lists every joystick it
   sees, and marks the ones it can't use as `(joystick only: not used)`. Only
-  controllers that SDL recognizes as game controllers work.
+  controllers that SDL recognizes as game controllers work. Each one is listed with its
+  USB vendor:product and the button pictures it gets.
+- **Steam Deck or Steam Controller outside Steam:** the game reads them with SDL's own
+  drivers, which need access to `/dev/hidraw*` (Steam's udev rules, the `steam-devices`
+  package on some distributions). `steam_hidapi=off` in `settings.ini` leaves the Steam
+  Controller to other drivers ([HANDHELD.md](HANDHELD.md#without-steam-input-desktop-mode)).

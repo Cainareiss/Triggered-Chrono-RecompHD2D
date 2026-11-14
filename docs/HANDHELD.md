@@ -104,6 +104,108 @@ are mapped by position, as on the SNES pad:
 While you hold View and Menu together, the game doesn't see them, so the combo doesn't
 open the game's menu. The answer to the question doesn't reach the game either.
 
+### Back buttons and grips
+
+The Deck's four back buttons (and a Steam Controller's grips, an Xbox Elite pad's paddles)
+are not SNES buttons. They drive the frontend instead:
+
+| Button | Key | What it does |
+| --- | --- | --- |
+| L4 (upper left) | F6 | Quick save |
+| R4 (upper right) | F9 | Quick load |
+| L5 (lower left) | Tab (hold) | Fast-forward while held |
+| R5 (lower right) | F10 | Menu (for now a message listing these buttons) |
+| | F8 | Screenshot |
+
+Quick save, quick load, fast-forward and the screenshot are hooks for now: pressing them
+shows "*Quick save: not available yet*" until those features land. The keys avoid F1-F4
+and F11 (look, debug view, aspect, co-op, fullscreen), F5 (the asset packs' reload) and
+F12 (Steam's screenshot key).
+
+To change them, edit `settings.ini` (in `~/.local/share/ct-recomp/hd2d/`) while the game
+is closed:
+
+```
+bind_paddle2=quicksave     # L4
+bind_paddle1=quickload     # R4
+bind_paddle4=ffwd          # L5
+bind_paddle3=menu          # R5
+bind_misc1=none            # the Deck's ... button, a Switch Pro's capture button
+bind_touchpad=none         # trackpad / touchpad click
+key_quicksave=F6
+key_quickload=F9
+key_ffwd=Tab
+key_menu=F10
+key_screenshot=F8          # "none" for no key
+```
+
+Actions: `none`, `quicksave`, `quickload`, `ffwd`, `menu`, `screenshot`. Keys use SDL's
+key names. Keys the game or the frontend already uses (arrows, Z X A S Q W, Enter, Right
+Shift, F1-F4, F11) are refused. SDL numbers the Deck's back buttons paddle1 = R4,
+paddle2 = L4, paddle3 = R5, paddle4 = L5; on the first Steam Controller paddle1 is the
+right grip and paddle2 the left one.
+
+### Without Steam Input (Desktop Mode)
+
+Started outside Steam, the game opens the Deck's built-in controller (and a Steam
+Controller) with SDL's own drivers, so the back buttons, trackpads and gyro reach it
+directly. It sets `SDL_JOYSTICK_HIDAPI_STEAMDECK=1` and `SDL_JOYSTICK_HIDAPI_STEAM=1`
+(SDL 2 leaves the Steam Controller driver off by default). An environment variable of the
+same name wins; `steam_hidapi=off` in `settings.ini` turns the Steam Controller driver
+off. These drivers read `/dev/hidraw*`, which needs Steam's udev rules (installed with
+Steam; on SteamOS and Bazzite already there). While the Steam client runs in the
+background, its desktop layout may also send keys for some buttons; the game ignores a key
+that arrives with a controller button.
+
+It also sets `SDL_GAMECONTROLLER_USE_BUTTON_LABELS=0`, so Nintendo pads' face buttons are
+read by position like the rest: the bottom button is SNES B.
+
+**The 2026 Steam Controller.** The SDL this was built and tested against
+(sdl2-compat 2.32.74 on SDL 3.4.20, Fedora's packages) contains SDL 3's driver for it
+(`SDL_hidapi_steam_triton.c`, Valve 28de:1302/1303 and the dongles 1304/1305, enabled by
+`SDL_JOYSTICK_HIDAPI_STEAM`), with four back buttons, two trackpads and a gyro, and the
+game shows it with the Deck's glyphs. That is from SDL's source at the `release-3.4.20`
+tag, not from a real controller. An AppImage built with `SDL2=build` (SDL 2.32.10) does
+not know this controller: there it works through Steam Input's virtual pad only.
+
+### Under Steam Input (Game Mode, or started from Steam)
+
+Steam hides the real controllers from the game (`SDL_GAMECONTROLLER_IGNORE_DEVICES`) and
+gives it a virtual Xbox-style pad, as before. That pad has no back buttons, so bind them
+to the keys in the table above, by hand (**Controller** > **Edit Layout** > **Back Grip
+Buttons**, each one > **Keyboard**) or with the recommended layout,
+`packaging/steam/ct-recomp_neptune.vdf`: the gamepad layout with L4 = F6, R4 = F9,
+L5 = Tab, R5 = F10, gyro and trackpads off. Steam has no import button for a file; copy it
+into Steam's templates folder yourself (the helper script prints the commands and does not
+do it), restart Steam, then choose it under **Controller** > **Templates**:
+
+```
+mkdir -p ~/.steam/steam/controller_base/templates
+cp packaging/steam/ct-recomp_neptune.vdf ~/.steam/steam/controller_base/templates/
+```
+
+The template's back-button names (`button_back_left_upper` = L4, `button_back_left` = L5)
+follow layouts exported from real Decks; the file itself has not been loaded by Steam yet.
+If Steam doesn't list it, bind the four buttons by hand.
+
+### Button glyphs
+
+Messages on screen show the buttons of the device you used last: the Deck's, a Steam
+Controller's, Xbox, PlayStation or Switch buttons, or keyboard keys after a key press. The
+pad is recognized from SDL's controller type and its USB vendor and product. Steam Input's
+virtual pad shows the Deck's buttons on a Deck and Xbox buttons elsewhere, unless Steam
+tells SDL the real pad's type. The pictures are Kenney's Input Prompts (CC0,
+`third_party/glyphs/`). Both the HD-2D and the original picture show messages; the
+startup log lists each controller with its vendor:product and glyph set.
+
+### Gyro aiming (optional)
+
+`gyro=on` in `settings.ini` lets the first controller's gyro tilt and turn the camera of
+the HD-2D 3D diorama look a little (up to 8 degrees), easing back when the pad is still.
+It is off by default and does nothing in the other looks. `gyro_strength=1.00` scales it.
+The Deck's gyro reaches the game only without Steam Input (above); under Steam Input,
+leave Steam's gyro unbound (the template does).
+
 ### Two players on one handheld
 
 Connect a second controller (USB or Bluetooth) and co-op turns on: the built-in controls
@@ -207,3 +309,10 @@ offscreen driver, an SDL virtual controller) or under
 
 The Steam Deck paths (the deck preset's speed, GPU detection on real Deck drivers, build
 time) haven't been run on a Deck at all. Reports are welcome.
+
+The back buttons, glyphs and gyro were tested with SDL virtual controllers
+(`test_actions`: a virtual Deck 28de:1205 with paddles 1-4, a Steam Controller, Xbox,
+DualSense and Switch Pro pads) against sdl2-compat 2.32.74 / SDL 3.4.20, and the message
+pictures in headless HD-2D and plain renders. Not tried on real hardware: SDL's
+Deck and Steam Controller drivers in Desktop Mode, the 2026 Steam Controller, a real gyro,
+and the Steam Input template.
