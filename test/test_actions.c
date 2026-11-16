@@ -207,7 +207,9 @@ static void test_deck(void)
     frame(&v, &s, &b);
     CHECK(presses[ACTION_SCREENSHOT] == 1 && presses[ACTION_MENU] == 0 &&
               presses[ACTION_QUICKLOAD] == 0 && presses[ACTION_FFWD] == 1,
-          "R4 screenshot, R5 nothing, touchpad fast-forward");
+          "R4 screenshot, R5 nothing, touchpad fast-forward (shot %d menu %d qload %d ffwd %d)",
+          presses[ACTION_SCREENSHOT], presses[ACTION_MENU], presses[ACTION_QUICKLOAD],
+          presses[ACTION_FFWD]);
     press(&v, SDL_CONTROLLER_BUTTON_PADDLE1, 0);
     press(&v, SDL_CONTROLLER_BUTTON_PADDLE3, 0);
     press(&v, SDL_CONTROLLER_BUTTON_TOUCHPAD, 0);
