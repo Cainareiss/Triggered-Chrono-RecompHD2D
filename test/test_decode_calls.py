@@ -159,5 +159,36 @@ check(sorted((i.m, i.x) for i in fn.insns if i.addr == 0xE48003) == [(False, Fal
 fn = decode.decode_function(rom_with(code), 0xE48000, m1x0, Dyn())
 check(emit._after_call(fn, fn.insns[0], m1x0) == [('m', True), ('x', False)], '_after_call: continuation state')
 
+
+# A call or jump to a noreturn [[extern]] (a stack switch): the strict oracle
+# takes the hook, the frame scheduler hands the rest to the interpreter at the
+# target and the function stays native (it doesn't "take a hook").
+class ExtRes(Resolver):
+    externs = {0xE50000: funcs.Extern('Launch', 0xE50000, 'JSL', 'launch', True),
+               0xE50010: funcs.Extern('Jump', 0xE50010, 'JML', 'jump', True)}
+
+    def missing(self, target, st, kind):
+        return False
+
+    def __call__(self, site, target, st, kind='JSR'):
+        return set()
+
+    def tail(self, site, target, st):
+        return set()
+
+    def tail_required(self, site, target, st):
+        return set()
+
+emit._EXTERNS.clear()
+emit._EXTERNS.update(ExtRes.externs)
+fm = funcs.FuncMeta('T', 0xE48000, ('m1x0',), 0, None, None, 'bankE4')
+for code, what in ((bytes([0x22, 0x00, 0x00, 0xE5, 0x60]), 'JSL'), (bytes([0x5C, 0x10, 0x00, 0xE5]), 'JML')):
+    fn = decode.decode_function(rom_with(code), 0xE48000, m1x0, ExtRes())
+    src = '\n'.join(emit.emit_function(fm, fn))
+    check(not emit.takes_hook(fn, ExtRes.externs), f'noreturn extern {what}: function is not a hook taker')
+    check('if (ct_exec_hook)' in src and 'ct_tail_rest(cpu, s0)' in src and 'ct_hook_' in src,
+          f'noreturn extern {what}: scheduler hands over to the interpreter, the oracle keeps the hook')
+emit._EXTERNS.clear()
+
 print(f"decode_calls: {'ok' if not fails else str(fails) + ' failed'}")
 sys.exit(1 if fails else 0)

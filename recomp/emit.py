@@ -268,20 +268,19 @@ def _via_dispatch(target: int, cst: decode.State) -> bool:
 
 
 def takes_hook(fn: decode.Function, externs: dict) -> bool:
-    """Does fn itself take a hook even in the scheduler: a call or jump to a
-    noreturn extern, or an extern in a jump table's cases?"""
-    direct = [t for t, _ in list(fn.calls.values()) + list(fn.tails.values())]
-    return any(t in externs and externs[t].noreturn for t in direct) or \
-        any(t in externs for ts, _ in fn.tables.values() for t in ts)
+    """Does fn itself take a hook even in the scheduler: an extern in a jump
+    table's cases? (A direct call or jump to an extern, noreturn or not, runs
+    the real code in the scheduler: extern_call / extern_tail hand it to the
+    interpreter, the hook only stands in for it in the strict oracle.)"""
+    return any(t in externs for ts, _ in fn.tables.values() for t in ts)
 
 
 def _routed(target: int) -> bool:
     """An extern whose real code runs in the frame scheduler (extern_call,
-    extern_tail): one that returns. A noreturn one (a stack switch, a jump
-    into a program) keeps its hook everywhere, and what can reach it stays
-    interpreted there (calls_extern)."""
-    ext = _EXTERNS.get(target)
-    return ext is not None and not ext.noreturn
+    extern_tail). A noreturn one (a stack switch, a jump into a program)
+    hands the rest of the function to the interpreter there; only the
+    strict oracle takes its hook."""
+    return target in _EXTERNS
 
 
 def _after_call(fn: decode.Function, i, entry: decode.State, target: int | None = None) -> list:
@@ -658,11 +657,11 @@ def emit_module(reg: funcs.Registry, metas: list[funcs.FuncMeta], module: str) -
 
 def calls_extern(reg: funcs.Registry, addr: int, st: decode.State, memo: dict) -> bool:
     """Can (addr, st) reach an extern hook it would take even in the frame
-    scheduler? Direct calls and jumps to a returning extern run the real
-    code there (extern_call); a noreturn extern, or any extern in a jump
-    table's case, still takes the hook, which stands in for ROM code the
-    translation doesn't run, so a function that can reach one (directly or
-    through its callees) is interpreted in system mode."""
+    scheduler? Direct calls and jumps to an extern (returning or not) run the
+    real code there (extern_call, extern_tail); an extern in a jump table's
+    case still takes the hook, which stands in for ROM code the translation
+    doesn't run, so a function that can reach one (directly or through its
+    callees) is interpreted in system mode."""
     key = (addr,) + st.key()
     if key in memo:
         return memo[key]
@@ -670,10 +669,8 @@ def calls_extern(reg: funcs.Registry, addr: int, st: decode.State, memo: dict) -
     fn = reg.function(addr, st)
     edges = [(t, s) for t, s in fn.calls.values()] + [(t, s) for t, s in fn.tails.values()]
     edges += [(t, s) for ts, s in fn.tables.values() for t in ts]
-    direct = [t for t, _ in list(fn.calls.values()) + list(fn.tails.values())]
-    result = any(t in reg.externs for ts, _ in fn.tables.values() for t in ts) or \
-        any(t in reg.externs and reg.externs[t].noreturn for t in direct) or any(
-            calls_extern(reg, t, s, memo) for t, s in edges if t not in reg.externs)
+    result = any(t in reg.externs for ts, _ in fn.tables.values() for t in ts) or any(
+        calls_extern(reg, t, s, memo) for t, s in edges if t not in reg.externs)
     memo[key] = result
     return result
 
