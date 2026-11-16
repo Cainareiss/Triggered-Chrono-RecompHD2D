@@ -78,8 +78,8 @@ def load_jumptables(path: str) -> dict[int, int]:
 
 
 def load_handoffs(path: str) -> set[int]:
-    """Sites (24-bit address of a JML, or a JMP (abs,X) through a table of
-    unknown length) whose jump never returns to the routine's caller: the
+    """Sites (24-bit address of a JML or JMP to a registered entry or not, or
+    a JMP (abs,X) through a table of unknown length) whose jump never returns to the routine's caller: the
     target restarts the machine or switches stacks for good. The path ends
     there instead of leaving the routine's exit M/X unknown."""
     with open(path, 'rb') as f:

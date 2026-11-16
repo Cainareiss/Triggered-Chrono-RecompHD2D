@@ -190,5 +190,28 @@ for code, what in ((bytes([0x22, 0x00, 0x00, 0xE5, 0x60]), 'JSL'), (bytes([0x5C,
           f'noreturn extern {what}: scheduler hands over to the interpreter, the oracle keeps the hook')
 emit._EXTERNS.clear()
 
+
+# [[handoff]] on a jump to a registered entry whose own exits are unknown: the
+# path ends there, the routine's exits don't inherit the unknown.
+class Tail(Resolver):
+    handoffs = {0xE48000}
+
+    def missing(self, target, st, kind):
+        return False
+
+    def tail(self, site, target, st):
+        return {('?', None, None)}
+
+    def tail_required(self, site, target, st):
+        return {('?', None, None)}
+
+fn = decode.decode_function(rom_with(bytes([0x5C, 0x00, 0x00, 0xE4])), 0xE48000, m1x0, Tail())
+check(fn.tails and not fn.exit_states, 'handoff: JML to a registered entry adds no exits')
+fn = decode.decode_function(rom_with(bytes([0x4C, 0x00, 0x00])), 0xE48000, m1x0, Tail())
+check(fn.tails and not fn.exit_states, 'handoff: JMP to a registered entry adds no exits')
+Tail.handoffs = set()
+fn = decode.decode_function(rom_with(bytes([0x5C, 0x00, 0x00, 0xE4])), 0xE48000, m1x0, Tail())
+check(('?', None, None) in fn.exit_states, 'no handoff: the tail\'s unknown exit is inherited')
+
 print(f"decode_calls: {'ok' if not fails else str(fails) + ' failed'}")
 sys.exit(1 if fails else 0)
