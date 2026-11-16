@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 jerbanpls
 // SPDX-License-Identifier: GPL-3.0-or-later
-package io.github.jerbanpls.ctrecomp;
+package io.github.dittobyte.ctrecomp;
 
 import android.app.Activity;
 import android.content.Intent;

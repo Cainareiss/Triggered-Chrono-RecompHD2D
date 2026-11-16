@@ -1,7 +1,13 @@
-# Chrono Trigger Recomp
+# Triggered Chrono
 
-A static recompilation of Chrono Trigger (SNES, US 1.0) into a native PC port, built on
+An unofficial, fan-made static recompilation of Chrono Trigger (SNES, US 1.0) into a native
+PC port, built on
 [ct-recomp](https://github.com/ThisIsAkill/ct-recomp) by Akhil Moola.
+
+> **Not affiliated.** This project is not affiliated with, authorized by or endorsed by the
+> rights holders of Chrono Trigger. Game and company names are trademarks of their respective
+> owners and are used here only to say what the software works with. It contains no game
+> code, data, art or music.
 
 You need your own copy of the game. Put your headerless 4 MB dump in `rom/` and point
 `CT_ROM` at it (see Build below). That folder is git-ignored, and no game data (ROMs,
