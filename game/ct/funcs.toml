@@ -11984,7 +11984,8 @@ source = "profile"
 [[func]]
 name = "Menu_HighlightPanel3Rows"
 addr = 0xC29E76
-states = ["m0x0"]
+states = ["m0x0", "m1x1"]
+profile_states = ["m1x1"]
 e = 0
 module = "bankc2"
 source = "profile"
@@ -12072,7 +12073,8 @@ source = "profile"
 [[func]]
 name = "Menu_DrawConfigToggles"
 addr = 0xC2C3E4
-states = ["m0x0"]
+states = ["m0x0", "m1x0"]
+profile_states = ["m1x0"]
 e = 0
 module = "bankc2"
 source = "profile"
@@ -12384,7 +12386,8 @@ source = "profile"
 [[func]]
 name = "MenuSprite_AssignChars0to6"
 addr = 0xC2F566
-states = ["m1x0"]
+states = ["m1x0", "m1x1"]
+profile_states = ["m1x1"]
 e = 0
 module = "bankc2"
 source = "profile"
@@ -15210,7 +15213,8 @@ source = "profile"
 [[func]]
 name = "MenuTask_Sleep"
 addr = 0xC2821E
-states = ["m0x0", "m1x0"]
+states = ["m0x0", "m1x0", "m0x1"]
+profile_states = ["m0x1"]
 e = 0
 module = "bankc2"
 source = "profile"
@@ -15269,4 +15273,328 @@ addr = 0xC2EFBE
 states = ["m1x0"]
 e = 0
 module = "bankc2"
+source = "profile"
+
+# ---- discovered by tools/discover.py (entry state from call sites) ----
+
+[[func]]
+name = "C2Scene_TaskRunScript"
+addr = 0xC20F63
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C21DD4"
+addr = 0xC21DD4
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C220A2"
+addr = 0xC220A2
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C22105"
+addr = 0xC22105
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C22F0F"
+addr = 0xC22F0F
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C22F94"
+addr = 0xC22F94
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C2309E"
+addr = 0xC2309E
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C23264"
+addr = 0xC23264
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C23404"
+addr = 0xC23404
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C23AE2"
+addr = 0xC23AE2
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C25628"
+addr = 0xC25628
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "C2Scene_PlaceBelowView"
+addr = 0xC2754D
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C27575"
+addr = 0xC27575
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C27598"
+addr = 0xC27598
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C275C3"
+addr = 0xC275C3
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C278A1"
+addr = 0xC278A1
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "BankC2_Entry8000"
+addr = 0xC28000
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C28213"
+addr = 0xC28213
+states = ["m1x0", "m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C283BD"
+addr = 0xC283BD
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_Draw4IndexedStrings"
+addr = 0xC2A6F0
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_ItemCursorRowSelect"
+addr = 0xC2AD2E
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_RefreshTechRowMpState"
+addr = 0xC2BB1F
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_TechGetPartners"
+addr = 0xC2BBD6
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Menu_ComputeTechMpCost"
+addr = 0xC2BC22
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Menu_ApplyMpCostStuds"
+addr = 0xC2BC59
+states = ["m0x0", "m1x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Menu_ConfigUpdateDesc"
+addr = 0xC2C4BC
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2EFF4"
+addr = 0xC2EFF4
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F005"
+addr = 0xC2F005
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F011"
+addr = 0xC2F011
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F036"
+addr = 0xC2F036
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F068"
+addr = 0xC2F068
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F08D"
+addr = 0xC2F08D
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F0A2"
+addr = 0xC2F0A2
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F0B8"
+addr = 0xC2F0B8
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F0D1"
+addr = 0xC2F0D1
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_DrawDescStringCC2EB1"
+addr = 0xC2F2F3
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Menu_UpdateDescWindowFF"
+addr = 0xC2F943
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Audio_ServiceExit"
+addr = 0xC70192
+states = ["m1x0"]
+e = 0
+module = "bankc7"
+
+[[func]]
+name = "Audio_PlaySongCmd"
+addr = 0xC701A1
+states = ["m1x0"]
+e = 0
+module = "bankc7"
+
+[[func]]
+name = "Audio_SendPlaySongCmd"
+addr = 0xC70A39
+states = ["m1x0"]
+e = 0
+module = "bankc7"
+source = "profile"
+
+[[func]]
+name = "BattleCF_ExitBattle"
+addr = 0xCFFBE5
+states = ["m1x0"]
+e = 0
+module = "bankcf"
 source = "profile"
