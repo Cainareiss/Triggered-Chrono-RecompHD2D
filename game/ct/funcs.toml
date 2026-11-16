@@ -16127,3 +16127,31 @@ addr = 0xFDF266
 states = ["m1x0"]
 e = 0
 module = "bankfd"
+
+# EventCmd_Mode7Scene: after its frame ticks it reloads S=$06FF (TXS at
+# $C03FD9) and jumps into the Mode-7 engine or the warp stubs, which restart
+# the machine's main loop: nothing returns to this routine's caller (the same
+# stack reload as the BRL Engine_EntryTable path).
+[[handoff]]
+site = 0xC03FE0
+
+[[handoff]]
+site = 0xC03FE8
+
+[[handoff]]
+site = 0xC03FF0
+
+[[handoff]]
+site = 0xC03FF8
+
+[[handoff]]
+site = 0xC03FFC
+
+# Audio_Init_Entry -> Audio_UploadDriver: PHP at $C7003A saves the caller's P
+# before the first REP, and the tail $C70192 (Audio_ServiceExit) restores it
+# with PLP at $C7019D, so the RTL leaves M/X as they were at entry.
+[[exit]]
+addr = 0xC70000
+state = "m1x0"
+returns = "RTL"
+exit_state = "m1x0"
