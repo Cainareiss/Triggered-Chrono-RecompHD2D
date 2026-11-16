@@ -54,10 +54,9 @@ more) are listed in [ROADMAP.md](ROADMAP.md).
 
 <!-- progress:start -->
 
-**69.4% recompiled**: 1414 of 2036 known functions are compiled to C.
+**87.9% recompiled**: 1990 of 2263 known functions are compiled to C.
 
-- Native at runtime: 97.6% of the instructions in a 1500-frame boot run as compiled C (the rest run in the interpreter).
-- Milestones: 3 of 7 closed.
+- Native at runtime: 98.0% of the instructions in a 1500-frame boot run as compiled C (the rest run in the interpreter).
 
 Updated by `tools/progress.py` with every push; details in [game/ct/PROGRESS.md](game/ct/PROGRESS.md).
 
