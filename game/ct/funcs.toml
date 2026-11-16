@@ -1977,6 +1977,13 @@ state = "m1x0"
 returns = "RTL"
 exit_state = "m1x0"
 
+# Menu_RunWinSlots calls the slot's handler through Menu_CallSlotVector (JMP
+# ($0050)); the handlers return in m0x0 as often as in the assumed m1x0 (Leene
+# Square, menu_tour and the other replays: $C20541 reached with m0x0).
+[[cont]]
+site = 0xC2053E
+states = ["m0x0"]
+
 # Not registered on purpose: $C198C5 (EnemyAI action-prep case 4). It ends in
 # JMP $8C90 into the loop that calls it, so as an entry it would swallow that
 # loop and its callee's RTS would be ambiguous. tools/discover.py proposes it
