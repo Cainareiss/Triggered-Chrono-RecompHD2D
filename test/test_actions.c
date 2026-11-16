@@ -205,11 +205,16 @@ static void test_deck(void)
     press(&v, SDL_CONTROLLER_BUTTON_PADDLE3, 1);
     press(&v, SDL_CONTROLLER_BUTTON_TOUCHPAD, 1);
     frame(&v, &s, &b);
+    /* SDL before 2.32 doesn't report the touchpad button of a virtual pad (CI has 2.30):
+     * the binding is still parsed above, but the press can't arrive, so expect it only
+     * when SDL passes it on. */
+    int tp_seen = SDL_GameControllerGetButton(v.pad, SDL_CONTROLLER_BUTTON_TOUCHPAD);
     CHECK(presses[ACTION_SCREENSHOT] == 1 && presses[ACTION_MENU] == 0 &&
-              presses[ACTION_QUICKLOAD] == 0 && presses[ACTION_FFWD] == 1,
-          "R4 screenshot, R5 nothing, touchpad fast-forward (shot %d menu %d qload %d ffwd %d)",
+              presses[ACTION_QUICKLOAD] == 0 && presses[ACTION_FFWD] == (tp_seen ? 1 : 0),
+          "R4 screenshot, R5 nothing, touchpad fast-forward (shot %d menu %d qload %d ffwd %d, "
+          "touchpad seen %d)",
           presses[ACTION_SCREENSHOT], presses[ACTION_MENU], presses[ACTION_QUICKLOAD],
-          presses[ACTION_FFWD]);
+          presses[ACTION_FFWD], tp_seen);
     press(&v, SDL_CONTROLLER_BUTTON_PADDLE1, 0);
     press(&v, SDL_CONTROLLER_BUTTON_PADDLE3, 0);
     press(&v, SDL_CONTROLLER_BUTTON_TOUCHPAD, 0);
