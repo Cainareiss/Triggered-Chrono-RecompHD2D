@@ -128,5 +128,36 @@ check('set_p(cpu, pull8(cpu));' in src and 'cpu->PC = 0x8001;' in src and 'ct_ta
 fn = decode.decode_function(rom_with(bytes([0x08, 0x1B, 0x28, 0xFA, 0x60])), 0xE48000, m1x0, Dyn())
 check(list(fn.plp_interp), 'TCS drops the tracked stack')
 
+
+# [[cont]]: a call run by the interpreter (exit M/X unknown) may come back in
+# other states; the rest of the function is decoded for each and picked at run time.
+class Cont(Dyn):
+    conts = {0xE48000: ((False, False),)}
+
+# $E48000: JSR $9000 / NOP / RTS, called in m1x0, also back in m0x0
+code = bytes([0x20, 0x00, 0x90, 0xEA, 0x60])
+fn = decode.decode_function(rom_with(code), 0xE48000, m1x0, Cont())
+check(len(fn.call_exits.get((0xE48000,) + m1x0.key(), ())) == 2, 'cont: two continuation states')
+cont_insns = sorted((i.m, i.x) for i in fn.insns if i.addr == 0xE48003)
+check(cont_insns == [(False, False), (True, False)], f'cont: continuation decoded twice: {cont_insns}')
+fm = funcs.FuncMeta('T', 0xE48000, ('m1x0',), 0, None, None, 'bankE4')
+src = '\n'.join(emit.emit_function(fm, fn))
+check('cpu->m == 0 && cpu->x == 0' in src and 'cpu->m == 1 && cpu->x == 0' in src and
+      'ct_fatal' not in src and 'cpu->m != 1' not in src,
+      'cont: picks the continuation from run-time M/X, no mismatch hand-off, no fatal')
+# without [[cont]] nothing changes: one continuation, mismatch hands the rest over
+fn = decode.decode_function(rom_with(code), 0xE48000, m1x0, Dyn())
+src = '\n'.join(emit.emit_function(fm, fn))
+check((0xE48000,) + m1x0.key() not in fn.call_exits and 'cpu->m != 1 || cpu->x != 0' in src,
+      'no cont: single continuation, mismatch check kept')
+# JSR ($9000,X) of unknown length takes [[cont]] too
+fn = decode.decode_function(rom_with(bytes([0xFC, 0x00, 0x90, 0xEA, 0x60])), 0xE48000, m1x0, Cont())
+src = '\n'.join(emit.emit_function(fm, fn))
+check(sorted((i.m, i.x) for i in fn.insns if i.addr == 0xE48003) == [(False, False), (True, False)] and
+      'cpu->m == 0 && cpu->x == 0' in src and 'ct_fatal' not in src, 'cont: JSR (abs,X) of unknown length')
+# the check after a call run by the dispatcher is the state the code goes on in
+fn = decode.decode_function(rom_with(code), 0xE48000, m1x0, Dyn())
+check(emit._after_call(fn, fn.insns[0], m1x0) == [('m', True), ('x', False)], '_after_call: continuation state')
+
 print(f"decode_calls: {'ok' if not fails else str(fails) + ' failed'}")
 sys.exit(1 if fails else 0)

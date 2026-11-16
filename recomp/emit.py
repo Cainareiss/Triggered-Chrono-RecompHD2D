@@ -284,13 +284,30 @@ def _routed(target: int) -> bool:
     return ext is not None and not ext.noreturn
 
 
-def extern_call(target: int, cst: decode.State, back: int, n: int, check: str) -> list[str]:
+def _after_call(fn: decode.Function, i, entry: decode.State, target: int | None = None) -> list:
+    """(register, value) pairs the M/X must have when a callee run through the
+    dispatcher returns: the state the decoder continues in after the call. An
+    [[extern]] stands in for code with the same M/X as its entry; with several
+    continuation states the goto chain after the call picks one instead."""
+    if target is not None and target in _EXTERNS:
+        st = (entry.m, entry.x)
+    elif len(fn.call_exits.get(i.key, ())) > 1:
+        return []
+    else:
+        st = fn.post[i.key][:2]
+    return [(r, v) for r, v in zip('mx', st) if v is not None]
+
+
+def extern_call(target: int, cst: decode.State, back: int, n: int, check: str,
+                mx: list | None = None) -> list[str]:
     """A call to an [[extern]] boundary, return address pushed. In the frame
     scheduler the real code runs (the dispatcher: interpreted, or native
     where compiled); elsewhere (diff_all and its strict interpreter) the hook
     stands in for it, as before."""
     cond = [f'!ct_call_interp(cpu, 0x{target:06X}, 0x{back:06X}, {n})']
-    cond += [f'cpu->{r} != {int(v)}' for r, v in (('m', cst.m), ('x', cst.x)) if v is not None]
+    if mx is None:
+        mx = [(r, v) for r, v in (('m', cst.m), ('x', cst.x)) if v is not None]
+    cond += [f'cpu->{r} != {int(v)}' for r, v in mx]
     return ['if (ct_exec_hook) {',
             f'    if ({" || ".join(cond)}) {{ ct_interp_rest(cpu, s0); return; }}',
             '} else {',
@@ -376,7 +393,9 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
             bank = i.addr >> 16
             ret = (i.addr + 2) & 0xFFFF
 
-            def t(i, cst=cst, bank=bank, ret=ret):
+            many = len(fn.call_exits.get(i.key, ())) > 1   # [[cont]]: extra continuation states
+
+            def t(i, cst=cst, bank=bank, ret=ret, many=many):
                 # a table of unknown length: read the target as the CPU does
                 # (bus reads, after a JSR's pushes: the cycle model charges
                 # them at the table's own speed) and let the dispatcher run it
@@ -389,8 +408,9 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
                                                        'ct_interp_rest(cpu, s0);', 'return;']
                 back = (bank << 16) | ((ret + 1) & 0xFFFF)
                 cond = [f'!ct_call_interp(cpu, t, 0x{back:06X}, 2)']
-                cond += [f'cpu->{r} != {int(v)}' for r, v in (('m', cst.m), ('x', cst.x))
-                         if v is not None]
+                if not many:   # several continuation states: picked after the call
+                    cond += [f'cpu->{r} != {int(v)}' for r, v in (('m', cst.m), ('x', cst.x))
+                             if v is not None]
                 return [_strict_rest(i), f'push16(cpu, 0x{ret:04X});'] + body + \
                     [f'if ({" || ".join(cond)}) {{ ct_interp_rest(cpu, s0); return; }}']
         elif i.opcode in (0x6C, 0xDC) and i.key in fn.dyn_tables:
@@ -415,13 +435,16 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
             bank = i.addr >> 16
             back = (bank << 16) | ((ret + 1) & 0xFFFF)
 
-            def t(i, target=target, cst=cst, ret=ret, bank=bank, long=long, back=back):
+            many = len(fn.call_exits.get(i.key, ())) > 1   # [[cont]]: extra continuation states
+
+            def t(i, target=target, cst=cst, ret=ret, bank=bank, long=long, back=back, many=many):
                 body = [_strict_rest(i)] + ([f'push8(cpu, 0x{bank:02X});'] if long else [])
                 body.append(f'push16(cpu, 0x{ret:04X});')
                 # came back elsewhere, or in another M/X state: interpret the rest
                 cond = [f'!ct_call_interp(cpu, 0x{target:06X}, 0x{back:06X}, {3 if long else 2})']
-                cond += [f'cpu->{r} != {int(v)}' for r, v in (('m', cst.m), ('x', cst.x))
-                         if v is not None]
+                if not many:
+                    cond += [f'cpu->{r} != {int(v)}' for r, v in (('m', cst.m), ('x', cst.x))
+                             if v is not None]
                 body.append(f'if ({" || ".join(cond)}) {{ ct_interp_rest(cpu, s0); return; }}')
                 return body
         elif i.opcode == 0x20 and i.key in fn.calls:
@@ -431,8 +454,9 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
                    '{ ct_interp_rest(cpu, s0); return; }')
             if _routed(target) or _via_dispatch(target, cst):
                 back = (i.addr & 0xFF0000) | ((ret + 1) & 0xFFFF)
-                t = lambda i, target=target, cst=cst, ret=ret, back=back, chk=chk: \
-                    [f'push16(cpu, 0x{ret:04X});'] + extern_call(target, cst, back, 2, chk)
+                mx = _after_call(fn, i, cst, target)
+                t = lambda i, target=target, cst=cst, ret=ret, back=back, chk=chk, mx=mx: \
+                    [f'push16(cpu, 0x{ret:04X});'] + extern_call(target, cst, back, 2, chk, mx)
             else:
                 t = lambda i, target=target, cst=cst, ret=ret, chk=chk: [
                     f'push16(cpu, 0x{ret:04X});', f'ct_run(cpu, {callee(target, cst)});', chk]
@@ -444,9 +468,10 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
                    '{ ct_interp_rest(cpu, s0); return; }')
             if _routed(target) or _via_dispatch(target, cst):
                 back = (bank << 16) | ((ret + 1) & 0xFFFF)
-                t = lambda i, target=target, cst=cst, ret=ret, bank=bank, back=back, chk=chk: [
+                mx = _after_call(fn, i, cst, target)
+                t = lambda i, target=target, cst=cst, ret=ret, bank=bank, back=back, chk=chk, mx=mx: [
                     f'push8(cpu, 0x{bank:02X});', f'push16(cpu, 0x{ret:04X});',
-                    f'cpu->PB = 0x{target >> 16:02X};'] + extern_call(target, cst, back, 3, chk)
+                    f'cpu->PB = 0x{target >> 16:02X};'] + extern_call(target, cst, back, 3, chk, mx)
             else:
                 t = lambda i, target=target, cst=cst, ret=ret, bank=bank, chk=chk: [
                     f'push8(cpu, 0x{bank:02X});',
@@ -461,13 +486,16 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
             interp = fn.table_interp.get(i.key, set())
             back = (i.addr & 0xFF0000) | ((ret + 1) & 0xFFFF)
 
-            def t(i, targets=targets, cst=cst, is_call=is_call, ret=ret, interp=interp, back=back):
+            tmx = _after_call(fn, i, cst) if is_call else [(r, v) for r, v in (('m', cst.m), ('x', cst.x))
+                                                           if v is not None]
+
+            def t(i, targets=targets, cst=cst, is_call=is_call, ret=ret, interp=interp, back=back,
+                  tmx=tmx):
                 body = [_strict_rest(i)] if interp else []   # uncompiled cases: see _strict_rest
                 body += [f'push16(cpu, 0x{ret:04X});'] if is_call else []
                 body.append('switch (cpu->X) {')
                 after = 'break;' if is_call else 'return;'
-                mx = [f'cpu->{r} != {int(v)}' for r, v in (('m', cst.m), ('x', cst.x))
-                      if v is not None]
+                mx = [f'cpu->{r} != {int(v)}' for r, v in tmx]
                 for n, tg in enumerate(targets):
                     if tg in interp and is_call:   # run through the interpreter's dispatch
                         cond = ' || '.join([f'!ct_call_interp(cpu, 0x{tg:06X}, 0x{back:06X}, 2)'] + mx)
@@ -570,7 +598,11 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
             for k in fn.call_exits[i.key]:
                 body.append(f'if (cpu->m == {int(k[0])} && cpu->x == {int(k[1])}) '
                             f'goto {label(i.next_addr, k)};')
-            body.append(f'ct_fatal("${i.addr:06X}: callee returned with m%d x%d", cpu->m, cpu->x);')
+            if i.key in fn.interp_calls or i.key in fn.dyn_tables or i.key in fn.table_interp:
+                # a callee run by the interpreter returned in a state no [[cont]] lists
+                body.append('ct_interp_rest(cpu, s0); return;')
+            else:
+                body.append(f'ct_fatal("${i.addr:06X}: callee returned with m%d x%d", cpu->m, cpu->x);')
         elif i.key in fn.plp_interp:
             pass
         elif i.mnemonic not in NO_FALLTHROUGH:

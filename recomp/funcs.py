@@ -92,6 +92,29 @@ def load_handoffs(path: str) -> set[int]:
     return out
 
 
+def load_conts(path: str) -> dict[int, tuple]:
+    """site (24-bit address of a JSR/JSL/JSR (abs,X) the callee of which runs
+    through the interpreter, its exit M/X unknown) -> extra continuation
+    states, each "mNxN": the code after the call is also decoded for those,
+    and run-time M/X pick the one to go on in (otherwise the rest of the
+    function is handed to the interpreter when M/X differ from the call's).
+    Evidence for each entry: a profile that saw the call return in that state."""
+    with open(path, 'rb') as f:
+        data = tomllib.load(f)
+    out = {}
+    for t in data.get('cont', []):
+        if 'site' not in t or not t.get('states'):
+            raise DecodeError(f'funcs.toml: bad cont {t}')
+        sts = []
+        for tag in t['states']:
+            m = re.fullmatch(r'm([01])x([01])', tag)
+            if not m:
+                raise DecodeError(f'funcs.toml: cont {t["site"]:#x}: bad state {tag!r}')
+            sts.append((bool(int(m[1])), bool(int(m[2]))))
+        out[t['site']] = tuple(sts)
+    return out
+
+
 def load_exits(path: str) -> dict[tuple, tuple]:
     """(entry address, entry state tag) -> (return mnemonic, m, x): the exit
     of a routine whose jumps hand the caller's frame to code the decoder
@@ -189,6 +212,7 @@ class Registry:
         self.externs = load_externs(funcs_path)
         self.handoffs = load_handoffs(funcs_path)
         self.exits = load_exits(funcs_path)
+        self.conts = load_conts(funcs_path)
         self.cache: dict[tuple, decode.Function] = {}
         self.active: set[tuple] = set()
         self.assume: dict[tuple, tuple] = {}   # recursive key -> assumed exit (m, x)

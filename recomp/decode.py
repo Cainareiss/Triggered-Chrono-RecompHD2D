@@ -739,7 +739,7 @@ def decode_function(rom: bytes, entry: int, st: State, resolve=None) -> Function
                             raise
                 if exits is None:   # not compiled for this state, or returns who knows how
                     fn.interp_calls[ikey] = (target, cst)
-                    exits = {(nxt.m, nxt.x)}
+                    exits = {(nxt.m, nxt.x)} | set(getattr(resolve, 'conts', {}).get(addr, ()))
                 nxt = _continue(fn, ikey, i, nxt, exits, work)
                 if nxt is None:
                     break
@@ -756,7 +756,8 @@ def decode_function(rom: bytes, entry: int, st: State, resolve=None) -> Function
                         if addr not in getattr(resolve, 'handoffs', ()):   # [[handoff]]: no return
                             fn.exit_states.add(('?', None, None))   # whatever the target does
                         break
-                    nxt = _continue(fn, ikey, i, nxt, {(nxt.m, nxt.x)}, work)
+                    exits = {(nxt.m, nxt.x)} | set(getattr(resolve, 'conts', {}).get(addr, ()))
+                    nxt = _continue(fn, ikey, i, nxt, exits, work)
                     addr, cur = i.next_addr, nxt
                     continue
                 targets = resolve.table_targets(i)
