@@ -15605,3 +15605,75 @@ states = ["m1x0"]
 e = 0
 module = "bankcf"
 source = "profile"
+
+# ---- NMI/IRQ handlers behind the WRAM trampolines $000500/$000504 (#105) ----
+# The hardware vectors JML $000500 / $000504, a JML each mode installs
+# (Menu_InstallInterruptVectors, Mode7Engine_Init, Boot_InstallVectors, the
+# battle's own, Field_Install*Vector). An interrupt arrives in any M/X, and
+# the profile saw $000500 entered m1x0, m0x0 and m1x1 and $000504 m1x0, m0x0
+# and m1x1; every handler starts with REP/SEP or saves P itself, so all four
+# states are registered.
+
+[[func]]
+name = "Menu_NmiHandler"
+addr = 0xC2015E
+states = ["m0x0", "m1x0", "m0x1", "m1x1"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_IrqHandler"
+addr = 0xC20345
+states = ["m0x0", "m1x0", "m0x1", "m1x1"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Mode7_NmiHandler"
+addr = 0xC30548
+states = ["m0x0", "m1x0", "m0x1", "m1x1"]
+e = 0
+module = "bankc3"
+source = "profile"
+
+[[func]]
+name = "Mode7_IrqHandler"
+addr = 0xC30529
+states = ["m0x0", "m1x0", "m0x1", "m1x1"]
+e = 0
+module = "bankc3"
+source = "profile"
+
+[[func]]
+name = "Battle_NmiHandler"
+addr = 0xD1E77C
+states = ["m0x0", "m1x0", "m0x1", "m1x1"]
+e = 0
+module = "bankd1"
+source = "profile"
+
+[[func]]
+name = "Battle_IrqHandler"
+addr = 0xD1FE97
+states = ["m0x0", "m1x0", "m0x1", "m1x1"]
+e = 0
+module = "bankd1"
+source = "profile"
+
+[[func]]
+name = "Boot_NmiHandler"
+addr = 0xFDDE15
+states = ["m0x0", "m1x0", "m0x1", "m1x1"]
+e = 0
+module = "bankfd"
+source = "profile"
+
+[[func]]
+name = "Boot_IrqHandler"
+addr = 0xFDDE87
+states = ["m0x0", "m1x0", "m0x1", "m1x1"]
+e = 0
+module = "bankfd"
+source = "profile"
