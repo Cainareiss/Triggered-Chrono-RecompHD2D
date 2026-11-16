@@ -15677,3 +15677,25 @@ states = ["m0x0", "m1x0", "m0x1", "m1x1"]
 e = 0
 module = "bankfd"
 source = "profile"
+
+# ---- lane C: continuation states / hand-offs ----
+
+# Mode7_VblankUpdate calls the Mode-7 overlay's frame routine at $7E39BE
+# (WRAM code, not compiled); it returns with 16-bit A (m0x0 in every replay
+# that reaches it: world_map_save, menu_tour, Leene Square).
+[[cont]]
+site = 0xC308F7
+states = ["m0x0"]
+
+# The field frame loop ($C00097, BRA back to itself, JSRs the per-frame chain,
+# never returns) is entered by the interpreter after a stack reload or a menu
+# hand-back, where nothing registered the middle of ReentryVectors: its 14
+# instructions ran interpreted every frame (a profile of the PCs charged
+# "outside any call" in every replay). Entered m1x0 (SEP #$20 / REP #$10 above).
+[[func]]
+name = "Field_MainLoop"
+addr = 0xC00097
+states = ["m1x0"]
+e = 0
+module = "bankc0"
+source = "profile"
