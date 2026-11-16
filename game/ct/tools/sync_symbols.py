@@ -341,7 +341,10 @@ def _call_site_states(rom: bytes, entry: int, st: State) -> dict[int, set[str]]:
                 i = decode.decode_insn(rom, addr, cur)
             except DecodeError:
                 break
-            nxt = decode.next_state(i, cur)
+            try:
+                nxt = decode.next_state(i, cur)
+            except DecodeError:
+                break   # e.g. a pull whose width depends on a restored P: the walk ends here
             mn = i.mnemonic
             if mn in decode.RETURNS:
                 break

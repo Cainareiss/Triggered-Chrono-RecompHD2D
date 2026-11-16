@@ -14362,13 +14362,6 @@ e = 0
 module = "bankc1"
 
 [[func]]
-name = "PointersToEn_C198C5"
-addr = 0xC198C5
-states = ["m1x0"]
-e = 0
-module = "bankc1"
-
-[[func]]
 name = "PointersToEn_C19960"
 addr = 0xC19960
 states = ["m1x0"]
