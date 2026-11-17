@@ -72,4 +72,17 @@ int bindings_key_event(const bindings *b, SDL_Scancode key, int down, int repeat
 /* Let go of the held keys' actions (the window lost focus). */
 void bindings_keys_release(void);
 
+/* port: the controls cheat-sheet (quick menu): the current mapping as rows
+   for the UI to draw. Each row: what it does, the controller button's
+   glyph token (glyphs.h: "[b]", "[paddle2]"; "" for none) and the
+   keyboard key's name ("" for none). SNES rows first (A B X Y L R Start
+   Select, then the D-pad), following the layout swaps (input.h); then one
+   row per frontend action. Returns the count (at most max). */
+typedef struct {
+    char what[32];
+    char pad[24];
+    char key[24];
+} cheat_row;
+int bindings_cheatsheet(const bindings *b, cheat_row *out, int max);
+
 #endif

@@ -2,6 +2,52 @@
 
 #include <string.h>
 
+#include "settings.h"
+
+/* port: controller options (input.h): the layout swaps and the stick's
+   dead zone. 49% of full deflection is the 16000 / 32767 the code
+   always used. */
+static int swap_ab, swap_xy, deadzone_pct = INPUT_DEADZONE_DEFAULT;
+
+void input_swap_set(int ab, int xy)
+{
+    swap_ab = ab != 0;
+    swap_xy = xy != 0;
+}
+
+void input_swap_get(int *ab, int *xy)
+{
+    if (ab)
+        *ab = swap_ab;
+    if (xy)
+        *xy = swap_xy;
+}
+
+void input_deadzone_set(int pct)
+{
+    deadzone_pct = pct < INPUT_DEADZONE_MIN ? INPUT_DEADZONE_MIN
+                   : pct > INPUT_DEADZONE_MAX ? INPUT_DEADZONE_MAX : pct;
+}
+
+int input_deadzone_get(void)
+{
+    return deadzone_pct;
+}
+
+/* The stick's threshold, of 32767. */
+static int deadzone_threshold(void)
+{
+    return deadzone_pct == INPUT_DEADZONE_DEFAULT ? 16000 : deadzone_pct * 32767 / 100;
+}
+
+static uint16_t swap_bits(uint16_t pad, uint16_t a, uint16_t b)
+{
+    uint16_t both = a | b, got = pad & both;
+    if (got == a || got == b)
+        pad ^= both;
+    return pad;
+}
+
 uint16_t input_keyboard(const uint8_t *keys)
 {
     static const struct { SDL_Scancode key; uint16_t bit; } map[] = {
@@ -40,7 +86,13 @@ uint16_t input_controller(int (*button)(void *ctx, SDL_GameControllerButton b),
     for (unsigned k = 0; k < sizeof map / sizeof map[0]; k++)
         if (button(ctx, map[k].b))
             pad |= map[k].bit;
-    const int dead = 16000;   /* of 32767 */
+    /* port: the layout swaps: the buttons the pad's face buttons make
+       (not the keyboard's, not the touch controls'). */
+    if (swap_ab)
+        pad = swap_bits(pad, PAD_A, PAD_B);
+    if (swap_xy)
+        pad = swap_bits(pad, PAD_X, PAD_Y);
+    const int dead = deadzone_threshold();   /* of 32767 */
     int x = axis(ctx, SDL_CONTROLLER_AXIS_LEFTX), y = axis(ctx, SDL_CONTROLLER_AXIS_LEFTY);
     if (x < -dead)
         pad |= PAD_LEFT;
@@ -201,4 +253,31 @@ void gyro_cam_step(gyro_cam *gc, const float rate[3], float dt, float strength)
         keep = 0.0f;
     gc->tilt = clampf((gc->tilt + rx * dt * deg * strength) * keep, GYRO_MAX_DEG);
     gc->yaw = clampf((gc->yaw + ry * dt * deg * strength) * keep, GYRO_MAX_DEG);
+}
+
+/* port: the settings registry rows for the above (settings.ini
+   swap_ab, swap_xy, stick_deadzone). */
+static int get_swap_ab(void *u) { (void)u; return swap_ab; }
+static void set_swap_ab(void *u, int v) { (void)u; swap_ab = v != 0; }
+static int get_swap_xy(void *u) { (void)u; return swap_xy; }
+static void set_swap_xy(void *u, int v) { (void)u; swap_xy = v != 0; }
+static int get_deadzone(void *u) { (void)u; return deadzone_pct; }
+static void set_deadzone(void *u, int v) { (void)u; input_deadzone_set(v); }
+
+void input_register_settings(void)
+{
+    settings_register(&(setting){
+        .key = "swap_ab", .label = "Swap A and B", .category = "Controls", .type = SETTING_BOOL,
+        .get = get_swap_ab, .set = set_swap_ab,
+        .help = "The controller's east and south buttons trade places in the game. The "
+                "keyboard and the touch controls stay as they are."});
+    settings_register(&(setting){
+        .key = "swap_xy", .label = "Swap X and Y", .category = "Controls", .type = SETTING_BOOL,
+        .get = get_swap_xy, .set = set_swap_xy,
+        .help = "The controller's north and west buttons trade places in the game."});
+    settings_register(&(setting){
+        .key = "stick_deadzone", .label = "Stick dead zone", .category = "Controls",
+        .type = SETTING_INT, .min = INPUT_DEADZONE_MIN, .max = INPUT_DEADZONE_MAX, .step = 1,
+        .format = "%d%%", .get = get_deadzone, .set = set_deadzone,
+        .help = "How far the left stick must tilt to walk. Lower: more sensitive."});
 }

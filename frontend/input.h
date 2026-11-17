@@ -31,6 +31,22 @@ uint16_t input_keyboard(const uint8_t *keys);
 uint16_t input_controller(int (*button)(void *ctx, SDL_GameControllerButton b),
                           int (*axis)(void *ctx, SDL_GameControllerAxis a), void *ctx);
 
+/* port: the controller's layout and stick options (settings.ini swap_ab,
+   swap_xy, stick_deadzone; the Controls tab). swap: the SNES A and B (X
+   and Y) the controller's east and south (north and west) buttons make
+   trade places; input_keyboard and the touch controls are not affected.
+   deadzone: percent of full tilt the left stick must pass to press the
+   d-pad (INPUT_DEADZONE_DEFAULT is what the code always used). */
+#define INPUT_DEADZONE_MIN 5
+#define INPUT_DEADZONE_MAX 90
+#define INPUT_DEADZONE_DEFAULT 49
+void input_swap_set(int ab, int xy);
+void input_swap_get(int *ab, int *xy);
+void input_deadzone_set(int pct);
+int input_deadzone_get(void);
+/* Register the three settings rows (settings.h). */
+void input_register_settings(void);
+
 /* Held keys, built from key events. While a game controller is active, a
    key press within KEY_FILTER_FRAMES of a controller button press (either
    order) is ignored until that key is released: Steam Input's desktop

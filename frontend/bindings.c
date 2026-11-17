@@ -4,7 +4,10 @@
  * port: action bindings (bindings.h). */
 #include "bindings.h"
 
+#include <stdio.h>
 #include <string.h>
+
+#include "input.h"
 
 static const SDL_GameControllerButton bindable[] = {
     SDL_CONTROLLER_BUTTON_PADDLE1, SDL_CONTROLLER_BUTTON_PADDLE2, SDL_CONTROLLER_BUTTON_PADDLE3,
@@ -219,4 +222,41 @@ void bindings_keys_release(void)
             key_down[k] = ACTION_NONE;
             actions_emit(a, 0);
         }
+}
+
+/* port: the cheat-sheet (bindings.h). */
+static void row_set(cheat_row *r, const char *what, const char *pad_token, const char *key)
+{
+    snprintf(r->what, sizeof r->what, "%s", what);
+    snprintf(r->pad, sizeof r->pad, "%s", pad_token);
+    snprintf(r->key, sizeof r->key, "%s", key);
+}
+
+int bindings_cheatsheet(const bindings *b, cheat_row *out, int max)
+{
+    int ab, xy;
+    input_swap_get(&ab, &xy);
+    /* Face buttons by position: SNES B is the south button, A the east,
+       Y the west, X the north; the swaps trade them over. */
+    const char *south = "[a]", *east = "[b]", *west = "[x]", *north = "[y]";
+    const char *snes_a = ab ? south : east, *snes_b = ab ? east : south;
+    const char *snes_x = xy ? west : north, *snes_y = xy ? north : west;
+    const struct { const char *what, *pad, *key; } snes[] = {
+        {"A", snes_a, "X"},        {"B", snes_b, "Z"},       {"X", snes_x, "S"},
+        {"Y", snes_y, "A"},        {"L", "[l1]", "Q"},       {"R", "[r1]", "W"},
+        {"Start", "[start]", "Return"}, {"Select", "[back]", "Right Shift"},
+        {"D-pad", "[dpad]", "Arrow keys"},
+    };
+    int n = 0;
+    for (unsigned k = 0; k < sizeof snes / sizeof *snes && n < max; k++)
+        row_set(&out[n++], snes[k].what, snes[k].pad, snes[k].key);
+    for (int a = ACTION_NONE + 1; a < ACTION_COUNT && n < max; a++) {
+        char tok[24] = "";
+        SDL_GameControllerButton btn = bindings_button_of(b, (ct_action)a);
+        if (btn != SDL_CONTROLLER_BUTTON_INVALID)
+            snprintf(tok, sizeof tok, "[%s]", SDL_GameControllerGetStringForButton(btn));
+        const char *key = b->key[a] != SDL_SCANCODE_UNKNOWN ? SDL_GetScancodeName(b->key[a]) : "";
+        row_set(&out[n++], action_title((ct_action)a), tok, key);
+    }
+    return n;
 }
