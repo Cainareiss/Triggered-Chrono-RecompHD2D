@@ -8,13 +8,13 @@
 # (ct_boot --profile), measured and rounded up to 0.01. A run is
 # deterministic, so a rise is a real regression. Only ever LOWER a ceiling
 # (after a change that moves code to native); never raise one.
-leene_square 9210 8.26
-gato_battle 11000 7.14
-gato_win 13950 6.74
-soft_reset 9800 8.08
-world_map_save 10100 12.16
-coop_battle 14750 6.92 --coop
-coop_field 12820 7.54 --coop
-coop_mash 14500 6.99 --coop
-coop_split 12800 7.55 --coop --coop-split
-menu_tour 11450 18.24
+leene_square 9210 0.21
+gato_battle 11000 0.18
+gato_win 13950 0.15
+soft_reset 9800 0.24
+world_map_save 10100 0.36
+coop_battle 14750 0.16 --coop
+coop_field 12820 0.17 --coop
+coop_mash 14500 0.16 --coop
+coop_split 12800 0.18 --coop --coop-split
+menu_tour 11450 0.30

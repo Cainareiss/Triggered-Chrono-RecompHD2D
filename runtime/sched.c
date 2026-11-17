@@ -155,6 +155,10 @@ static long int_depth;
 #define PROF_DEPTH 256
 #define PROF_REST (1u << 27)
 static uint64_t prof_native, prof_interp;
+/* Interpreted instructions per PC (printed under CT_PROFILE_PCS=N: the N
+   busiest), to see which code a hand-off row stands for. */
+#define PROF_PC_SLOTS 65536
+static struct { uint32_t pc; uint64_t count; } prof_pc[PROF_PC_SLOTS];
 static struct {
     /* PB:PC | M << 24 | X << 25 | E << 26 | 1 << 31 (used), and the DB and
        DP it was entered with: DB << 32 | DP << 40. PROF_REST: not an entry
@@ -1308,8 +1312,37 @@ static const char *not_native_reason(uint64_t key)
     return "recompiled only for another M/X";
 }
 
+static void prof_count_pc(uint32_t at)
+{
+    unsigned k = (at * 2654435761u >> 12) & (PROF_PC_SLOTS - 1);
+    for (unsigned n = 0; n < PROF_PC_SLOTS; n++, k = (k + 1) & (PROF_PC_SLOTS - 1)) {
+        if (prof_pc[k].count && prof_pc[k].pc != at)
+            continue;
+        prof_pc[k].pc = at;
+        prof_pc[k].count++;
+        return;
+    }
+}
+
+static void prof_report_pcs(FILE *out, int top)
+{
+    uint64_t total = prof_native + prof_interp;
+    for (int n = 0; n < top; n++) {
+        int best = -1;
+        for (int k = 0; k < PROF_PC_SLOTS; k++)
+            if (prof_pc[k].count && (best < 0 || prof_pc[k].count > prof_pc[best].count))
+                best = k;
+        if (best < 0)
+            break;
+        fprintf(out, "profile-pc: %6.3f%%  $%06X\n",
+                100.0 * (double)prof_pc[best].count / (double)(total ? total : 1), prof_pc[best].pc);
+        prof_pc[best].count = 0;
+    }
+}
+
 void sched_profile_clear(void)
 {
+    memset(prof_pc, 0, sizeof prof_pc);
     prof_native = prof_interp = 0;
     memset(prof, 0, sizeof prof);
 }
@@ -1380,6 +1413,9 @@ void sched_profile_report(FILE *out, int top)
         fprintf(out, "\n");
         sum[best] = 0;   /* report consumes the table */
     }
+    const char *pcs = getenv("CT_PROFILE_PCS");
+    if (pcs && atoi(pcs) > 0)
+        prof_report_pcs(out, atoi(pcs));
 }
 
 static const ct_func *native_lookup(const CPU *c)
@@ -1561,6 +1597,7 @@ static void exec_one(void)
     if (at != mv_at) {   /* an MVN/MVP byte after the first isn't a new instruction */
         prof_interp++;
         prof_charge();
+        prof_count_pc(at);
     }
     insn_i = cpu->i;
     unsigned clocks = interp_step(cpu);

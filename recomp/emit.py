@@ -268,29 +268,45 @@ def _via_dispatch(target: int, cst: decode.State) -> bool:
 
 
 def takes_hook(fn: decode.Function, externs: dict) -> bool:
-    """Does fn itself take a hook even in the scheduler: a call or jump to a
-    noreturn extern, or an extern in a jump table's cases?"""
-    direct = [t for t, _ in list(fn.calls.values()) + list(fn.tails.values())]
-    return any(t in externs and externs[t].noreturn for t in direct) or \
-        any(t in externs for ts, _ in fn.tables.values() for t in ts)
+    """Does fn itself take a hook even in the scheduler: an extern in a jump
+    table's cases? (A direct call or jump to an extern, noreturn or not, runs
+    the real code in the scheduler: extern_call / extern_tail hand it to the
+    interpreter, the hook only stands in for it in the strict oracle.)"""
+    return any(t in externs for ts, _ in fn.tables.values() for t in ts)
 
 
 def _routed(target: int) -> bool:
     """An extern whose real code runs in the frame scheduler (extern_call,
-    extern_tail): one that returns. A noreturn one (a stack switch, a jump
-    into a program) keeps its hook everywhere, and what can reach it stays
-    interpreted there (calls_extern)."""
-    ext = _EXTERNS.get(target)
-    return ext is not None and not ext.noreturn
+    extern_tail). A noreturn one (a stack switch, a jump into a program)
+    hands the rest of the function to the interpreter there; only the
+    strict oracle takes its hook."""
+    return target in _EXTERNS
 
 
-def extern_call(target: int, cst: decode.State, back: int, n: int, check: str) -> list[str]:
+def _after_call(fn: decode.Function, i, entry: decode.State, target: int | None = None) -> list:
+    """(register, value) pairs the M/X must have when a callee run through the
+    dispatcher returns: the state the decoder continues in after the call. An
+    [[extern]] stands in for code with the same M/X as its entry; with several
+    continuation states the goto chain after the call picks one instead."""
+    if target is not None and target in _EXTERNS:
+        st = (entry.m, entry.x)
+    elif len(fn.call_exits.get(i.key, ())) > 1:
+        return []
+    else:
+        st = fn.post[i.key][:2]
+    return [(r, v) for r, v in zip('mx', st) if v is not None]
+
+
+def extern_call(target: int, cst: decode.State, back: int, n: int, check: str,
+                mx: list | None = None) -> list[str]:
     """A call to an [[extern]] boundary, return address pushed. In the frame
     scheduler the real code runs (the dispatcher: interpreted, or native
     where compiled); elsewhere (diff_all and its strict interpreter) the hook
     stands in for it, as before."""
     cond = [f'!ct_call_interp(cpu, 0x{target:06X}, 0x{back:06X}, {n})']
-    cond += [f'cpu->{r} != {int(v)}' for r, v in (('m', cst.m), ('x', cst.x)) if v is not None]
+    if mx is None:
+        mx = [(r, v) for r, v in (('m', cst.m), ('x', cst.x)) if v is not None]
+    cond += [f'cpu->{r} != {int(v)}' for r, v in mx]
     return ['if (ct_exec_hook) {',
             f'    if ({" || ".join(cond)}) {{ ct_interp_rest(cpu, s0); return; }}',
             '} else {',
@@ -376,7 +392,9 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
             bank = i.addr >> 16
             ret = (i.addr + 2) & 0xFFFF
 
-            def t(i, cst=cst, bank=bank, ret=ret):
+            many = len(fn.call_exits.get(i.key, ())) > 1   # [[cont]]: extra continuation states
+
+            def t(i, cst=cst, bank=bank, ret=ret, many=many):
                 # a table of unknown length: read the target as the CPU does
                 # (bus reads, after a JSR's pushes: the cycle model charges
                 # them at the table's own speed) and let the dispatcher run it
@@ -389,8 +407,19 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
                                                        'ct_interp_rest(cpu, s0);', 'return;']
                 back = (bank << 16) | ((ret + 1) & 0xFFFF)
                 cond = [f'!ct_call_interp(cpu, t, 0x{back:06X}, 2)']
-                cond += [f'cpu->{r} != {int(v)}' for r, v in (('m', cst.m), ('x', cst.x))
-                         if v is not None]
+                if not many:   # several continuation states ([[cont]]): picked after the call
+                    cond += [f'cpu->{r} != {int(v)}' for r, v in (('m', cst.m), ('x', cst.x))
+                             if v is not None]
+                    alts = fn.dyn_alts.get(i.key, [])
+                    if alts and cst.m is not None and cst.x is not None:
+                        # the callee came back with other M/X: the continuation
+                        # decoded for that pair, else the interpreter
+                        sw = [f'if (cpu->m == {int(m)} && cpu->x == {int(x)}) '
+                              f'goto {label(i.next_addr, (m, x, False))};' for m, x in alts]
+                        return [_strict_rest(i), f'push16(cpu, 0x{ret:04X});'] + body + \
+                            [f'if ({cond[0]}) {{ ct_interp_rest(cpu, s0); return; }}',
+                             f'if (cpu->m != {int(cst.m)} || cpu->x != {int(cst.x)}) {{'] + sw + \
+                            ['ct_interp_rest(cpu, s0); return; }']
                 return [_strict_rest(i), f'push16(cpu, 0x{ret:04X});'] + body + \
                     [f'if ({" || ".join(cond)}) {{ ct_interp_rest(cpu, s0); return; }}']
         elif i.opcode in (0x6C, 0xDC) and i.key in fn.dyn_tables:
@@ -415,13 +444,16 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
             bank = i.addr >> 16
             back = (bank << 16) | ((ret + 1) & 0xFFFF)
 
-            def t(i, target=target, cst=cst, ret=ret, bank=bank, long=long, back=back):
+            many = len(fn.call_exits.get(i.key, ())) > 1   # [[cont]]: extra continuation states
+
+            def t(i, target=target, cst=cst, ret=ret, bank=bank, long=long, back=back, many=many):
                 body = [_strict_rest(i)] + ([f'push8(cpu, 0x{bank:02X});'] if long else [])
                 body.append(f'push16(cpu, 0x{ret:04X});')
                 # came back elsewhere, or in another M/X state: interpret the rest
                 cond = [f'!ct_call_interp(cpu, 0x{target:06X}, 0x{back:06X}, {3 if long else 2})']
-                cond += [f'cpu->{r} != {int(v)}' for r, v in (('m', cst.m), ('x', cst.x))
-                         if v is not None]
+                if not many:
+                    cond += [f'cpu->{r} != {int(v)}' for r, v in (('m', cst.m), ('x', cst.x))
+                             if v is not None]
                 body.append(f'if ({" || ".join(cond)}) {{ ct_interp_rest(cpu, s0); return; }}')
                 return body
         elif i.opcode == 0x20 and i.key in fn.calls:
@@ -431,8 +463,9 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
                    '{ ct_interp_rest(cpu, s0); return; }')
             if _routed(target) or _via_dispatch(target, cst):
                 back = (i.addr & 0xFF0000) | ((ret + 1) & 0xFFFF)
-                t = lambda i, target=target, cst=cst, ret=ret, back=back, chk=chk: \
-                    [f'push16(cpu, 0x{ret:04X});'] + extern_call(target, cst, back, 2, chk)
+                mx = _after_call(fn, i, cst, target)
+                t = lambda i, target=target, cst=cst, ret=ret, back=back, chk=chk, mx=mx: \
+                    [f'push16(cpu, 0x{ret:04X});'] + extern_call(target, cst, back, 2, chk, mx)
             else:
                 t = lambda i, target=target, cst=cst, ret=ret, chk=chk: [
                     f'push16(cpu, 0x{ret:04X});', f'ct_run(cpu, {callee(target, cst)});', chk]
@@ -444,9 +477,10 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
                    '{ ct_interp_rest(cpu, s0); return; }')
             if _routed(target) or _via_dispatch(target, cst):
                 back = (bank << 16) | ((ret + 1) & 0xFFFF)
-                t = lambda i, target=target, cst=cst, ret=ret, bank=bank, back=back, chk=chk: [
+                mx = _after_call(fn, i, cst, target)
+                t = lambda i, target=target, cst=cst, ret=ret, bank=bank, back=back, chk=chk, mx=mx: [
                     f'push8(cpu, 0x{bank:02X});', f'push16(cpu, 0x{ret:04X});',
-                    f'cpu->PB = 0x{target >> 16:02X};'] + extern_call(target, cst, back, 3, chk)
+                    f'cpu->PB = 0x{target >> 16:02X};'] + extern_call(target, cst, back, 3, chk, mx)
             else:
                 t = lambda i, target=target, cst=cst, ret=ret, bank=bank, chk=chk: [
                     f'push8(cpu, 0x{bank:02X});',
@@ -461,13 +495,16 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
             interp = fn.table_interp.get(i.key, set())
             back = (i.addr & 0xFF0000) | ((ret + 1) & 0xFFFF)
 
-            def t(i, targets=targets, cst=cst, is_call=is_call, ret=ret, interp=interp, back=back):
+            tmx = _after_call(fn, i, cst) if is_call else [(r, v) for r, v in (('m', cst.m), ('x', cst.x))
+                                                           if v is not None]
+
+            def t(i, targets=targets, cst=cst, is_call=is_call, ret=ret, interp=interp, back=back,
+                  tmx=tmx):
                 body = [_strict_rest(i)] if interp else []   # uncompiled cases: see _strict_rest
                 body += [f'push16(cpu, 0x{ret:04X});'] if is_call else []
                 body.append('switch (cpu->X) {')
                 after = 'break;' if is_call else 'return;'
-                mx = [f'cpu->{r} != {int(v)}' for r, v in (('m', cst.m), ('x', cst.x))
-                      if v is not None]
+                mx = [f'cpu->{r} != {int(v)}' for r, v in tmx]
                 for n, tg in enumerate(targets):
                     if tg in interp and is_call:   # run through the interpreter's dispatch
                         cond = ' || '.join([f'!ct_call_interp(cpu, 0x{tg:06X}, 0x{back:06X}, 2)'] + mx)
@@ -554,7 +591,11 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
             raise EmitError(f'${i.addr:06X}: {i.text()} (opcode ${i.opcode:02X}, '
                             f'width {w or "-"}) not implemented')
         body = t(i)
-        if i.key in fn.plp_interp:   # unknown M/X after the pull: the rest is interpreted
+        if i.key in fn.plp_interp:   # unknown M/X after the pull: native per M/X, else interpreted
+            nxt_addr, combos = fn.plp_interp[i.key]
+            for m, x in combos:
+                body.append(f'if (cpu->m == {int(m)} && cpu->x == {int(x)}) '
+                            f'goto {label(nxt_addr, (m, x, False))};')
             body += [f'cpu->PB = 0x{i.addr >> 16:02X};', f'cpu->PC = 0x{i.next_addr & 0xFFFF:04X};',
                      'ct_interp_rest(cpu, s0);', 'return;']
         elif i.mnemonic == 'PLP':
@@ -570,9 +611,13 @@ def emit_function(fm: funcs.FuncMeta, fn: decode.Function) -> list[str]:
             for k in fn.call_exits[i.key]:
                 body.append(f'if (cpu->m == {int(k[0])} && cpu->x == {int(k[1])}) '
                             f'goto {label(i.next_addr, k)};')
-            body.append(f'ct_fatal("${i.addr:06X}: callee returned with m%d x%d", cpu->m, cpu->x);')
+            if i.key in fn.interp_calls or i.key in fn.dyn_tables or i.key in fn.table_interp:
+                # a callee run by the interpreter returned in a state no [[cont]] lists
+                body.append('ct_interp_rest(cpu, s0); return;')
+            else:
+                body.append(f'ct_fatal("${i.addr:06X}: callee returned with m%d x%d", cpu->m, cpu->x);')
         elif i.key in fn.plp_interp:
-            pass
+            pass   # the run-time dispatch above ends every path
         elif i.mnemonic not in NO_FALLTHROUGH:
             succ = (i.next_addr,) + post
             if nxt is None or nxt.key != succ:
@@ -625,12 +670,15 @@ def emit_module(reg: funcs.Registry, metas: list[funcs.FuncMeta], module: str) -
 
 
 def calls_extern(reg: funcs.Registry, addr: int, st: decode.State, memo: dict) -> bool:
-    """Can (addr, st) reach an extern hook it would take even in the frame
-    scheduler? Direct calls and jumps to a returning extern run the real
-    code there (extern_call); a noreturn extern, or any extern in a jump
-    table's case, still takes the hook, which stands in for ROM code the
-    translation doesn't run, so a function that can reach one (directly or
-    through its callees) is interpreted in system mode."""
+    """Can (addr, st) reach a noreturn extern, or an extern in a jump table's
+    case? Direct calls and jumps to an extern run the real code in the frame
+    scheduler (extern_call, extern_tail hand it to the interpreter); the
+    caller of a function that can reach a noreturn one must not take that
+    call as returning, so it goes through the dispatcher (_via_dispatch) and
+    hands its rest over when the callee never comes back. An extern in a
+    jump table's case still takes the hook (takes_hook), which stands in for
+    ROM code the translation doesn't run: such a function is interpreted in
+    system mode."""
     key = (addr,) + st.key()
     if key in memo:
         return memo[key]

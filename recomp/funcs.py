@@ -78,8 +78,8 @@ def load_jumptables(path: str) -> dict[int, int]:
 
 
 def load_handoffs(path: str) -> set[int]:
-    """Sites (24-bit address of a JML, or a JMP (abs,X) through a table of
-    unknown length) whose jump never returns to the routine's caller: the
+    """Sites (24-bit address of a JML or JMP to a registered entry or not, or
+    a JMP (abs,X) through a table of unknown length) whose jump never returns to the routine's caller: the
     target restarts the machine or switches stacks for good. The path ends
     there instead of leaving the routine's exit M/X unknown."""
     with open(path, 'rb') as f:
@@ -89,6 +89,29 @@ def load_handoffs(path: str) -> set[int]:
         if 'site' not in t:
             raise DecodeError(f'funcs.toml: bad handoff {t}')
         out.add(t['site'])
+    return out
+
+
+def load_conts(path: str) -> dict[int, tuple]:
+    """site (24-bit address of a JSR/JSL/JSR (abs,X) the callee of which runs
+    through the interpreter, its exit M/X unknown) -> extra continuation
+    states, each "mNxN": the code after the call is also decoded for those,
+    and run-time M/X pick the one to go on in (otherwise the rest of the
+    function is handed to the interpreter when M/X differ from the call's).
+    Evidence for each entry: a profile that saw the call return in that state."""
+    with open(path, 'rb') as f:
+        data = tomllib.load(f)
+    out = {}
+    for t in data.get('cont', []):
+        if 'site' not in t or not t.get('states'):
+            raise DecodeError(f'funcs.toml: bad cont {t}')
+        sts = []
+        for tag in t['states']:
+            m = re.fullmatch(r'm([01])x([01])', tag)
+            if not m:
+                raise DecodeError(f'funcs.toml: cont {t["site"]:#x}: bad state {tag!r}')
+            sts.append((bool(int(m[1])), bool(int(m[2]))))
+        out[t['site']] = tuple(sts)
     return out
 
 
@@ -111,6 +134,38 @@ def load_exits(path: str) -> dict[tuple, tuple]:
         if not m:
             raise DecodeError(f'funcs.toml: exit {t}: bad exit_state')
         out[(t['addr'], t['state'])] = (t['returns'], bool(int(m[1])), bool(int(m[2])))
+    return out
+
+
+NOTCODE_KINDS = ('interior', 'data', 'sentinel', 'padding', 'text')
+
+
+def load_notcode(path: str) -> list[dict]:
+    """notcode.toml: labels from the symbol sources that are not function
+    entries, so the known-function accounting leaves them out.
+      interior  an instruction start inside a compiled routine, reached
+                only by that routine's own control flow (`in` names it);
+      data      a table or block of bytes read as data;
+      sentinel  an endless loop that is never meant to be entered;
+      padding / text  filler or character data.
+    Each entry carries `evidence`, a one-line reason. A missing file means
+    no entries."""
+    import os
+    if not os.path.isfile(path):
+        return []
+    with open(path, 'rb') as f:
+        data = tomllib.load(f)
+    out, seen = [], set()
+    for t in data.get('notcode', []):
+        for k in ('name', 'addr', 'kind', 'evidence'):
+            if k not in t:
+                raise DecodeError(f'notcode.toml: {t.get("name", "?")}: missing {k}')
+        if t['kind'] not in NOTCODE_KINDS:
+            raise DecodeError(f'notcode.toml: {t["name"]}: bad kind {t["kind"]!r}')
+        if t['addr'] in seen:
+            raise DecodeError(f'notcode.toml: duplicate address ${t["addr"]:06X}')
+        seen.add(t['addr'])
+        out.append(t)
     return out
 
 
@@ -189,6 +244,7 @@ class Registry:
         self.externs = load_externs(funcs_path)
         self.handoffs = load_handoffs(funcs_path)
         self.exits = load_exits(funcs_path)
+        self.conts = load_conts(funcs_path)
         self.cache: dict[tuple, decode.Function] = {}
         self.active: set[tuple] = set()
         self.assume: dict[tuple, tuple] = {}   # recursive key -> assumed exit (m, x)
