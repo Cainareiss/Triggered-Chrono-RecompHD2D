@@ -833,17 +833,15 @@ static void load_one(const char *dir, pending **list, int *n, int *cap, kmap *ha
                 }
             } else if (!strcmp(table, "model") && file[0]) {
                 char why[96];
-                packs_model *nm = realloc(L.models, (size_t)(L.nmodels + 1) * sizeof *nm);
+                packs_model *nm;
                 if (mdl.map < 0 && !mdl.n_tiles) {
                     fprintf(stderr, "packs: %s: [[model]] %s: needs map (with cells) or tiles\n",
                             dir, file);
                 } else if (packs_path_ok(dir, file, why, sizeof why)) {
                     fprintf(stderr, "packs: %s: [[model]] file \"%s\": %s: skipped\n", dir, file, why);
                     rejected++;
-                    if (nm)
-                        L.models = nm;   /* grown by one, unused */
-                } else if (nm) {
-                    L.models = nm;
+                } else if ((nm = realloc(L.models, (size_t)(L.nmodels + 1) * sizeof *nm)) != NULL) {
+                    L.models = nm;   /* realloc may have moved it */
                     if (snprintf(mdl.file, sizeof mdl.file, "%s/%s", dir, file) >= (int)sizeof mdl.file)
                         mdl.file[0] = 0;   /* too long a path */
                     L.models[L.nmodels++] = mdl;
