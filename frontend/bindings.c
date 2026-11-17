@@ -19,6 +19,7 @@ void bindings_defaults(bindings *b)
     b->button[SDL_CONTROLLER_BUTTON_PADDLE1] = ACTION_QUICKLOAD;   /* R4 */
     b->button[SDL_CONTROLLER_BUTTON_PADDLE4] = ACTION_FFWD;        /* L5 */
     b->button[SDL_CONTROLLER_BUTTON_PADDLE3] = ACTION_MENU;        /* R5 */
+    b->button[SDL_CONTROLLER_BUTTON_MISC1] = ACTION_QUICKMENU;     /* the Deck's "..." button */
     for (int a = 0; a < ACTION_COUNT; a++)
         b->key[a] = SDL_SCANCODE_UNKNOWN;
     b->key[ACTION_QUICKSAVE] = SDL_SCANCODE_F6;
@@ -28,6 +29,7 @@ void bindings_defaults(bindings *b)
     b->key[ACTION_SCREENSHOT] = SDL_SCANCODE_F8;
     b->key[ACTION_FRAMESTEP] = SDL_SCANCODE_PERIOD;
     b->key[ACTION_REWIND] = SDL_SCANCODE_BACKSPACE;
+    b->key[ACTION_QUICKMENU] = SDL_SCANCODE_F1;
 }
 
 int bindings_bindable(SDL_GameControllerButton button)
@@ -38,15 +40,19 @@ int bindings_bindable(SDL_GameControllerButton button)
     return 0;
 }
 
-/* Keys the frontend already uses, or the game: never bound. */
-static int key_taken(SDL_Scancode k)
+/* Keys the frontend already uses, or the game: never bound. F1 is the
+   quick menu's own (it used to cycle the look, which is a tile of the quick
+   menu now): only that action may have it. */
+static int key_taken(SDL_Scancode k, ct_action a)
 {
     static const SDL_Scancode taken[] = {
         SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT,
         SDL_SCANCODE_Z, SDL_SCANCODE_X, SDL_SCANCODE_A, SDL_SCANCODE_S, SDL_SCANCODE_Q,
-        SDL_SCANCODE_W, SDL_SCANCODE_RETURN, SDL_SCANCODE_RSHIFT, SDL_SCANCODE_F1,
+        SDL_SCANCODE_W, SDL_SCANCODE_RETURN, SDL_SCANCODE_RSHIFT,
         SDL_SCANCODE_F2, SDL_SCANCODE_F3, SDL_SCANCODE_F4, SDL_SCANCODE_F11,
     };
+    if (k == SDL_SCANCODE_F1)
+        return a != ACTION_QUICKMENU;
     for (size_t n = 0; n < sizeof taken / sizeof *taken; n++)
         if (taken[n] == k)
             return 1;
@@ -79,7 +85,7 @@ int bindings_parse_line(bindings *b, const char *line)
                     !bindings_bindable(btn) ? "not a button that can be bound (paddle1-4, misc1, "
                                               "touchpad)"
                                             : "not an action (none, quicksave, quickload, ffwd, "
-                                              "menu, screenshot)");
+                                              "menu, screenshot, quickmenu)");
             return 1;
         }
         b->button[btn] = (unsigned char)a;
@@ -95,7 +101,7 @@ int bindings_parse_line(bindings *b, const char *line)
         return 1;
     }
     SDL_Scancode sc = SDL_GetScancodeFromName(val);
-    if (sc == SDL_SCANCODE_UNKNOWN || key_taken(sc)) {
+    if (sc == SDL_SCANCODE_UNKNOWN || key_taken(sc, (ct_action)a)) {
         fprintf(stderr, "ct: settings.ini: %s=%s: %s\n", key, val,
                 sc == SDL_SCANCODE_UNKNOWN ? "not a key name" : "that key is already used");
         return 1;

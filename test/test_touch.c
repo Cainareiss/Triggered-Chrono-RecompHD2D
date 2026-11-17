@@ -167,6 +167,66 @@ int main(void)
     int n = touch_geometry_for(1080, 2400, touch_picture_aspect(1080, 2400, 4.0 / 3.0), &v);
     CHECK(n > 0 && n % 3 == 0, "portrait geometry: %d vertices", n);
 
+    /* The quick menu: the handle at the top edge's middle, and three fingers. */
+    touch_menu_requested();
+    tick(1);
+    finger(SDL_FINGERDOWN, 20, W / 2.0f, 6);
+    finger(SDL_FINGERUP, 20, W / 2.0f, 6);
+    CHECK(touch_menu_requested() == 1, "a tap on the handle asks for the quick menu");
+    CHECK(touch_menu_requested() == 0, "asked once");
+    finger(SDL_FINGERDOWN, 20, W / 2.0f, 6);
+    finger(SDL_FINGERMOTION, 20, W / 2.0f + 300, 200);
+    finger(SDL_FINGERUP, 20, W / 2.0f + 300, 200);
+    CHECK(touch_menu_requested() == 0, "a drag from the handle is not a tap");
+    tick(250);   /* idle: the handle has faded (and the overlay is hidden) */
+    finger(SDL_FINGERDOWN, 20, W / 2.0f, 6);
+    finger(SDL_FINGERUP, 20, W / 2.0f, 6);
+    CHECK(touch_menu_requested() == 0, "a faded handle does not act");
+    tick(1);
+    finger(SDL_FINGERDOWN, 20, W / 2.0f, 6);
+    finger(SDL_FINGERUP, 20, W / 2.0f, 6);
+    CHECK(touch_menu_requested() == 1, "the handle is back after a touch");
+    {   /* never over the on-screen controller: the narrow layout of a phone */
+        touch_set_screen(NULL, 1080, 2400, touch_picture_aspect(1080, 2400, 4.0 / 3.0));
+        const SDL_Vertex *gv;
+        int n1 = touch_geometry(&gv);
+        CHECK(n1 > 0 && n1 % 3 == 0, "handle drawn with the controls: %d vertices", n1);
+        touch_set_screen(NULL, W, H, touch_picture_plain(W, H));
+    }
+    /* three fingers on empty spots, together, lifted soon */
+    finger(SDL_FINGERDOWN, 31, W / 2.0f - 60, H / 2.0f);
+    finger(SDL_FINGERDOWN, 32, W / 2.0f, H / 2.0f);
+    finger(SDL_FINGERDOWN, 33, W / 2.0f + 60, H / 2.0f);
+    tick(6);
+    finger(SDL_FINGERUP, 31, W / 2.0f - 60, H / 2.0f);
+    CHECK(touch_menu_requested() == 1, "a three-finger tap asks for the quick menu");
+    CHECK(touch_buttons(frame) == 0, "no finger is left on the controls");
+    /* ... not when held long, moved, or on a control */
+    finger(SDL_FINGERDOWN, 31, W / 2.0f - 60, H / 2.0f);
+    finger(SDL_FINGERDOWN, 32, W / 2.0f, H / 2.0f);
+    finger(SDL_FINGERDOWN, 33, W / 2.0f + 60, H / 2.0f);
+    tick(40);
+    finger(SDL_FINGERUP, 31, W / 2.0f - 60, H / 2.0f);
+    finger(SDL_FINGERUP, 32, W / 2.0f, H / 2.0f);
+    finger(SDL_FINGERUP, 33, W / 2.0f + 60, H / 2.0f);
+    CHECK(touch_menu_requested() == 0, "three fingers held long: no");
+    finger(SDL_FINGERDOWN, 31, W / 2.0f - 60, H / 2.0f);
+    finger(SDL_FINGERDOWN, 32, W / 2.0f, H / 2.0f);
+    finger(SDL_FINGERDOWN, 33, W / 2.0f + 60, H / 2.0f);
+    finger(SDL_FINGERMOTION, 33, W / 2.0f + 200, H / 2.0f + 100);
+    finger(SDL_FINGERUP, 31, W / 2.0f - 60, H / 2.0f);
+    finger(SDL_FINGERUP, 32, W / 2.0f, H / 2.0f);
+    finger(SDL_FINGERUP, 33, W / 2.0f + 200, H / 2.0f + 100);
+    CHECK(touch_menu_requested() == 0, "three fingers, one moved: no");
+    at("a", &x, &y);
+    finger(SDL_FINGERDOWN, 31, x, y);
+    finger(SDL_FINGERDOWN, 32, W / 2.0f, H / 2.0f);
+    finger(SDL_FINGERDOWN, 33, W / 2.0f + 60, H / 2.0f);
+    finger(SDL_FINGERUP, 31, x, y);
+    finger(SDL_FINGERUP, 32, W / 2.0f, H / 2.0f);
+    finger(SDL_FINGERUP, 33, W / 2.0f + 60, H / 2.0f);
+    CHECK(touch_menu_requested() == 0, "three fingers, one on a button: no");
+
     printf("test_touch: %ld checks, %ld failed\n", checks, fails);
     return fails ? 1 : 0;
 }

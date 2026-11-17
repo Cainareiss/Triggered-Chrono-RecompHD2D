@@ -485,6 +485,13 @@ if(SDL2_FOUND)
     add_test(NAME sdl_menu_hd2d COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_menu.py
         $<TARGET_FILE:ct_sdl> 300 150 --hd2d)
     list(APPEND ct_game_tests sdl_menu sdl_menu_hd2d)
+    # port: the F1 quick menu (frontend/quickmenu.h): opened by its action, by
+    # three fingers and by the touch handle; pad use saves slot 1 and sets the
+    # volume, a picture of the sheet is written, no frame runs while it is
+    # open, every frame hash matches a run without it.
+    add_test(NAME sdl_quickmenu COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_quickmenu.py
+        $<TARGET_FILE:ct_sdl> 400 150)
+    list(APPEND ct_game_tests sdl_quickmenu)
 endif()
 
 set_tests_properties(${ct_game_tests} PROPERTIES LABELS rom ENVIRONMENT

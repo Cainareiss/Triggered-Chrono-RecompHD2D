@@ -18,15 +18,7 @@ extern "C" {
 #include "settings.h"
 }
 
-#include "imgui.h"
-#include "imgui_internal.h"   /* RegisterUserTexture */
-#include "imgui_impl_opengl3.h"
-#include "imgui_impl_sdl2.h"
-#include "imgui_impl_sdlrenderer2.h"
-
-#ifdef CT_MENU_FONT
-#include "menu_font.h"   /* Roboto Medium (third_party/imgui/fonts), tools/embed_binary.cmake */
-#endif
+#include "ui_backend.h"
 
 namespace {
 
@@ -35,21 +27,13 @@ constexpr int MAX_ROWS = SETTINGS_MAX;
 constexpr unsigned REPEAT_FIRST_MS = 380, REPEAT_MS = 85;
 constexpr int STICK_ON = 16000, STICK_OFF = 9000;
 
-/* A glyph's picture as an ImGui texture, per glyph set and token. */
-struct GlyphTex {
-    int set;
-    char token[24];
-    ImTextureData *tex;   /* NULL: no picture (label) */
-    char label[32];
-};
-
 struct Dir {   /* one source of a direction: -1, 0, 1 per axis */
     int x, y;
 };
 
 struct Menu {
     menu_host host;
-    int have_host, ready, open;
+    int have_host, open;
     long opened;
     int tab, row[MAX_TABS];
     int capture;         /* registry index waiting for a key, -1 */
@@ -58,13 +42,9 @@ struct Menu {
     int cur_x, cur_y;    /* the combined direction being repeated */
     unsigned held_ms, next_ms;
     float scale_px;      /* the body font size the style was made for */
-    ImFont *font;
-    GlyphTex glyphs[64];
-    int n_glyphs;
     ImTextureData *preview;
     const setting *preview_of;
     unsigned preview_gen;
-    ImVector<ImTextureData *> retired;
     float scroll;        /* list scroll, kept by us */
     int ensure_visible;
 } M = {};
@@ -238,61 +218,6 @@ int stick_dir(int v, int cur)
 
 /* ---- textures: glyphs and the preview ---- */
 
-ImTextureData *make_texture(int w, int h)
-{
-    ImTextureData *t = IM_NEW(ImTextureData)();
-    t->Create(ImTextureFormat_RGBA32, w, h);
-    ImGui::RegisterUserTexture(t);
-    return t;
-}
-
-void retire_texture(ImTextureData *t)
-{
-    if (!t)
-        return;
-    t->WantDestroyNextFrame = true;
-    M.retired.push_back(t);
-}
-
-void collect_retired(void)
-{
-    for (int k = 0; k < M.retired.Size;) {
-        ImTextureData *t = M.retired[k];
-        if (t->Status == ImTextureStatus_Destroyed) {
-            ImGui::UnregisterUserTexture(t);
-            IM_DELETE(t);
-            M.retired.erase(M.retired.Data + k);
-        } else {
-            k++;
-        }
-    }
-}
-
-const GlyphTex *glyph(const char *token)
-{
-    int set = glyphs_in_use();
-    for (int k = 0; k < M.n_glyphs; k++)
-        if (M.glyphs[k].set == set && !strcmp(M.glyphs[k].token, token))
-            return &M.glyphs[k];
-    if (M.n_glyphs == (int)(sizeof M.glyphs / sizeof *M.glyphs))
-        return NULL;
-    GlyphTex *g = &M.glyphs[M.n_glyphs++];
-    g->set = set;
-    snprintf(g->token, sizeof g->token, "%s", token);
-    const char *label = "";
-    const uint8_t *px = glyphs_lookup_in(set, token, &label);
-    snprintf(g->label, sizeof g->label, "%s", label ? label : "");
-    g->tex = NULL;
-    if (px) {
-        g->tex = make_texture(GLYPH_PX, GLYPH_PX);
-        unsigned char *p = (unsigned char *)g->tex->GetPixels();
-        for (int k = 0; k < GLYPH_PX * GLYPH_PX; k++) {
-            p[k * 4 + 0] = p[k * 4 + 1] = p[k * 4 + 2] = 255;
-            p[k * 4 + 3] = px[k];
-        }
-    }
-    return g;
-}
 
 void update_preview(const setting *s)
 {
@@ -308,8 +233,8 @@ void update_preview(const setting *s)
     bool same = M.preview && M.preview->Width == w && M.preview->Height == h &&
                 M.preview->Status == ImTextureStatus_OK;
     if (!same) {
-        retire_texture(M.preview);
-        M.preview = make_texture(w, h);
+        ui_retire_texture(M.preview);
+        M.preview = ui_make_texture(w, h);
     }
     unsigned char *p = (unsigned char *)M.preview->GetPixels();
     for (int k = 0; k < w * h; k++) {
@@ -340,25 +265,9 @@ const ImU32 C_PANEL = IM_COL32(16, 19, 27, 255);
 const ImU32 C_LINE = IM_COL32(255, 255, 255, 22);
 const ImU32 C_PILL_OFF = IM_COL32(70, 76, 92, 255);
 
-/* The body text size for a display of w x h points (scale by size and,
-   where SDL knows it, by how big the screen physically is). */
 float body_px(float w, float h)
 {
-    float px = h * 0.040f;   /* a handheld's 800-line screen: 32 px */
-    float ddpi = 0, hdpi = 0, vdpi = 0;
-    int idx = M.host.win ? SDL_GetWindowDisplayIndex(M.host.win) : -1;
-    if (idx >= 0 && !SDL_GetDisplayDPI(idx, &ddpi, &hdpi, &vdpi) && vdpi > 40.0f) {
-        SDL_DisplayMode dm;
-        if (!SDL_GetCurrentDisplayMode(idx, &dm) && dm.h / vdpi > 6.0f)
-            px = h * 0.032f;   /* a desktop monitor: the menu needn't be as big */
-    }
-    if (w < h * 1.2f)
-        px = fminf(px, w * 0.036f);   /* narrow windows */
-    const setting *ms = settings_find("menu_scale");
-    static const float scales[] = {0.85f, 1.0f, 1.2f};
-    int v = ms ? settings_get_value(ms) : 1;
-    px *= scales[v >= 0 && v < 3 ? v : 1];
-    return px < 15.0f ? 15.0f : px > 72.0f ? 72.0f : px;
+    return ui_body_px(w, h);
 }
 
 void make_style(float px)
@@ -386,12 +295,12 @@ void make_style(float px)
 
 void text_at(ImDrawList *dl, float size, ImVec2 p, ImU32 col, const char *t)
 {
-    dl->AddText(M.font, size, p, col, t);
+    ui_text(dl, size, p, col, t);
 }
 
 ImVec2 text_size(float size, const char *t)
 {
-    return M.font->CalcTextSizeA(size, 1e9f, 0.0f, t);
+    return ui_text_size(size, t);
 }
 
 /* t, or as much of its end as fits in maxw after "..." (paths). */
@@ -411,20 +320,7 @@ const char *elide_left(const char *t, float size, float maxw, char *buf, size_t 
 /* A glyph (or its label in a key cap) of height hgt at p; returns its width. */
 float draw_glyph(ImDrawList *dl, const char *token, ImVec2 p, float hgt, float px)
 {
-    const GlyphTex *g = glyph(token);
-    if (g && g->tex) {
-        dl->AddImage(g->tex->GetTexRef(), p, ImVec2(p.x + hgt, p.y + hgt), ImVec2(0, 0), ImVec2(1, 1),
-                     C_TEXT);
-        return hgt;
-    }
-    const char *label = g ? g->label : token;
-    float fs = px * 0.72f;
-    ImVec2 ts = text_size(fs, label);
-    float w = ts.x + px * 0.6f;
-    dl->AddRect(ImVec2(p.x, p.y + hgt * 0.1f), ImVec2(p.x + w, p.y + hgt * 0.9f), C_TEXT, px * 0.2f,
-                fmaxf(1.0f, px * 0.06f));
-    text_at(dl, fs, ImVec2(p.x + px * 0.3f, p.y + (hgt - ts.y) * 0.5f), C_TEXT, label);
-    return w;
+    return ui_draw_glyph(dl, token, p, hgt, px, C_TEXT);
 }
 
 void triangle(ImDrawList *dl, ImVec2 c, float r, int dir, ImU32 col)
@@ -759,7 +655,7 @@ void build_ui(float W, float H)
         if (M.capture >= 0)
             snprintf(help, sizeof help, "Press the key to use. Escape: cancel. Backspace: no key.");
         float fs = px * 0.8f;
-        dl->AddText(M.font, fs, ImVec2(x0, hy + px * 0.45f), C_DIM, help, NULL, text_x1 - x0);
+        dl->AddText(ui_font(), fs, ImVec2(x0, hy + px * 0.45f), C_DIM, help, NULL, text_x1 - x0);
     }
 
     /* Footer: what the buttons do, with the glyphs of the device in use. */
@@ -786,35 +682,6 @@ void build_ui(float W, float H)
     ImGui::End();
 }
 
-void setup(void)
-{
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO &io = ImGui::GetIO();
-    io.IniFilename = NULL;
-    io.LogFilename = NULL;
-    io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;   /* main.c owns the cursor */
-    ImFontConfig cfg;
-    cfg.FontDataOwnedByAtlas = false;
-#ifdef CT_MENU_FONT
-    M.font = io.Fonts->AddFontFromMemoryTTF((void *)menu_font, (int)menu_font_size, 20.0f, &cfg);
-#endif
-    if (!M.font)
-        M.font = io.Fonts->AddFontDefaultVector();
-    if (M.host.ren) {
-        ImGui_ImplSDL2_InitForSDLRenderer(M.host.win, M.host.ren);
-        ImGui_ImplSDLRenderer2_Init(M.host.ren);
-    } else {
-        ImGui_ImplSDL2_InitForOpenGL(M.host.win, SDL_GL_GetCurrentContext());
-        ImGui_ImplOpenGL3_Init(M.host.gles ? "#version 300 es" : "#version 330 core");
-    }
-    /* Controllers are ours (menu_event): ImGui's backend opens none. */
-    ImGui_ImplSDL2_SetGamepadMode(ImGui_ImplSDL2_GamepadMode_Manual, NULL, 0);
-    M.scale_px = 0;
-    M.ready = 1;
-    fprintf(stderr, "ct_sdl: menu: Dear ImGui %s, %s renderer\n", ImGui::GetVersion(),
-            M.host.ren ? "SDL_Renderer" : M.host.gles ? "OpenGL ES 3" : "OpenGL 3");
-}
 
 }   // namespace
 
@@ -824,36 +691,19 @@ void menu_init(const menu_host *h)
 {
     M.host = *h;
     M.have_host = 1;
+    ui_set_host(h->win, h->ren, h->gles);
     M.capture = M.confirm = -1;
 }
 
 void menu_shutdown(void)
 {
-    if (!M.ready)
+    if (!ui_ready())
         return;
-    if (M.host.ren)
-        ImGui_ImplSDLRenderer2_Shutdown();
-    else
-        ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplSDL2_Shutdown();
-    for (int k = 0; k < M.n_glyphs; k++)
-        if (M.glyphs[k].tex) {
-            ImGui::UnregisterUserTexture(M.glyphs[k].tex);
-            IM_DELETE(M.glyphs[k].tex);
-        }
-    for (ImTextureData *t : M.retired) {
-        ImGui::UnregisterUserTexture(t);
-        IM_DELETE(t);
-    }
     if (M.preview) {
-        ImGui::UnregisterUserTexture(M.preview);
-        IM_DELETE(M.preview);
+        ui_destroy_texture(M.preview);
+        M.preview = NULL;
     }
-    ImGui::DestroyContext();
-    M.ready = 0;
-    M.n_glyphs = 0;
-    M.preview = NULL;
-    M.retired.clear();
+    ui_shutdown();   /* the backend both menus share */
 }
 
 void menu_open(void)
@@ -975,16 +825,14 @@ int menu_event(const SDL_Event *ev)
     case SDL_MOUSEBUTTONDOWN:
     case SDL_MOUSEBUTTONUP:
     case SDL_MOUSEWHEEL:
-        if (M.ready)
-            ImGui_ImplSDL2_ProcessEvent(ev);
+        ui_process_event(ev);
         return 1;
     case SDL_FINGERDOWN:
     case SDL_FINGERUP:
     case SDL_FINGERMOTION:
         return 1;   /* SDL turns touches into mouse events too: those work the menu */
     case SDL_WINDOWEVENT:
-        if (M.ready)
-            ImGui_ImplSDL2_ProcessEvent(ev);
+        ui_process_event(ev);
         return 0;
     default:
         return 0;
@@ -1007,40 +855,18 @@ void menu_tick(unsigned ms)
 
 void menu_draw(int w, int h)
 {
-    if (!M.open || !M.have_host)
+    if (!M.open || !M.have_host || !ui_ensure())
         return;
-    if (!M.ready)
-        setup();
-    collect_retired();
-    if (M.host.ren)
-        ImGui_ImplSDLRenderer2_NewFrame();
-    else
-        ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
+    ui_frame_begin(w, h);
     ImGuiIO &io = ImGui::GetIO();
-    /* The window size in ImGui's units; the backend took it from SDL,
-       which the offscreen and dummy drivers may not keep current. */
-    if (io.DisplaySize.x <= 0 || io.DisplaySize.y <= 0) {
-        io.DisplaySize = ImVec2((float)w, (float)h);
-        io.DisplayFramebufferScale = ImVec2(1, 1);
-    }
     float px = body_px(io.DisplaySize.x, io.DisplaySize.y);
     if (fabsf(px - M.scale_px) > 0.5f)
         make_style(px);
     ImGui::NewFrame();
-    ImGui::PushFont(M.font, M.scale_px);
+    ImGui::PushFont(ui_font(), M.scale_px);
     build_ui(io.DisplaySize.x, io.DisplaySize.y);
     ImGui::PopFont();
-    ImGui::Render();
-    if (M.host.ren) {
-        ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), M.host.ren);
-    } else {
-        typedef void (*bind_fn)(unsigned, unsigned);
-        static bind_fn bind = (bind_fn)SDL_GL_GetProcAddress("glBindFramebuffer");
-        if (bind)
-            bind(0x8D40 /* GL_FRAMEBUFFER */, 0);   /* the window's */
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    }
+    ui_frame_end();
 }
 
 void menu_draw_checklist(int w, int h, const char *title, int n, const char *const *labels,
@@ -1048,25 +874,17 @@ void menu_draw_checklist(int w, int h, const char *title, int n, const char *con
 {
     if (M.open || !M.have_host || n <= 0)
         return;
-    if (!M.ready)
-        setup();
-    if (M.host.ren)
-        ImGui_ImplSDLRenderer2_NewFrame();
-    else
-        ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
+    if (!ui_ensure())
+        return;
+    ui_frame_begin(w, h);
     ImGuiIO &io = ImGui::GetIO();
-    if (io.DisplaySize.x <= 0 || io.DisplaySize.y <= 0) {
-        io.DisplaySize = ImVec2((float)w, (float)h);
-        io.DisplayFramebufferScale = ImVec2(1, 1);
-    }
     /* About two thirds of the menu's text size: readable on a 7" screen
        without hiding much of the game. */
     float px = body_px(io.DisplaySize.x, io.DisplaySize.y) * 0.62f;
     if (px < 13.0f)
         px = 13.0f;
     ImGui::NewFrame();
-    ImGui::PushFont(M.font, px);
+    ImGui::PushFont(ui_font(), px);
     float pad = px * 0.6f;
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - pad, pad), ImGuiCond_Always,
                             ImVec2(1.0f, 0.0f));
@@ -1102,54 +920,12 @@ void menu_draw_checklist(int w, int h, const char *title, int n, const char *con
     ImGui::End();
     ImGui::PopStyleVar(3);
     ImGui::PopFont();
-    ImGui::Render();
-    if (M.host.ren) {
-        ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), M.host.ren);
-    } else {
-        typedef void (*bind_fn)(unsigned, unsigned);
-        static bind_fn bind = (bind_fn)SDL_GL_GetProcAddress("glBindFramebuffer");
-        if (bind)
-            bind(0x8D40 /* GL_FRAMEBUFFER */, 0);
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    }
+    ui_frame_end();
 }
 
 int menu_shot(const char *path, int w, int h)
 {
-    unsigned char *px = (unsigned char *)malloc((size_t)w * h * 4);
-    if (!px)
-        return -1;
-    int ok = 0;
-    if (M.host.ren) {
-        ok = !SDL_RenderReadPixels(M.host.ren, NULL, SDL_PIXELFORMAT_ARGB8888, px, w * 4);
-    } else {
-        typedef void (*read_fn)(int, int, int, int, unsigned, unsigned, void *);
-        typedef void (*pixel_fn)(unsigned, int);
-        typedef void (*buf_fn)(unsigned);
-        read_fn rd = (read_fn)SDL_GL_GetProcAddress("glReadPixels");
-        pixel_fn ps = (pixel_fn)SDL_GL_GetProcAddress("glPixelStorei");
-        buf_fn rb = (buf_fn)SDL_GL_GetProcAddress("glReadBuffer");
-        if (rd && ps) {
-            if (rb && !M.host.gles)
-                rb(0x0405 /* GL_BACK */);
-            ps(0x0D05 /* GL_PACK_ALIGNMENT */, 4);
-            unsigned char *rgba = (unsigned char *)malloc((size_t)w * h * 4);
-            if (rgba) {
-                rd(0, 0, w, h, 0x1908 /* GL_RGBA */, 0x1401 /* GL_UNSIGNED_BYTE */, rgba);
-                for (int y = 0; y < h; y++)   /* bottom-up RGBA -> top-down B G R x */
-                    for (int x = 0; x < w; x++) {
-                        const unsigned char *s = rgba + ((size_t)(h - 1 - y) * w + x) * 4;
-                        unsigned char *d = px + ((size_t)y * w + x) * 4;
-                        d[0] = s[2], d[1] = s[1], d[2] = s[0], d[3] = 255;
-                    }
-                free(rgba);
-                ok = 1;
-            }
-        }
-    }
-    ok = ok && !png_write_bgrx(path, px, w, h);
-    free(px);
-    return ok ? 0 : -1;
+    return ui_shot(path, w, h);
 }
 
 }   // extern "C"

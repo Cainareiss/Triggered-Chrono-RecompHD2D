@@ -45,8 +45,9 @@
  *          [--debug-view N] [--fullscreen] [--log-gpu]
  *          [--render-scale N] [--sharpen X] [--ao X]
  *       draw through the HD-2D renderer (frontend/hd2d) in an OpenGL 3.3
- *       (or ES 3.0) window. F1 cycles the preset, F2 the debug view
- *       (layer classes, depth, blur), F3 the aspect, F11 fullscreen; on a
+ *       (or ES 3.0) window. F2 cycles the debug view
+ *       (layer classes, depth, blur), F3 the aspect, F11 fullscreen; the
+ *       preset is a tile of the F1 quick menu; on a
  *       controller, R3 cycles the preset and L3 the aspect. Preset and
  *       aspect are saved (SDL pref path ct-recomp/hd2d/settings.ini).
  *       The 3D diorama's quality (hd2d.h, docs/HD2D.md): --render-scale
@@ -210,6 +211,7 @@
 #include "qol.h"        /* port: quality of life (save states, fast-forward, ...) */
 #include "timectl.h"    /* port: rewind, slow motion, frame step */
 #include "menu.h"       /* port: the in-game settings menu */
+#include "quickmenu.h"  /* port: the F1 quick menu */
 #include "settings.h"   /* port: the settings registry the menu shows */
 #include "padtest.h"    /* port: the controller test (--pad-test) */
 #include "rumble.h"     /* port: simulated rumble: the events */
@@ -555,6 +557,18 @@ static int volume = 100, mute_unfocused, focused = 1;
 static int mute_run;   /* port: --mute (and --pad-test): silent this run, nothing saved */
 static int renderer_saved = -1;   /* settings.ini renderer=plain|hd2d: the menu's choice, -1 none */
 static int menu_ready;        /* menu_init done: ACTION_MENU opens it */
+/* port: the game waits while either menu is open: F10 (menu.h) or F1 (quickmenu.h). */
+static int ui_is_open(void)
+{
+    return menu_is_open() || quickmenu_is_open();
+}
+static void ui_draw(int w, int h)
+{
+    if (menu_is_open())
+        menu_draw(w, h);
+    else
+        quickmenu_draw(w, h);
+}
 static int menu_hold_mask;    /* after closing: pad 1 kept from the game until let go */
 static int frontend_ready;    /* window, audio and scheduler up: settings apply live */
 static int cursor_shown = 1;
@@ -656,16 +670,16 @@ static void present_plain(const uint8_t *bgrx)
             SDL_Rect dst = {p.x + (side ? slot * hw : 0), p.y + (side ? 0 : slot * hh), p.w, p.h};
             SDL_RenderCopy(ren, k ? tex2 : tex, NULL, &dst);
         }
-        if (menu_is_open()) {
-            menu_draw(w, h);
+        if (ui_is_open()) {
+            ui_draw(w, h);
             take_menu_shot(w, h);
         }
         SDL_RenderPresent(ren);
         return;
     }
     qol_plain_draw(ren, tex, w, h);   /* port: QOL integer scale or fit, CRT look */
-    if (menu_is_open()) {   /* port: the menu over the picture, no overlay or message */
-        menu_draw(w, h);
+    if (ui_is_open()) {   /* port: the menu over the picture, no overlay or message */
+        ui_draw(w, h);
         take_menu_shot(w, h);
     } else {
         touch_draw_sdl(ren);
@@ -752,8 +766,8 @@ static void present_hd2d(void)
     hd2d_render(hd_text_now.bgrx ? hd_text_now.bgrx : sched_frame(),
                 hd_text_now.layers ? hd_text_now.layers : sched_layers(), sched_behind(),
                 sched_behind_layers(), sched_ppu_state_get(), w, h, 0);
-    if (menu_is_open()) {   /* port: the menu, after the picture, before the swap */
-        menu_draw(w, h);
+    if (ui_is_open()) {   /* port: the menu, after the picture, before the swap */
+        ui_draw(w, h);
         take_menu_shot(w, h);
     } else {
         if (touch_gl_ok)
@@ -911,7 +925,28 @@ static void print_chars(FILE *f, const char *key, int player)
     fputc('\n', f);
 }
 
-/* F1-F3, F11: the HD-2D controls. Returns 1 if the key was one of them. */
+/* port: the next HD-2D look (R3, and the quick menu's Look tile; F1 is the
+   quick menu's key now). */
+static void look_cycle(void)
+{
+    if (!hd2d_mode)
+        return;
+    preset_forced = -1;   /* port: the user's choice now */
+    hd2d_set_preset((hd2d_preset() + 1) % HD2D_PRESETS);
+    fprintf(stderr, "ct_sdl: hd2d preset %s\n", hd2d_preset_name(hd2d_preset()));
+    static const char *const msg[HD2D_PRESETS] = {"Look: original", "Look: HD-2D subtle",
+                                                  "Look: HD-2D", "Look: HD-2D Steam Deck",
+                                                  "Look: HD-2D 3D diorama",
+                                                  "Look: 3D diorama, Steam Deck"};
+    osd_show(msg[hd2d_preset()]);
+    settings_save();
+}
+static int look_enabled(void)
+{
+    return hd2d_mode;
+}
+
+/* F2-F4, F11: the HD-2D controls. Returns 1 if the key was one of them. */
 static int hd2d_key(SDL_Scancode sc)
 {
     if (sc == SDL_SCANCODE_F4) {   /* port: co-op on / off */
@@ -942,17 +977,7 @@ static int hd2d_key(SDL_Scancode sc)
         hd2d_osd(msg);
         return 1;
     }
-    if (sc == SDL_SCANCODE_F1) {
-        preset_forced = -1;   /* port: the user's choice now */
-        hd2d_set_preset((hd2d_preset() + 1) % HD2D_PRESETS);
-        fprintf(stderr, "ct_sdl: hd2d preset %s\n", hd2d_preset_name(hd2d_preset()));
-        static const char *const msg[HD2D_PRESETS] = {"Look: original", "Look: HD-2D subtle",
-                                                      "Look: HD-2D", "Look: HD-2D Steam Deck",
-                                                      "Look: HD-2D 3D diorama",
-                                                      "Look: 3D diorama, Steam Deck"};
-        osd_show(msg[hd2d_preset()]);
-        settings_save();
-    } else if (sc == SDL_SCANCODE_F2) {
+    if (sc == SDL_SCANCODE_F2) {
         hd2d_set_debug((hd2d_debug() + 1) % HD2D_DEBUGS);
         fprintf(stderr, "ct_sdl: hd2d debug view %d\n", hd2d_debug());
         static const char *const msg[HD2D_DEBUGS] = {"Debug: off", "Debug: layers", "Debug: depth",
@@ -1112,8 +1137,27 @@ static void menu_action(ct_action a, int down, void *user)
         osd("Menu: [@quicksave] save  [@quickload] load  [@ffwd] fast-forward");
     else if (menu_is_open())
         menu_close();
-    else
+    else {
+        quickmenu_close();   /* from the quick menu's own "All settings..." or R5 */
         menu_open();
+    }
+}
+
+/* port: the quick menu action (F1, misc1, the touch handle, three fingers). */
+static void quickmenu_action(ct_action a, int down, void *user)
+{
+    (void)a;
+    (void)user;
+    if (!down)
+        return;
+    if (!menu_ready)
+        osd("Quick menu: not available yet");
+    else if (menu_is_open())
+        menu_close();
+    else if (quickmenu_is_open())
+        quickmenu_close();
+    else
+        quickmenu_open();
 }
 
 /* ---- port: the settings the menu shows (settings.h) ---- */
@@ -1647,7 +1691,7 @@ static void register_settings(void)
         .options = preset_labels, .values = preset_values, .count = HD2D_PRESETS, .get = get_preset,
         .set = set_preset,
         .help = "Original pixels, or the HD-2D renderer: light, depth of field, bloom; the 3D "
-                "diorama rebuilds maps in 3D. Used by the HD-2D renderer. (F1, R3)"});
+                "diorama rebuilds maps in 3D. Used by the HD-2D renderer. (R3; the quick menu's Look tile, F1)"});
     settings_register(&(setting){.key = "aspect", .label = "Aspect", .category = "Look",
                                  .type = SETTING_ENUM, .options = aspect_labels,
                                  .count = HD2D_ASPECTS, .get = get_aspect, .set = set_aspect,
@@ -1958,11 +2002,16 @@ static void poll_input(long f)
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         padtest_event(&ev);   /* port: the controller test only watches */
-        if (!menu_is_open() && touch_event(&ev, f))
+        if (!ui_is_open() && touch_event(&ev, f)) {
+            if (touch_menu_requested()) {   /* port: the handle, or three fingers */
+                actions_emit(ACTION_QUICKMENU, 1);
+                actions_emit(ACTION_QUICKMENU, 0);
+            }
             continue;   /* port: a touch, used by the overlay */
+        }
         /* port: QOL keys, the pause and the resume prompt; while the menu
            is open, only what it watches of the window and the pads */
-        if ((!menu_is_open() || ev.type == SDL_WINDOWEVENT ||
+        if ((!ui_is_open() || ev.type == SDL_WINDOWEVENT ||
              ev.type == SDL_CONTROLLERDEVICEREMOVED) && qol_event(&ev, f))
             continue;
         if (log_input && (ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) && !ev.key.repeat)
@@ -2010,6 +2059,21 @@ static void poll_input(long f)
             running = 0;
             continue;
         }
+        if (quickmenu_is_open()) {
+            /* port: the quick menu has the keys, buttons, stick, mouse and
+               touch; its key (F1, or the one bound) closes it. */
+            int up = ev.type == SDL_KEYUP || ev.type == SDL_CONTROLLERBUTTONUP;
+            if (quickmenu_event(&ev) && !up)
+                continue;
+            if (ev.type == SDL_KEYDOWN) {
+                if (!ev.key.repeat &&
+                    bindings_for_key(bindings_current(), ev.key.keysym.scancode) == ACTION_QUICKMENU)
+                    quickmenu_close();
+                continue;
+            }
+            if (ev.type == SDL_CONTROLLERBUTTONDOWN || ev.type == SDL_CONTROLLERAXISMOTION)
+                continue;
+        }
         if (menu_is_open()) {
             /* port: the menu has the keys, buttons, stick and mouse. A key
                or button let go still reaches the rest below (so nothing
@@ -2053,8 +2117,12 @@ static void poll_input(long f)
                 }
             } else if (stick_chord & bit) {
                 stick_chord &= ~bit;
-                if (!stick_chorded && hd2d_mode)
-                    hd2d_key(bit == 1 ? SDL_SCANCODE_F1 : SDL_SCANCODE_F3);
+                if (!stick_chorded && hd2d_mode) {
+                    if (bit == 1)
+                        look_cycle();
+                    else
+                        hd2d_key(SDL_SCANCODE_F3);
+                }
                 if (!stick_chord)
                     stick_chorded = 0;
             }
@@ -2103,7 +2171,7 @@ static void poll_input(long f)
         SDL_ShowCursor(SDL_DISABLE);   /* port: hidden while the mouse is still */
         cursor_shown = 0;
     }
-    if (menu_is_open())
+    if (ui_is_open())
         return;   /* port: the game waits (menu_run); nothing else to read */
     if (gyro_on && hd2d_mode)   /* port: off by default */
         gyro_frame();
@@ -2346,6 +2414,9 @@ static void write_hash(long f)
 /* port: --menu-test FILE, a script of menu use for tests. One command a
    line ('#' starts a comment):
      open F         the menu action (as F10 or R5) at the end of frame F
+     quick F        the quick menu action (as F1 or misc1) at the end of frame F
+     touch X Y      a finger tap at X, Y (thousandths of the window), let
+                    go the next tick (the quick menu takes touch directly)
      button NAME    a controller button (SDL's name: a, b, dpdown,
                     leftshoulder, start, ...) pressed this tick, let go
                     the next
@@ -2360,7 +2431,9 @@ static void write_hash(long f)
    After "open", one command per tick of the open menu; once the script
    runs out (or reaches the next "open") with the menu still open, it
    closes after 30 ticks. */
-enum { MT_OPEN, MT_BUTTON, MT_KEY, MT_AXIS, MT_WAIT, MT_SHOT, MT_GLYPHS, MT_CLICK };
+enum { MT_OPEN, MT_BUTTON, MT_KEY, MT_AXIS, MT_WAIT, MT_SHOT, MT_GLYPHS, MT_CLICK, MT_QOPEN,
+       MT_TOUCH };
+#define MT_IS_OPEN(k) ((k) == MT_OPEN || (k) == MT_QOPEN)
 
 /* A glyph set by name, spaces and case aside ("steamdeck", "xbox"). */
 static int glyphs_parse(const char *s)
@@ -2376,7 +2449,8 @@ static int glyphs_parse(const char *s)
     return -1;
 }
 static int mt_pos, mt_wait, mt_idle;
-static int mt_up_button = -1, mt_up_mouse;
+static int mt_up_button = -1, mt_up_mouse, mt_up_touch;
+static float mt_touch_x, mt_touch_y;
 static int mt_mouse_x, mt_mouse_y;
 
 /* The left mouse button at (x, y) in window pixels (down), or let go where it was. */
@@ -2426,6 +2500,10 @@ static int menu_test_load(const char *path)
         memset(e, 0, sizeof *e);
         if (!strcmp(cmd, "open") && got >= 2)
             e->kind = MT_OPEN, e->a = atoi(arg);
+        else if (!strcmp(cmd, "quick") && got >= 2)
+            e->kind = MT_QOPEN, e->a = atoi(arg);
+        else if (!strcmp(cmd, "touch") && got == 3)
+            e->kind = MT_TOUCH, e->a = atoi(arg), snprintf(e->path, sizeof e->path, "%d", v);
         else if (!strcmp(cmd, "button") && got >= 2 &&
                  (e->a = SDL_GameControllerGetButtonFromString(arg)) != SDL_CONTROLLER_BUTTON_INVALID)
             e->kind = MT_BUTTON;
@@ -2479,12 +2557,14 @@ static void push_key(SDL_Scancode sc, int down)
 /* At frame f's edge: the script's "open". */
 static void menu_test_frame(long f)
 {
-    if (mt_pos < mtest.n && mtest.ev[mt_pos].kind == MT_OPEN && f >= mtest.ev[mt_pos].a) {
-        fprintf(stderr, "ct_sdl: menu-test: frame %ld: menu action\n", f);
+    if (mt_pos < mtest.n && MT_IS_OPEN(mtest.ev[mt_pos].kind) && f >= mtest.ev[mt_pos].a) {
+        ct_action which = mtest.ev[mt_pos].kind == MT_QOPEN ? ACTION_QUICKMENU : ACTION_MENU;
+        fprintf(stderr, "ct_sdl: menu-test: frame %ld: %s action\n", f,
+                which == ACTION_QUICKMENU ? "quick menu" : "menu");
         mt_pos++;
         mt_idle = 0;
-        actions_emit(ACTION_MENU, 1);
-        actions_emit(ACTION_MENU, 0);
+        actions_emit(which, 1);
+        actions_emit(which, 0);
     }
 }
 
@@ -2497,16 +2577,26 @@ static void menu_test_tick(void)
         push_mouse(0, 0, 0), mt_up_mouse = 0;
     if (mt_up_key)
         push_key(mt_up_key, 0), mt_up_key = 0;
+    if (mt_up_touch) {
+        SDL_Event e;
+        memset(&e, 0, sizeof e);
+        e.type = SDL_FINGERUP;
+        e.tfinger.touchId = 1, e.tfinger.fingerId = 777;
+        e.tfinger.x = mt_touch_x, e.tfinger.y = mt_touch_y;
+        SDL_PushEvent(&e);
+        mt_up_touch = 0;
+    }
     if (!mtest.n)
         return;
     if (mt_wait > 0) {
         mt_wait--;
         return;
     }
-    if (mt_pos >= mtest.n || mtest.ev[mt_pos].kind == MT_OPEN) {
+    if (mt_pos >= mtest.n || MT_IS_OPEN(mtest.ev[mt_pos].kind)) {
         if (++mt_idle > 30) {
             fprintf(stderr, "ct_sdl: menu-test: the script left the menu open: closing it\n");
             menu_close();
+            quickmenu_close();
         }
         return;
     }
@@ -2528,6 +2618,17 @@ static void menu_test_tick(void)
     case MT_SHOT: menu_shot_path = e->path; break;
     case MT_GLYPHS: glyphs_use(e->a); break;
     case MT_CLICK: push_mouse(e->a, atoi(e->path), 1), mt_up_mouse = 1; break;
+    case MT_TOUCH: {
+        SDL_Event ev;
+        memset(&ev, 0, sizeof ev);
+        ev.type = SDL_FINGERDOWN;
+        ev.tfinger.touchId = 1, ev.tfinger.fingerId = 777;
+        ev.tfinger.x = mt_touch_x = e->a / 1000.0f;
+        ev.tfinger.y = mt_touch_y = atoi(e->path) / 1000.0f;
+        SDL_PushEvent(&ev);
+        mt_up_touch = 1;
+        break;
+    }
     default: break;
     }
 }
@@ -2544,24 +2645,25 @@ static void menu_run(long f)
     long frames_at = sched_frame_count();
     long ticks = 0;
     int loaded = 0;
-    fprintf(stderr, "ct_sdl: frame %ld: menu open\n", f);
+    fprintf(stderr, "ct_sdl: frame %ld: %s open\n", f, quickmenu_is_open() ? "quick menu" : "menu");
     if (audio)
         SDL_PauseAudioDevice(audio, 1);
     bindings_keys_release();   /* fast-forward and the like: not held through it */
     qol_ffwd_set(0);
     uint64_t last = SDL_GetPerformanceCounter();
-    while (running && menu_is_open()) {
+    while (running && ui_is_open()) {
         menu_test_tick();
         poll_input(sched_frame_count());
         uint64_t now = SDL_GetPerformanceCounter();
         unsigned ms = fast ? 16u : (unsigned)((now - last) * 1000 / perf_freq);
         last = now;
         menu_tick(ms);
+        quickmenu_tick(ms);
         rumble_out_idle(SDL_GetTicks());   /* port: no game rumble in the menu (its test only) */
         long before = sched_frame_count();
         qol_after_frame();   /* QOL: a save, load or screenshot asked for in the menu */
         loaded |= sched_frame_count() != before;
-        if (!running || !menu_is_open())
+        if (!running || !ui_is_open())
             break;
         present_now();
         ticks++;
@@ -2572,6 +2674,7 @@ static void menu_run(long f)
         }
     }
     menu_close();
+    quickmenu_close();
     menu_ticks_total += ticks;
     if (!loaded)
         menu_frames_advanced += sched_frame_count() - frames_at;
@@ -2609,9 +2712,10 @@ static void rewind_run_tick(void)
 
 static void menu_report(void)
 {
-    if (menu_opened_count())
-        fprintf(stderr, "ct_sdl: menu: opened %ld times, %ld ticks, %ld frames ran while open\n",
-                menu_opened_count(), menu_ticks_total, menu_frames_advanced);
+    if (menu_opened_count() || quickmenu_opened_count())
+        fprintf(stderr, "ct_sdl: menu: opened %ld times (%ld quick), %ld ticks, %ld frames ran while open\n",
+                menu_opened_count() + quickmenu_opened_count(), quickmenu_opened_count(),
+                menu_ticks_total, menu_frames_advanced);
 }
 
 static void on_frame(long f)
@@ -2636,7 +2740,7 @@ static void on_frame(long f)
             pad, coop_players > 1 ? pad2 : NULL, coop_players > 2 ? pad3 : NULL, NULL};
         rumble_out_set_pads(pads);
         rumble_out_frame(SDL_GetTicks(), timectl_pace_pct(qol_speed()) != 100 || qol_paused() ||
-                                             menu_is_open() || timectl_rewinding());
+                                             ui_is_open() || timectl_rewinding());
         if (f == rumble_test_at) {
             fprintf(stderr, "ct_sdl: frame %ld: rumble test pulse (pad 1: %s)\n", f,
                     pad ? SDL_GameControllerName(pad) : "none");
@@ -2867,6 +2971,9 @@ static int open_window(const char *title, int scale, int fullscreen)
     {   /* port: the menu draws over this window (set up when first opened) */
         menu_host mh = {win, hd2d_mode ? NULL : ren, gl_es, APP_NAME, CT_VERSION};
         menu_init(&mh);
+        static const quickmenu_hooks qh_hooks = {look_cycle, look_enabled, qol_save_slot,
+                                                 qol_load_slot};
+        quickmenu_set_hooks(&qh_hooks);
         menu_ready = 1;
         cursor_shown = !game_mode;
         mouse_moved_at = SDL_GetTicks();
@@ -3448,6 +3555,7 @@ int main(int argc, char **argv)
     actions_set_message(osd);
     actions_set_trace(log_action);
     actions_set_handler(ACTION_MENU, menu_action, NULL);   /* port: the menu (menu.h) */
+    actions_set_handler(ACTION_QUICKMENU, quickmenu_action, NULL);   /* port: quickmenu.h */
     menu_game_id = game_id;
     atexit(menu_report);
     use_glyphs_of(pad);
@@ -3526,7 +3634,7 @@ int main(int argc, char **argv)
        loop only keeps the scheduler running. port: QOL pauses it (qol_idle)
        and saves and loads states between frames. */
     while (running && (frames < 0 || sched_frame_count() < frames)) {
-        if (menu_is_open()) {   /* port: the menu (menu.h): the game waits */
+        if (ui_is_open()) {   /* port: the menus (menu.h, quickmenu.h): the game waits */
             menu_run(sched_frame_count());
             continue;
         }

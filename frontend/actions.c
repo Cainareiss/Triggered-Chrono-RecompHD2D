@@ -17,10 +17,10 @@ static void (*message)(const char *text);
 static void (*trace)(ct_action a, int down);
 
 static const char *const names[ACTION_COUNT] = {"none", "quicksave", "quickload", "ffwd", "menu",
-                                                "screenshot", "framestep", "rewind"};
+                                                "screenshot", "framestep", "rewind", "quickmenu"};
 static const char *const titles[ACTION_COUNT] = {"Nothing", "Quick save", "Quick load",
                                                  "Fast-forward", "Menu", "Screenshot",
-                                                 "Frame step", "Rewind"};
+                                                 "Frame step", "Rewind", "Quick menu"};
 
 static int valid(ct_action a)
 {

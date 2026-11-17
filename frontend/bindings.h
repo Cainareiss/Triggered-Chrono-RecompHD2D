@@ -13,10 +13,12 @@
  * Defaults (docs/HANDHELD.md):
  *   L4 (paddle2) quick save     R4 (paddle1) quick load
  *   L5 (paddle4) fast-forward   R5 (paddle3) menu
+ *   misc1 (the Deck's "..." button) quick menu
  *   F6 quick save, F9 quick load, Tab fast-forward (hold), F10 menu,
- *   F8 screenshot.
- * F1-F4 and F11 are the renderer's and co-op's, F5 the asset packs'
- * reload, F12 Steam's screenshot: none of them is a default here.
+ *   F8 screenshot, F1 quick menu.
+ * F2-F4 and F11 are the renderer's and co-op's, F5 the asset packs'
+ * reload, F12 Steam's screenshot: none of them is a default here, and
+ * only the quick menu action may have F1.
  *
  * settings.ini: bind_paddle1=quickload ... (bind_<SDL button name>=
  * <action name>), key_quicksave=F6 ... (key_<action>=<SDL key name>,
