@@ -286,7 +286,8 @@ if(SDL2_FOUND)
         DEPENDS ${CT_IMGUI}/fonts/Roboto-Medium.ttf ${CMAKE_SOURCE_DIR}/tools/embed_binary.cmake
         COMMENT "menu font"
         VERBATIM)
-    add_library(ct_menu STATIC frontend/menu.cpp ${CT_MENU_FONT_GEN})
+    add_library(ct_menu STATIC frontend/menu.cpp frontend/ui_backend.cpp frontend/quickmenu.cpp
+        ${CT_MENU_FONT_GEN})
     target_include_directories(ct_menu PUBLIC frontend PRIVATE ${CMAKE_BINARY_DIR}/menu_gen)
     target_compile_definitions(ct_menu PRIVATE CT_MENU_FONT)
     # The version the menu's About tab shows (the release in
@@ -501,6 +502,15 @@ if(SDL2_FOUND)
     target_link_libraries(test_settings ct_input)
     target_compile_options(test_settings PRIVATE ${CT_WARN})
     add_test(NAME settings COMMAND test_settings)
+    # port: the F1 quick menu (frontend/quickmenu.h): focus, pad, key, mouse and
+    # touch, the tiles' effects and the sheet drawn at 1280x800 and 800x1280, on
+    # SDL's dummy video driver with a software renderer; no ROM.
+    add_executable(test_quickmenu test/test_quickmenu.c)
+    target_link_libraries(test_quickmenu ct_menu SDL2::SDL2)
+    target_compile_options(test_quickmenu PRIVATE ${CT_WARN})
+    add_test(NAME quickmenu COMMAND test_quickmenu ${CMAKE_BINARY_DIR})
+    set_tests_properties(quickmenu PROPERTIES SKIP_RETURN_CODE 77
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy")
     # The 3D diorama's geometry from a scene (frontend/hd2d/scene3d.h)
     add_executable(test_scene3d test/test_scene3d.c)
     target_link_libraries(test_scene3d ct_hd2d)

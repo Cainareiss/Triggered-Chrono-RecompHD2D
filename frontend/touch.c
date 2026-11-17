@@ -194,6 +194,44 @@ static float shape_dist(const shape *p, float x, float y)
     return sqrtf(ox * ox + oy * oy) + fminf(fmaxf(qx, qy), 0) - p->cr;
 }
 
+/* ---- the quick menu handle ---- */
+
+/* A small pill at the top edge's middle that opens the quick menu with a
+   tap; it fades a few seconds after the last touch (any touch brings it
+   back) and is left out where it would touch a control. Hit area bigger
+   than the pill. */
+#define HANDLE_FULL_FRAMES (3 * FPS)
+#define HANDLE_FADE_FRAMES (FPS)
+
+static int handle_rect(const layout *L, int hit, float *x0, float *y0, float *x1, float *y1)
+{
+    float hw = (hit ? 13.0f : 8.0f) * L->k, top = hit ? 0.0f : 1.6f * L->k;
+    float hh = hit ? 9.0f * L->k : 3.2f * L->k;
+    *x0 = L->w * 0.5f - hw;
+    *x1 = L->w * 0.5f + hw;
+    *y0 = top;
+    *y1 = top + hh;
+    for (int c = 0; c < C_COUNT; c++) {   /* never over the on-screen controller */
+        const shape *p = &L->c[c];
+        float m = 2.0f * L->k;
+        if (p->x + p->hw + m > *x0 && p->x - p->hw - m < *x1 && p->y + p->hh + m > *y0 &&
+            p->y - p->hh - m < *y1)
+            return 0;
+    }
+    return 1;
+}
+
+/* 1 right after a touch, fading to 0 when idle. */
+static float handle_alpha(long frame, long last_touch)
+{
+    long age = frame - last_touch;
+    if (age <= HANDLE_FULL_FRAMES)
+        return 1.0f;
+    if (age >= HANDLE_FULL_FRAMES + HANDLE_FADE_FRAMES)
+        return 0.0f;
+    return 1.0f - (float)(age - HANDLE_FULL_FRAMES) / HANDLE_FADE_FRAMES;
+}
+
 /* ---- state ---- */
 
 typedef struct {
@@ -201,7 +239,7 @@ typedef struct {
     SDL_FingerID id;
     float x, y, x0, y0;
     long t0;
-    int on_dpad, moved;
+    int on_dpad, moved, on_handle;
     uint16_t bits;
     int edit_group, edit_resize;
     float ga0, gb0, gs0, d0;
@@ -212,6 +250,9 @@ static struct {
     SDL_Window *win;
     layout L;
     int visible, edit, mouse_down;
+    int qm_req;               /* the quick menu was asked for (handle, three fingers) */
+    int tap3;                 /* three fingers down on empty spots, not moved */
+    long tap3_t;
     long last_touch, frame;
     finger f[MAX_FINGERS];
 } T;
@@ -402,8 +443,18 @@ static void finger_down(SDL_FingerID id, float x, float y)
     f->y = f->y0 = y;
     f->t0 = T.frame;
     f->edit_group = -1;
+    float ha = handle_alpha(T.frame, T.last_touch);
+    int was_visible = T.visible;
     T.visible = 1;
     T.last_touch = T.frame;
+    if (!T.edit && was_visible && ha > 0.3f) {   /* the quick menu handle */
+        float hx0, hy0, hx1, hy1;
+        if (handle_rect(&T.L, 1, &hx0, &hy0, &hx1, &hy1) && x >= hx0 && x <= hx1 && y >= hy0 &&
+            y <= hy1) {
+            f->on_handle = 1;
+            return;
+        }
+    }
     if (T.edit) {
         int g = edit_hit(x, y, &f->edit_resize);
         f->edit_group = g;
@@ -418,6 +469,18 @@ static void finger_down(SDL_FingerID id, float x, float y)
     }
     f->on_dpad = shape_dist(&T.L.c[C_DPAD], x, y) < 0.3f * T.L.c[C_DPAD].hw;
     finger_update(f);
+    /* three fingers down together, none on a control: a tap of them opens the quick menu */
+    int n = 0, empty = 1;
+    long first = T.frame;
+    for (int k = 0; k < MAX_FINGERS; k++)
+        if (T.f[k].used) {
+            n++;
+            empty &= !T.f[k].bits && !T.f[k].on_dpad && !T.f[k].on_handle;
+            if (T.f[k].t0 < first)
+                first = T.f[k].t0;
+        }
+    T.tap3 = n == 3 && empty && T.frame - first <= 24;
+    T.tap3_t = T.frame;
 }
 
 static void finger_move(SDL_FingerID id, float x, float y)
@@ -428,8 +491,10 @@ static void finger_move(SDL_FingerID id, float x, float y)
     f->x = x;
     f->y = y;
     T.last_touch = T.frame;
-    if (hypotf(x - f->x0, y - f->y0) > 4.0f * T.L.k)
+    if (hypotf(x - f->x0, y - f->y0) > 4.0f * T.L.k) {
         f->moved = 1;
+        T.tap3 = 0;
+    }
     if (T.edit && f->edit_group >= 0) {
         int g = f->edit_group, w = T.L.wide;
         if (f->edit_resize) {
@@ -448,9 +513,28 @@ static void finger_move(SDL_FingerID id, float x, float y)
 static void finger_up(SDL_FingerID id)
 {
     finger *f = finger_find(id);
+    if (f && f->on_handle && !f->moved && !T.edit) {
+        float hx0, hy0, hx1, hy1;
+        if (handle_rect(&T.L, 1, &hx0, &hy0, &hx1, &hy1) && f->x >= hx0 && f->x <= hx1 &&
+            f->y >= hy0 && f->y <= hy1)
+            T.qm_req = 1;
+    }
+    if (f && T.tap3 && T.frame - T.tap3_t <= 30 && !T.edit) {
+        T.qm_req = 1;
+        T.tap3 = 0;
+        for (int k = 0; k < MAX_FINGERS; k++)   /* the other fingers' lifts go to the menu */
+            T.f[k].used = 0;
+    }
     if (f)
         f->used = 0;
     T.last_touch = T.frame;
+}
+
+int touch_menu_requested(void)
+{
+    int r = T.qm_req;
+    T.qm_req = 0;
+    return r;
 }
 
 /* Long press on an empty spot: toggle edit mode. */
@@ -665,6 +749,12 @@ int touch_target(const char *name, float *x, float *y)
 void touch_test_inject(long frame)
 {
     static float last_x[64], last_y[64];
+    static long done_frame = -1;
+    if (n_tests && T.L.w > 0) {   /* once per frame: a menu's ticks poll again at the same frame */
+        if (frame == done_frame)
+            return;
+        done_frame = frame;
+    }
     for (int k = 0; k < n_tests; k++) {
         const test_ev *e = &tests[k];
         if (e->frame != frame || T.L.w <= 0)
@@ -854,6 +944,15 @@ static void build(const layout *L, uint16_t held, int edit)
             px = fminf(px, p->hw * 1.6f / (6.0f * (float)strlen(ctl_label[c])));
         px = fmaxf(px, 1.0f);
         text(ctl_label[c], p->x, p->y, px, on ? LABEL_ON : LABEL);
+    }
+    if (!edit) {   /* the quick menu handle, fading when idle */
+        float a = handle_alpha(T.frame, T.last_touch), hx0, hy0, hx1, hy1;
+        if (a > 0.01f && handle_rect(L, 0, &hx0, &hy0, &hx1, &hy1)) {
+            rgba f = {16, 18, 26, (Uint8)(110 * a)}, r = {235, 238, 255, (Uint8)(190 * a)};
+            shape p = {(hx0 + hx1) / 2, (hy0 + hy1) / 2, (hx1 - hx0) / 2, (hy1 - hy0) / 2,
+                       (hy1 - hy0) / 2};
+            shape_draw(&p, fmaxf(1.0f, 0.3f * k), f, r);
+        }
     }
     if (edit) {
         static const rgba BOX = {255, 210, 80, 60}, HANDLE = {255, 210, 80, 200};

@@ -59,6 +59,11 @@ int touch_event(const SDL_Event *ev, long frame);
 /* Pad bits held by the fingers on the controls; once per frame, after
    the events (frame: the clock for the long press and the hide timeout). */
 uint16_t touch_buttons(long frame);
+/* 1 (once) after a tap on the quick menu handle (a small pill at the top
+   edge's middle, fading when idle, never over a control) or a tap of
+   three fingers on empty spots: the caller opens the quick menu
+   (quickmenu.h). Call it after touch_event. */
+int touch_menu_requested(void);
 int touch_visible(void);
 
 /* --touch-test FILE: touches injected at given frames, one per line:

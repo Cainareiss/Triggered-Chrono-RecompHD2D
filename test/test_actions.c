@@ -231,6 +231,35 @@ static void test_deck(void)
           "one action per key");
     CHECK(bindings_parse_line(&b, "key_screenshot=none") &&
               b.key[ACTION_SCREENSHOT] == SDL_SCANCODE_UNKNOWN, "key_screenshot=none");
+    /* the quick menu action: F1 and misc1 by default, F1 only for it */
+    {
+        bindings q;
+        bindings_defaults(&q);
+        CHECK(action_parse("quickmenu") == ACTION_QUICKMENU &&
+                  !strcmp(action_name(ACTION_QUICKMENU), "quickmenu"), "action quickmenu");
+        CHECK(q.key[ACTION_QUICKMENU] == SDL_SCANCODE_F1, "key_quickmenu default F1");
+        CHECK(bindings_for_key(&q, SDL_SCANCODE_F1) == ACTION_QUICKMENU, "F1 maps to the quick menu");
+        CHECK(bindings_for_button(&q, SDL_CONTROLLER_BUTTON_MISC1) == ACTION_QUICKMENU,
+              "misc1 maps to the quick menu");
+        CHECK(bindings_button_of(&q, ACTION_QUICKMENU) == SDL_CONTROLLER_BUTTON_MISC1,
+              "the quick menu's button is misc1");
+        CHECK(bindings_parse_line(&q, "key_menu=F1") && q.key[ACTION_MENU] == SDL_SCANCODE_F10,
+              "F1 is refused for other actions");
+        CHECK(bindings_parse_line(&q, "key_quickmenu=F2") && q.key[ACTION_QUICKMENU] == SDL_SCANCODE_F1,
+              "F2 stays the renderer's");
+        CHECK(bindings_parse_line(&q, "key_quickmenu=F12") &&
+                  q.key[ACTION_QUICKMENU] == SDL_SCANCODE_F12, "key_quickmenu=F12");
+        CHECK(bindings_parse_line(&q, "key_quickmenu=F1") && q.key[ACTION_QUICKMENU] == SDL_SCANCODE_F1,
+              "key_quickmenu=F1 allowed");
+        CHECK(bindings_parse_line(&q, "bind_misc1=quickmenu") &&
+                  q.button[SDL_CONTROLLER_BUTTON_MISC1] == ACTION_QUICKMENU, "bind_misc1=quickmenu");
+        CHECK(bindings_parse_line(&q, "bind_paddle1=quickmenu") &&
+                  bindings_for_button(&q, SDL_CONTROLLER_BUTTON_PADDLE1) == ACTION_QUICKMENU,
+              "bind_paddle1=quickmenu");
+        actions_emit(ACTION_QUICKMENU, 1);
+        CHECK(presses[ACTION_QUICKMENU] == 1, "the quick menu action reaches its handler");
+        reset_counts();
+    }
     CHECK(!bindings_key_event(&b, SDL_SCANCODE_Z, 1, 0), "Z is game input");
     bindings_key_event(&b, SDL_SCANCODE_Z, 0, 0);
     FILE *f = tmpfile();

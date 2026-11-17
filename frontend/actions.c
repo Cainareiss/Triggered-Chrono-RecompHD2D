@@ -17,9 +17,9 @@ static void (*message)(const char *text);
 static void (*trace)(ct_action a, int down);
 
 static const char *const names[ACTION_COUNT] = {"none", "quicksave", "quickload", "ffwd", "menu",
-                                                "screenshot"};
+                                                "screenshot", "quickmenu"};
 static const char *const titles[ACTION_COUNT] = {"Nothing", "Quick save", "Quick load",
-                                                 "Fast-forward", "Menu", "Screenshot"};
+                                                 "Fast-forward", "Menu", "Screenshot", "Quick menu"};
 
 static int valid(ct_action a)
 {

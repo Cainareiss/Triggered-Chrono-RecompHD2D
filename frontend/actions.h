@@ -22,6 +22,7 @@ typedef enum {
     ACTION_FFWD,         /* hold */
     ACTION_MENU,
     ACTION_SCREENSHOT,
+    ACTION_QUICKMENU,    /* the F1 quick menu (quickmenu.h) */
     ACTION_COUNT
 } ct_action;
 
@@ -44,7 +45,7 @@ int actions_held(ct_action a);
 void actions_release_all(void);
 
 int actions_is_hold(ct_action a);
-/* settings.ini names: none, quicksave, quickload, ffwd, menu, screenshot. */
+/* settings.ini names: none, quicksave, quickload, ffwd, menu, screenshot, quickmenu. */
 const char *action_name(ct_action a);
 /* For people: "Quick save", "Fast-forward", ... */
 const char *action_title(ct_action a);
