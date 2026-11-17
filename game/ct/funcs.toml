@@ -15688,18 +15688,6 @@ source = "profile"
 site = 0xC308F7
 states = ["m0x0"]
 
-# The field frame loop ($C00097, BRA back to itself, JSRs the per-frame chain,
-# never returns) is entered by the interpreter after a stack reload or a menu
-# hand-back, where nothing registered the middle of ReentryVectors: its 14
-# instructions ran interpreted every frame (a profile of the PCs charged
-# "outside any call" in every replay). Entered m1x0 (SEP #$20 / REP #$10 above).
-[[func]]
-name = "Field_MainLoop"
-addr = 0xC00097
-states = ["m1x0"]
-e = 0
-module = "bankc0"
-source = "profile"
 
 # ---- discovered by tools/discover.py (entry state from call sites) ----
 
@@ -16155,3 +16143,9 @@ addr = 0xC70000
 state = "m1x0"
 returns = "RTL"
 exit_state = "m1x0"
+
+# Not registered on purpose: $C00097 (the field frame loop, m1x0). The
+# interpreter re-enters it after a stack reload, so its 14 instructions run
+# interpreted every frame (about 0.013% of a replay), but as an entry the
+# endless loop fails diff_all's random-state trials (a callee entered m1x1
+# where the loop expects m1x0: gen and interpreter fault in different places).
