@@ -17,9 +17,10 @@ static void (*message)(const char *text);
 static void (*trace)(ct_action a, int down);
 
 static const char *const names[ACTION_COUNT] = {"none", "quicksave", "quickload", "ffwd", "menu",
-                                                "screenshot"};
+                                                "screenshot", "framestep", "rewind"};
 static const char *const titles[ACTION_COUNT] = {"Nothing", "Quick save", "Quick load",
-                                                 "Fast-forward", "Menu", "Screenshot"};
+                                                 "Fast-forward", "Menu", "Screenshot",
+                                                 "Frame step", "Rewind"};
 
 static int valid(ct_action a)
 {
@@ -99,7 +100,7 @@ void actions_release_all(void)
 
 int actions_is_hold(ct_action a)
 {
-    return a == ACTION_FFWD;
+    return a == ACTION_FFWD || a == ACTION_REWIND;
 }
 
 const char *action_name(ct_action a)

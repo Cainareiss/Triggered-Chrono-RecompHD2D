@@ -229,12 +229,14 @@ only the screen's shaking and flashing rumble.
 | Tab (hold) | L5 | Fast-forward while held |
 | F10 | R5 | The menu (below); L3 + R3 together on any controller |
 | F8 | | Screenshot |
+| Backspace (hold) | | Rewind ([below](#rewind-slow-motion-and-frame-step)) |
+| . (period) | | Frame step while paused |
 
 What they do is described in [Quality of life](#quality-of-life); F10 / R5 open [the
 menu](#the-menu). A Steam Controller's grips are R4 and L4 (paddle1 and paddle2), an Xbox
 Elite pad's paddles P1-P4 likewise. `settings.ini` changes them: `bind_paddle1=` ...
 `bind_paddle4=`, `bind_misc1=`, `bind_touchpad=` take an action (`none`, `quicksave`,
-`quickload`, `ffwd`, `menu`, `screenshot`), and `key_quicksave=F6` and the like take a
+`quickload`, `ffwd`, `menu`, `screenshot`, `framestep`, `rewind`), and `key_quicksave=F6` and the like take a
 key name (`none` for no key). Details, and how this works with Steam Input:
 [HANDHELD.md](HANDHELD.md#back-buttons-and-grips).
 
@@ -510,6 +512,32 @@ The game pauses, with **Paused** on screen, when:
 
 Sound stops while paused, and the frame timer starts over after.
 
+### Rewind, slow motion and frame step
+
+| Key | What it does |
+| --- | --- |
+| Backspace (hold) | Rewind: the game runs backwards, about twice as fast as it went; let go to play on from there |
+| . (period) | Frame step: while paused, run exactly one frame (not paused: it pauses first) |
+
+The two have no controller button by default (the back buttons are taken); bind one with
+`bind_touchpad=rewind`, `bind_misc1=framestep` and the like, or change the keys with
+`key_rewind=` and `key_framestep=`. The quick menu's Time tiles do the same.
+
+- **Rewind** keeps a snapshot of the whole machine every 4 frames (about 15 a second),
+  as many as `rewind_seconds` allows (default 5, `0` turns it off), compressed against the
+  one before and never more than about 32 MB. Holding the key steps back through them,
+  sound off. The cartridge's own save is left as it is, as for a quick load: rewinding
+  never undoes an in-game save. It stops at the oldest snapshot while you hold on, and it
+  does not work while `--record` writes a script (a rewound frame would be recorded twice;
+  it says so on screen). Snapshots cost about 0.3 ms of CPU every 4 frames on a desktop;
+  turn `rewind_seconds` to 0 on a very slow device.
+- **Slow motion**: `slow_speed` is 25, 50, 100, 200, 300 or 400 percent of normal
+  (menu: Controls, Game speed; the quick menu steps through them). The sound is off
+  whenever it is not 100, as in fast-forward. Fast-forward multiplies it: 50 with
+  fast-forward at 3x runs at 150 percent.
+- **Frame step** advances one frame per press while paused (**P**), with the buttons you are
+  holding, and no sound.
+
 ### Battery
 
 `battery_mode` in `settings.ini` (default `off`) uses less power on battery. The engine
@@ -580,6 +608,8 @@ All in the [menu](#the-menu) (Display, Controls and Save states tabs) and in
 | `crt` | `off` | the original picture only |
 | `integer_scale` | `on` | the original picture only |
 | `always_run` | `off` | |
+| `slow_speed` | `100` | 25, 50, 100, 200, 300 or 400 percent |
+| `rewind_seconds` | `5` | 0 to 30; 0 is off |
 | `rumble` | `light` | `off`, `medium`, `strong` ([Rumble](#rumble)) |
 | `rumble_sounds` | `off` | pulses for low booms in the sound too |
 

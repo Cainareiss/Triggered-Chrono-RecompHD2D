@@ -201,7 +201,8 @@ if(SDL2_FOUND)
         frontend/rumble_out.c # port: simulated rumble on the controllers
         # port: frontend actions, their bindings, button glyphs in messages
         frontend/actions.c frontend/bindings.c frontend/glyphs.c frontend/osd_text.c
-        frontend/settings.c)   # port: the settings registry (settings.h)
+        frontend/settings.c   # port: the settings registry (settings.h)
+        frontend/timectl.c frontend/timectl_ring.c)   # port: rewind, slow motion, frame step (timectl.h)
     target_include_directories(ct_input PUBLIC frontend)
     target_include_directories(ct_input PRIVATE runtime)   # port: rumble.h (rumble_out.c)
     target_link_libraries(ct_input PUBLIC SDL2::SDL2 m)
@@ -496,6 +497,12 @@ if(SDL2_FOUND)
     target_link_libraries(test_qol ct_input ct_hd2d ct_sched ct_tables_empty ct_packs)   # port: ct_packs: the menu's thumbnails
     target_compile_options(test_qol PRIVATE ${CT_WARN})
     add_test(NAME qol COMMAND test_qol)
+    # port: time controls (frontend/timectl.h): the rewind ring's delta and
+    # caps, the speed steps and pacing schedule, the actions, no ROM
+    add_executable(test_timectl test/test_timectl.c)
+    target_link_libraries(test_timectl ct_input ct_sched ct_tables_empty)
+    target_compile_options(test_timectl PRIVATE ${CT_WARN})
+    add_test(NAME timectl COMMAND test_timectl)
     # port: the settings registry the menu shows (frontend/settings.h)
     add_executable(test_settings test/test_settings.c)
     target_link_libraries(test_settings ct_input)
@@ -518,6 +525,17 @@ if(CT_ENGINE_ONLY)
 elseif(DEFINED ENV{CT_ROM})
     set(CT_ROM $ENV{CT_ROM})
     add_subdirectory(game/ct)
+    # port: rewind on the real game (frontend/timectl_ring.h): the delta
+    # chain is lossless, and a rewind then play forward on the same input
+    # matches the original run's state hashes. LABELS rom (set below).
+    add_executable(test_timectl_rom test/test_timectl_rom.c frontend/timectl_ring.c)
+    target_include_directories(test_timectl_rom PRIVATE test frontend)
+    target_link_libraries(test_timectl_rom ct_sched ct_gen_tables ct_gen)
+    target_compile_options(test_timectl_rom PRIVATE ${CT_WARN})
+    add_test(NAME timectl_rewind_replay COMMAND test_timectl_rom
+        ${CMAKE_SOURCE_DIR}/game/ct/test/replay/leene_square.txt 8500 900 20)
+    set_tests_properties(timectl_rewind_replay PROPERTIES LABELS rom ENVIRONMENT
+        "CT_ROM=${CT_ROM};SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy")
 else()
     message(STATUS "CT_ROM not set: game builds and ROM tests skipped")
 endif()

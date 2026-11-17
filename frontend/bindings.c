@@ -26,6 +26,8 @@ void bindings_defaults(bindings *b)
     b->key[ACTION_FFWD] = SDL_SCANCODE_TAB;
     b->key[ACTION_MENU] = SDL_SCANCODE_F10;
     b->key[ACTION_SCREENSHOT] = SDL_SCANCODE_F8;
+    b->key[ACTION_FRAMESTEP] = SDL_SCANCODE_PERIOD;
+    b->key[ACTION_REWIND] = SDL_SCANCODE_BACKSPACE;
 }
 
 int bindings_bindable(SDL_GameControllerButton button)
