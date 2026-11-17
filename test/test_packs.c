@@ -12,7 +12,9 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 #include "packs.h"
 #include "pngio.h"
@@ -461,7 +463,11 @@ static void test_traversal(const char *tmp)
 {
     char cmd[4400], root[4096], evil[4096], good[4096], path[4400], toml[4096];
     char abstmp[4096];
+#ifdef _WIN32
+    if (!_fullpath(abstmp, tmp, sizeof abstmp))
+#else
     if (!realpath(tmp, abstmp))
+#endif
         snprintf(abstmp, sizeof abstmp, "%s", tmp);
     snprintf(root, sizeof root, "%s/trav", abstmp);
     snprintf(evil, sizeof evil, "%s/evil", root);
@@ -475,7 +481,9 @@ static void test_traversal(const char *tmp)
     snprintf(path, sizeof path, "%s/tiles/ok.png", good);
     CHECK(!pngio_write_rgba(path, px, 8, 8), "write ok.png");
     snprintf(path, sizeof path, "%s/tiles/link.png", evil);
+#ifndef _WIN32   /* no symlink case there: making one needs a privilege */
     CHECK(symlink("../../outside.png", path) == 0, "symlink");
+#endif
     write_text(strcat(strcpy(path, root), "/outside.bin"), "xxxx");
     write_text(strcat(strcpy(path, evil), "/models/m.gltf"),
                "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"uri\":\"../../outside.bin\","

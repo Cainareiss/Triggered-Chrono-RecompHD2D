@@ -30,6 +30,28 @@ static char *real_path(const char *p, char *out)
 #endif
 }
 
+/* _fullpath gives backslashes (and any drive-letter case) on Windows: compare
+   with '/' and without case there. Elsewhere these do nothing special. */
+static void slashes(char *s)
+{
+#ifdef _WIN32
+    for (; *s; s++)
+        if (*s == '\\')
+            *s = '/';
+#else
+    (void)s;
+#endif
+}
+
+static int path_ncmp(const char *a, const char *b, size_t n)
+{
+#ifdef _WIN32
+    return _strnicmp(a, b, n);
+#else
+    return strncmp(a, b, n);
+#endif
+}
+
 int packs_path_ok(const char *root, const char *rel, char *why, int whylen)
 {
     const char *bad = NULL;
@@ -59,9 +81,13 @@ int packs_path_ok(const char *root, const char *rel, char *why, int whylen)
             size_t n;
             if (!real_path(root, rr))
                 bad = "pack folder unreadable";
-            else if ((n = strlen(rr)) > 1 && rr[n - 1] == '/')
-                rr[--n] = 0;
-            if (!bad && (strncmp(rf, rr, n) || (rf[n] != '/' && rf[n] != 0 && n > 1)))
+            else {
+                slashes(rr);
+                slashes(rf);
+                if ((n = strlen(rr)) > 1 && rr[n - 1] == '/')
+                    rr[--n] = 0;
+            }
+            if (!bad && (path_ncmp(rf, rr, n) || (rf[n] != '/' && rf[n] != 0 && n > 1)))
                 bad = "leaves the pack folder (symlink)";
         }
     }
