@@ -528,6 +528,22 @@ static void test_traversal(const char *tmp)
     CHECK(packs_model_parse(path, &m, err, sizeof err) == -1 && strstr(err, "'..'"),
           "glTF buffer outside the pack: %s", err);
 
+    /* glTF image outside the folder; a buffer that is a symlink out */
+    write_text(strcat(strcpy(path, evil), "/models/img.gltf"),
+               "{\"asset\":{\"version\":\"2.0\"},\"images\":[{\"uri\":\"../../outside.png\"}]}");
+    snprintf(path, sizeof path, "%s/models/img.gltf", evil);
+    CHECK(packs_model_parse(path, &m, err, sizeof err) == -1 && strstr(err, "'..'"),
+          "glTF image outside the pack: %s", err);
+#ifndef _WIN32
+    snprintf(path, sizeof path, "%s/models/b.bin", evil);
+    CHECK(symlink("../../outside.bin", path) == 0, "symlink b.bin");
+    write_text(strcat(strcpy(path, evil), "/models/sym.gltf"),
+               "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"uri\":\"b.bin\",\"byteLength\":4}]}");
+    snprintf(path, sizeof path, "%s/models/sym.gltf", evil);
+    CHECK(packs_model_parse(path, &m, err, sizeof err) == -1 && strstr(err, "symlink"),
+          "glTF buffer that is a symlink out: %s", err);
+#endif
+
     snprintf(path, sizeof path, "%s/pack.toml", good);
     write_text(path, "[pack]\nversion = 1\n\n[[tile]]\nkey = \"00000000000000aa\"\n"
                      "file = \"tiles/ok.png\"\nw = 8\nh = 8\n"
