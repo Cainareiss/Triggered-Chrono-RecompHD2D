@@ -553,7 +553,7 @@ Sound stops while paused, and the frame timer starts over after.
 
 The two have no controller button by default (the back buttons are taken); bind one with
 `bind_touchpad=rewind`, `bind_misc1=framestep` and the like, or change the keys with
-`key_rewind=` and `key_framestep=`. The quick menu's Time tiles do the same.
+`key_rewind=` and `key_framestep=`. (Quick menu tiles for these come in a later release.)
 
 - **Rewind** keeps a snapshot of the whole machine every 4 frames (about 15 a second),
   as many as `rewind_seconds` allows (default 5, `0` turns it off), compressed against the
@@ -564,7 +564,7 @@ The two have no controller button by default (the back buttons are taken); bind 
   it says so on screen). Snapshots cost about 0.3 ms of CPU every 4 frames on a desktop;
   turn `rewind_seconds` to 0 on a very slow device.
 - **Slow motion**: `slow_speed` is 25, 50, 100, 200, 300 or 400 percent of normal
-  (menu: Controls, Game speed; the quick menu steps through them). The sound is off
+  (menu: Controls, Game speed). The sound is off
   whenever it is not 100, as in fast-forward. Fast-forward multiplies it: 50 with
   fast-forward at 3x runs at 150 percent.
 - **Frame step** advances one frame per press while paused (**P**), with the buttons you are
