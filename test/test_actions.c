@@ -398,6 +398,121 @@ static void test_gyro(void)
     CHECK(gc.tilt < 0.01f && gc.yaw > -0.01f, "eases back (%g, %g)", gc.tilt, gc.yaw);
 }
 
+/* port: the layout swaps and the stick's dead zone (input.h), through a
+   virtual pad: only the face buttons, shoulders, d-pad and the left stick
+   (SDL 2.30's virtual pads have no touchpad / misc buttons to count on). */
+static uint16_t snes(vpad *v)
+{
+    SDL_GameControllerUpdate();
+    return input_controller(pad_button, pad_axis, v->pad);
+}
+
+static void tilt(vpad *v, int x, int y)
+{
+    SDL_JoystickSetVirtualAxis(v->joy, SDL_CONTROLLER_AXIS_LEFTX, (Sint16)x);
+    SDL_JoystickSetVirtualAxis(v->joy, SDL_CONTROLLER_AXIS_LEFTY, (Sint16)y);
+}
+
+static void test_swap_deadzone(void)
+{
+    vpad v = attach(0x045e, 0x028e, "Xbox 360");
+    if (!v.pad)
+        return;
+    input_swap_set(0, 0);
+    input_deadzone_set(INPUT_DEADZONE_DEFAULT);
+    press(&v, SDL_CONTROLLER_BUTTON_A, 1);   /* south: SNES B */
+    CHECK(snes(&v) == PAD_B, "south is B: %04x", snes(&v));
+    press(&v, SDL_CONTROLLER_BUTTON_A, 0);
+    press(&v, SDL_CONTROLLER_BUTTON_B, 1);   /* east: SNES A */
+    CHECK(snes(&v) == PAD_A, "east is A: %04x", snes(&v));
+    press(&v, SDL_CONTROLLER_BUTTON_B, 0);
+
+    input_swap_set(1, 0);
+    press(&v, SDL_CONTROLLER_BUTTON_A, 1);
+    CHECK(snes(&v) == PAD_A, "swapped: south is A: %04x", snes(&v));
+    press(&v, SDL_CONTROLLER_BUTTON_B, 1);
+    CHECK(snes(&v) == (PAD_A | PAD_B), "both held stay both: %04x", snes(&v));
+    press(&v, SDL_CONTROLLER_BUTTON_A, 0);
+    CHECK(snes(&v) == PAD_B, "swapped: east is B: %04x", snes(&v));
+    press(&v, SDL_CONTROLLER_BUTTON_B, 0);
+    press(&v, SDL_CONTROLLER_BUTTON_X, 1);   /* west: SNES Y, X untouched by the A/B swap */
+    CHECK(snes(&v) == PAD_Y, "west is still Y: %04x", snes(&v));
+    press(&v, SDL_CONTROLLER_BUTTON_X, 0);
+
+    input_swap_set(0, 1);
+    press(&v, SDL_CONTROLLER_BUTTON_X, 1);
+    CHECK(snes(&v) == PAD_X, "X/Y swapped: west is X: %04x", snes(&v));
+    press(&v, SDL_CONTROLLER_BUTTON_Y, 1);
+    CHECK(snes(&v) == (PAD_X | PAD_Y), "both: %04x", snes(&v));
+    press(&v, SDL_CONTROLLER_BUTTON_X, 0);
+    CHECK(snes(&v) == PAD_Y, "X/Y swapped: north is Y: %04x", snes(&v));
+    press(&v, SDL_CONTROLLER_BUTTON_Y, 0);
+    press(&v, SDL_CONTROLLER_BUTTON_A, 1);
+    press(&v, SDL_CONTROLLER_BUTTON_LEFTSHOULDER, 1);
+    press(&v, SDL_CONTROLLER_BUTTON_DPAD_UP, 1);
+    CHECK(snes(&v) == (PAD_B | PAD_L | PAD_UP), "other buttons unaffected: %04x", snes(&v));
+    press(&v, SDL_CONTROLLER_BUTTON_A, 0);
+    press(&v, SDL_CONTROLLER_BUTTON_LEFTSHOULDER, 0);
+    press(&v, SDL_CONTROLLER_BUTTON_DPAD_UP, 0);
+
+    /* The keyboard doesn't swap. */
+    uint8_t keys[SDL_NUM_SCANCODES] = {0};
+    keys[SDL_SCANCODE_X] = 1;   /* A */
+    input_swap_set(1, 1);
+    CHECK(input_keyboard(keys) == PAD_A, "keyboard X is A with swaps on");
+    keys[SDL_SCANCODE_X] = 0;
+    keys[SDL_SCANCODE_S] = 1;   /* X */
+    CHECK(input_keyboard(keys) == PAD_X, "keyboard S is X with swaps on");
+    input_swap_set(0, 0);
+
+    /* Dead zone: the default is the old 16000 of 32767. */
+    CHECK(input_deadzone_get() == INPUT_DEADZONE_DEFAULT, "default deadzone");
+    tilt(&v, 15900, 0);
+    CHECK(snes(&v) == 0, "15900 is inside the default zone: %04x", snes(&v));
+    tilt(&v, 16100, 0);
+    CHECK(snes(&v) == PAD_RIGHT, "16100 is outside it: %04x", snes(&v));
+    tilt(&v, -16100, -16100);
+    CHECK(snes(&v) == (PAD_LEFT | PAD_UP), "diagonal: %04x", snes(&v));
+    input_deadzone_set(20);   /* 6553 */
+    tilt(&v, 0, 8000);
+    CHECK(snes(&v) == PAD_DOWN, "8000 passes a 20%% zone: %04x", snes(&v));
+    tilt(&v, 0, 5000);
+    CHECK(snes(&v) == 0, "5000 doesn't: %04x", snes(&v));
+    input_deadzone_set(80);   /* 26213 */
+    tilt(&v, 20000, 0);
+    CHECK(snes(&v) == 0, "20000 doesn't pass an 80%% zone: %04x", snes(&v));
+    tilt(&v, 30000, 0);
+    CHECK(snes(&v) == PAD_RIGHT, "30000 does: %04x", snes(&v));
+    input_deadzone_set(0);
+    CHECK(input_deadzone_get() == INPUT_DEADZONE_MIN, "zone clamped up");
+    input_deadzone_set(INPUT_DEADZONE_DEFAULT);
+    tilt(&v, 0, 0);
+
+    /* The cheat-sheet follows the swaps. */
+    bindings b;
+    bindings_defaults(&b);
+    cheat_row rows[24];
+    int n = bindings_cheatsheet(&b, rows, 24);
+    CHECK(n == 9 + ACTION_COUNT - 1, "rows %d", n);
+    CHECK(!strcmp(rows[0].what, "A") && !strcmp(rows[0].pad, "[b]") && !strcmp(rows[0].key, "X"),
+          "A: %s %s", rows[0].pad, rows[0].key);
+    CHECK(!strcmp(rows[1].what, "B") && !strcmp(rows[1].pad, "[a]"), "B: %s", rows[1].pad);
+    input_swap_set(1, 1);
+    bindings_cheatsheet(&b, rows, 24);
+    CHECK(!strcmp(rows[0].pad, "[a]") && !strcmp(rows[1].pad, "[b]"), "swapped A/B: %s %s",
+          rows[0].pad, rows[1].pad);
+    CHECK(!strcmp(rows[2].pad, "[x]") && !strcmp(rows[3].pad, "[y]"), "swapped X/Y: %s %s",
+          rows[2].pad, rows[3].pad);
+    input_swap_set(0, 0);
+    int found = 0;
+    for (int k = 9; k < n; k++)
+        if (!strcmp(rows[k].what, action_title(ACTION_QUICKSAVE)))
+            found = !strcmp(rows[k].pad, "[paddle2]") && !strcmp(rows[k].key, "F6");
+    CHECK(found, "quick save row: paddle2 and F6");
+    CHECK(bindings_cheatsheet(&b, rows, 3) == 3, "max respected");
+    detach(&v);
+}
+
 int main(int argc, char **argv)
 {
     if (SDL_Init(SDL_INIT_GAMECONTROLLER)) {
@@ -414,6 +529,7 @@ int main(int argc, char **argv)
     test_glyphs(argc > 1 ? argv[1] : NULL);
     test_stubs();
     test_gyro();
+    test_swap_deadzone();
     SDL_Quit();
     printf("test_actions: %ld checks, %ld failures\n", checks, fails);
     return fails ? 1 : 0;
