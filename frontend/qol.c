@@ -279,6 +279,32 @@ int qol_on_battery(const char *dir)
     return discharging && !ac;
 }
 
+int qol_battery_percent(const char *dir)
+{
+    DIR *d = opendir(dir);
+    if (!d)
+        return -1;
+    int best = -1;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.')
+            continue;
+        char p[4096], v[64];
+        snprintf(p, sizeof p, "%s/%s/type", dir, e->d_name);
+        if (read_line(p, v, sizeof v) || strcmp(v, "Battery"))
+            continue;
+        snprintf(p, sizeof p, "%s/%s/capacity", dir, e->d_name);
+        char *end;
+        if (read_line(p, v, sizeof v))
+            continue;
+        long c = strtol(v, &end, 10);
+        if (end != v && c >= 0 && c <= 100 && (best < 0 || c < best))
+            best = (int)c;   /* several (a Legion Go's grips): the lowest */
+    }
+    closedir(d);
+    return best;
+}
+
 static void battery_check(void)
 {
     if (set.battery == BATT_OFF && !on_batt)

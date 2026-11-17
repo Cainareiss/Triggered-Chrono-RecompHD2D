@@ -121,6 +121,9 @@ void qol_crt_toggle(void);
 /* Pure helpers, for tests. */
 /* /sys/class/power_supply (or dir): 1 on battery, 0 on AC or no battery. */
 int qol_on_battery(const char *dir);
+/* port: the first battery's charge, 0-100, under dir (the lowest if there
+   are several), or -1 when there is none (overlays.h). */
+int qol_battery_percent(const char *dir);
 /* $XDG_PICTURES_DIR, else user-dirs.dirs' XDG_PICTURES_DIR, else
    ~/Pictures; with "/ct-recomp" appended. */
 void qol_pictures_dir(char *out, size_t n);
