@@ -208,6 +208,7 @@
 #include "hd2d/osd_font.h" /* port: the co-op turn tag */
 #include "touch_gl.h"
 #include "qol.h"        /* port: quality of life (save states, fast-forward, ...) */
+#include "timectl.h"    /* port: rewind, slow motion, frame step */
 #include "menu.h"       /* port: the in-game settings menu */
 #include "settings.h"   /* port: the settings registry the menu shows */
 #include "padtest.h"    /* port: the controller test (--pad-test) */
@@ -1837,6 +1838,7 @@ static void register_settings(void)
     /* Save states, screenshots, fast-forward, turbo, always run, pausing,
        integer scale, CRT, battery: QOL's own rows (qol.h). */
     qol_register_settings();
+    timectl_init();   /* port: game speed, rewind seconds; the rewind and step actions */
 
     /* Audio */
     settings_register(&(setting){.key = "volume", .label = "Volume", .category = "Audio",
@@ -2192,8 +2194,8 @@ static void queue_audio(long f)
     static int16_t in[4096 * 2], out[8192 * 2];
     int n_in = sched_audio_take(in, 4096);
     rumble_frame(f, in, n_in, SCHED_AUDIO_HZ);   /* port: simulated rumble: the frame's events */
-    if (!audio || qol_audio_muted())
-        return;   /* port: QOL fast-forward drops the sound */
+    if (!audio || qol_audio_muted() || timectl_audio_muted())
+        return;   /* port: QOL fast-forward, slow motion, rewind and a stepped frame drop the sound */
     unsigned level = SDL_GetQueuedAudioSize(audio) / 4;
     if (playing && !level)
         audio_underruns++;
@@ -2584,6 +2586,27 @@ static void menu_run(long f)
         sched_set_behind(hd2d_wants_behind());
 }
 
+/* port: rewind (timectl.h): one tick instead of a frame, about 60 a
+   second: events, the state back (every other tick), the picture. */
+static void qol_poll(void);
+static void rewind_run_tick(void)
+{
+    static uint64_t last;
+    rumble_out_idle(SDL_GetTicks());
+    qol_poll();
+    timectl_rewind_tick();
+    present_now();
+    uint64_t now = SDL_GetPerformanceCounter();
+    if (!fast) {
+        uint64_t end = (last ? last : now) + perf_freq / 60;
+        if (now < end)
+            sleep_until(end);
+        else
+            end = now;
+        last = end;
+    }
+}
+
 static void menu_report(void)
 {
     if (menu_opened_count())
@@ -2601,13 +2624,19 @@ static void on_frame(long f)
     if (hash_log)   /* port */
         write_hash(f);
     int show = qol_frame(f);   /* port: QOL: fast-forward and the battery's 30 Hz skip some */
+    {   /* port: timectl: from 200% one frame in pct/100 is drawn (fast-forward's too) */
+        int pct = timectl_pace_pct(qol_speed());
+        if (pct >= 200)
+            show = timectl_show_frame(pct, f);
+    }
     music_frame(f);   /* port: audio packs */
     queue_audio(f);
     {   /* port: simulated rumble on the pads in play; none while fast-forwarding */
         SDL_GameController *const pads[RUMBLE_PADS] = {
             pad, coop_players > 1 ? pad2 : NULL, coop_players > 2 ? pad3 : NULL, NULL};
         rumble_out_set_pads(pads);
-        rumble_out_frame(SDL_GetTicks(), qol_speed() > 1 || qol_paused() || menu_is_open());
+        rumble_out_frame(SDL_GetTicks(), timectl_pace_pct(qol_speed()) != 100 || qol_paused() ||
+                                             menu_is_open() || timectl_rewinding());
         if (f == rumble_test_at) {
             fprintf(stderr, "ct_sdl: frame %ld: rumble test pulse (pad 1: %s)\n", f,
                     pad ? SDL_GameControllerName(pad) : "none");
@@ -2692,8 +2721,8 @@ static void on_frame(long f)
         packs_dump_frame(f, sched_prov(), sched_prov_mem());
     if (dump)
         png_dump_frame(dump, f, fb, SCHED_WIDTH, SCHED_HEIGHT);
-    if (!fast) {   /* port: QOL fast-forward: qol_speed() frames per frame time */
-        next_frame += perf_freq * FRAME_NS / 1000000000ull / (unsigned)qol_speed();
+    if (!fast) {   /* port: the pace: timectl's speed times QOL fast-forward's */
+        next_frame += timectl_frame_ticks(perf_freq, timectl_pace_pct(qol_speed()));
         uint64_t now = SDL_GetPerformanceCounter();
         if (pace_vsync) {
             /* port: the swap above waited for the display; the timer only
@@ -3483,6 +3512,8 @@ int main(int argc, char **argv)
         static const qol_host qh = {qol_shot, qol_audio_restart, present_now, qol_poll,
                                     qol_pacing_reset, settings_save};
         qol_init(&qh, game_id, game_mode, hd2d_mode, !no_save, recording, scripted);
+        timectl_set_host(&(timectl_host){qol_audio_restart, qol_pacing_reset, qol_osd, qol_paused,
+                                         qol_pause_toggle, saves_after_state_load, recording});
     }
     key_filter_init(&keys);
     frontend_ready = 1;   /* port: settings changed from here on apply live */
@@ -3499,13 +3530,23 @@ int main(int argc, char **argv)
             menu_run(sched_frame_count());
             continue;
         }
-        if (qol_paused()) {
+        if (timectl_rewinding()) {   /* port: rewind: a state back every other tick, silent */
+            rewind_run_tick();
+            continue;
+        }
+        int stepping = qol_paused() && timectl_paused_step_pending();
+        if (qol_paused() && !stepping) {
             rumble_out_idle(SDL_GetTicks());   /* port: paused: still */
             qol_idle();
             continue;
         }
+        if (stepping) {   /* port: frame step: exactly one frame, with the live input */
+            timectl_step_taken();
+            set_input(sched_frame_count() + 1);
+        }
         sched_run_frame();
         qol_after_frame();
+        timectl_after_frame();   /* port: rewind: the capture every 4 frames */
         if (padtest_tick(menu_opened_count())) {   /* port: every control checked */
             set_exit_reason("pad test: every control works");
             running = 0;
