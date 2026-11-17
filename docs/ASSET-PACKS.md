@@ -161,6 +161,7 @@ Every `file` in a `pack.toml` (tiles, poses, models, music) and every buffer or 
 a glTF names must stay inside its pack's folder, so a shared pack is data only. A path
 that is absolute, has a `..` part, a backslash or a drive letter, or a symlink that
 points outside the folder is refused with a message on stderr, and that entry is not loaded.
+A glTF's buffers and images must stay inside the `.gltf` file's own folder (or below).
 
 ## Poses: a whole frame as one picture
 
