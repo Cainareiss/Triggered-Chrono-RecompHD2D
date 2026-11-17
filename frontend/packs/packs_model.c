@@ -28,6 +28,41 @@
 #pragma GCC diagnostic pop
 #endif
 
+/* A glTF's buffer and image files are paths a pack names too: they stay in
+   the folder of the .gltf (or below). 0 fine, -1 with the reason in why. */
+static int uri_ok(const char *gltf, const char *uri, char *why, int whylen)
+{
+    if (!uri || !strncmp(uri, "data:", 5))
+        return 0;
+    char dir[4096], rel[4096];
+    const char *slash = strrchr(gltf, '/');
+    int n = slash ? (int)(slash - gltf) : 0;
+    snprintf(dir, sizeof dir, "%.*s", slash ? n : 1, slash ? gltf : ".");
+    if (strstr(uri, "://")) {
+        snprintf(why, (size_t)whylen, "file on the network");
+        return -1;
+    }
+    snprintf(rel, sizeof rel, "%s", uri);
+    cgltf_decode_uri(rel);
+    return packs_path_ok(dir, rel, why, whylen);
+}
+
+static int gltf_uris_ok(const cgltf_data *d, const char *path, char *err, int errlen)
+{
+    char why[96];
+    for (cgltf_size k = 0; k < d->buffers_count; k++)
+        if (uri_ok(path, d->buffers[k].uri, why, sizeof why)) {
+            snprintf(err, (size_t)errlen, "%s: buffer \"%s\": %s", path, d->buffers[k].uri, why);
+            return -1;
+        }
+    for (cgltf_size k = 0; k < d->images_count; k++)
+        if (uri_ok(path, d->images[k].uri, why, sizeof why)) {
+            snprintf(err, (size_t)errlen, "%s: image \"%s\": %s", path, d->images[k].uri, why);
+            return -1;
+        }
+    return 0;
+}
+
 int packs_model_parse(const char *path, packs_model *m, char *err, int errlen)
 {
     static const char *const why[] = {
@@ -46,6 +81,10 @@ int packs_model_parse(const char *path, packs_model *m, char *err, int errlen)
     memset(&opt, 0, sizeof opt);
     cgltf_data *d = NULL;
     cgltf_result r = cgltf_parse_file(&opt, path, &d);
+    if (r == cgltf_result_success && gltf_uris_ok(d, path, err, errlen)) {
+        cgltf_free(d);
+        return -1;
+    }
     if (r == cgltf_result_success)
         r = cgltf_load_buffers(&opt, d, path);
     if (r == cgltf_result_success)
@@ -340,6 +379,10 @@ int packs_mesh_load(const char *path, packs_mesh *out, char *err, int errlen)
     memset(&opt, 0, sizeof opt);
     cgltf_data *d = NULL;
     cgltf_result r = cgltf_parse_file(&opt, path, &d);
+    if (r == cgltf_result_success && gltf_uris_ok(d, path, err, errlen)) {
+        cgltf_free(d);
+        return -1;
+    }
     if (r == cgltf_result_success)
         r = cgltf_load_buffers(&opt, d, path);
     if (r == cgltf_result_success)

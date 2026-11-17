@@ -206,7 +206,11 @@ static void load_one(const char *dir)
             if (!strcmp(t.key, "song"))
                 e.song = (int)strtol(t.val, NULL, 0);
             else if (!strcmp(t.key, "file")) {
-                if (snprintf(e.file, sizeof e.file, "%s/%s", dir, t.val) >= (int)sizeof e.file)
+                char why[96];
+                if (packs_path_ok(dir, t.val, why, sizeof why)) {
+                    fprintf(stderr, "music: %s: file \"%s\": %s: skipped\n", dir, t.val, why);
+                    e.file[0] = 0;
+                } else if (snprintf(e.file, sizeof e.file, "%s/%s", dir, t.val) >= (int)sizeof e.file)
                     e.file[0] = 0;
             } else if (!strcmp(t.key, "loop"))
                 e.loop = truthy(t.val);
