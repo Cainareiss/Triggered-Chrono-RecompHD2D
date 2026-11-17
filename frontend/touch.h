@@ -32,6 +32,20 @@ typedef struct {
     int x, y, w, h;
 } touch_rect;
 
+/* port: look of the controls (settings.ini touch_opacity, touch_size,
+   touch_hand; the Controls tab). opacity: percent of the buttons' own,
+   size: percent scale of all of them (on top of edit mode's moves), hand: 0
+   D-pad on the left, 1 mirrored. Out-of-range values are clamped. Edit
+   mode shows the controls fully opaque. */
+#define TOUCH_OPACITY_MIN 20
+#define TOUCH_OPACITY_DEFAULT 100
+#define TOUCH_SIZE_MIN 50
+#define TOUCH_SIZE_MAX 150
+void touch_options_set(int opacity_pct, int size_pct, int hand);
+void touch_options_get(int *opacity_pct, int *size_pct, int *hand);
+/* Register the three settings rows (settings.h). */
+void touch_register_settings(void);
+
 /* The picture inside a w x h output: the plain path's integer-scaled
    256x224, or a picture of the given aspect (w/h), as large as fits and
    centered (aspect <= 0: the whole output). */
