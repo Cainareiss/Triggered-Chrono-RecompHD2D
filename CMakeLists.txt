@@ -434,7 +434,7 @@ add_test(NAME ctest_cache_report COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DI
 # TAS movie converter on synthetic .bk2/.lsmv movies.
 add_test(NAME tas_convert COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_tas_convert.py)
 add_executable(test_packs test/test_packs.c)   # port: asset packs
-target_link_libraries(test_packs ct_packs)
+target_link_libraries(test_packs ct_packs ct_runtime)
 target_compile_options(test_packs PRIVATE ${CT_WARN} -Wno-format-truncation)
 add_test(NAME packs COMMAND test_packs ${CMAKE_SOURCE_DIR} ${CMAKE_BINARY_DIR})
 # port: the installed data dir can build a module (every header the game's C

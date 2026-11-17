@@ -16,6 +16,7 @@
 #include <unistd.h>
 #endif
 
+#include "music.h"
 #include "packs.h"
 #include "pngio.h"
 
@@ -501,6 +502,7 @@ static void test_traversal(const char *tmp)
     }
     p += sprintf(p, "\n[[model]]\nfile = \"../outside.png\"\nmap = 0x1F0\n");
     p += sprintf(p, "\n[[model]]\nfile = \"models/m.gltf\"\nmap = 0x1F0\n");
+    p += sprintf(p, "\n[[music]]\nsong = 1\nfile = \"../x.ogg\"\n");
     snprintf(path, sizeof path, "%s/pack.toml", evil);
     write_text(path, toml);
 
@@ -515,6 +517,9 @@ static void test_traversal(const char *tmp)
     CHECK(n == 1 && pm[0].primitives == 0 && pm[0].meshes == 0,
           "model paths outside the pack: none kept, the glTF with an outside buffer has no mesh (%d)", n);
     packs_unload();
+    music_load(dirs, 1);
+    CHECK(music_file(1) == NULL, "music file outside the pack: no entry");
+    music_unload();
 
     packs_model m;
     char err[512];
@@ -525,10 +530,14 @@ static void test_traversal(const char *tmp)
 
     snprintf(path, sizeof path, "%s/pack.toml", good);
     write_text(path, "[pack]\nversion = 1\n\n[[tile]]\nkey = \"00000000000000aa\"\n"
-                     "file = \"tiles/ok.png\"\nw = 8\nh = 8\n");
+                     "file = \"tiles/ok.png\"\nw = 8\nh = 8\n"
+                     "\n[[music]]\nsong = 2\nfile = \"a.ogg\"\n");
     dirs[0] = good;
     CHECK(packs_load(dirs, 1) == 1, "a normal entry still loads");
     packs_unload();
+    music_load(dirs, 1);
+    CHECK(music_file(2) != NULL, "a normal music entry still loads");
+    music_unload();
 }
 
 int main(int argc, char **argv)
