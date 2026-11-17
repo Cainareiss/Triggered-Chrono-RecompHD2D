@@ -624,6 +624,52 @@ save it replaces as `ct.srm.before-import-DATE-TIME` and writes the new one the 
 way as the game's saves. Both stop after the copy, without starting the game. They work
 on the `--save` file when you give one.
 
+### Overlays: FPS, clock, battery, play time
+
+Four small readouts for a corner of the picture, each off by default: frames per second
+with the frame time, the time of day, the battery's charge, and how long you have played.
+Switch each on in the menu (Display tab), and pick the corner there too (`overlay_fps`,
+`overlay_clock`, `overlay_battery`, `overlay_playtime`, `overlay_corner` = `tl`, `tr`,
+`bl`, `br`). Play time counts the game's own unpaused frames (60 to the second, so
+fast-forward counts as game time) and is kept in `playtime.txt` in the game's folder
+([Where your files live](#where-your-files-live)). The battery reads from the system on
+Linux; on a desktop without a battery it says `n/a`.
+
+### Controller layout, stick and touch controls
+
+In the menu's Controls tab:
+
+| Setting | Default | |
+| --- | --- | --- |
+| `swap_ab` | `off` | the controller's east and south buttons trade places in the game |
+| `swap_xy` | `off` | likewise north and west |
+| `stick_deadzone` | `49` | percent of full tilt the left stick must pass (5 to 90); 49 is what the game always used |
+| `touch_opacity` | `100` | percent, 20 to 100: how see-through the on-screen buttons are |
+| `touch_size` | `100` | percent, 50 to 150: all the on-screen buttons larger or smaller |
+| `touch_hand` | `right` | `left` mirrors the layout (D-pad on the right) |
+
+The swaps affect the controller only: the keyboard and the touch buttons stay as they are.
+Moving and resizing single touch buttons (hold an empty spot) still works, on top of these.
+
+### Backups of your save file
+
+The game's save file is backed up automatically, in the same folder, as
+`ct.srm.backup-DATE-TIME`: once when the game starts and once before each time the save
+is replaced (nothing new is made if the newest backup is already the same). The last 5
+are kept, plus the newest of each of the last 7 days. In the menu's Save states tab,
+"Back up now" makes one on the spot, and "Restore backup 1..6" lists the newest with their
+dates: press a row twice to make that copy your save. The save it replaces is kept as
+`ct.srm.before-restore-DATE-TIME`, and a file that is not exactly 8,192 bytes is refused.
+After a restore, reset (or load from the title screen) to see it. The same folder holds
+`--import-srm`'s `before-import` copies; none of these are ever deleted for you except the
+automatic `backup` ones past the limits above.
+
+### Reset
+
+"Reset the game" in the Save states tab (press twice) presses the console's reset button:
+back to the title screen, as if you had turned the console off and on. Progress since your
+last in-game save is lost. It is not available while recording (`--record`).
+
 ### Settings
 
 All in the [menu](#the-menu) (Display, Controls and Save states tabs) and in

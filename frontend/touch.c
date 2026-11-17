@@ -11,6 +11,7 @@
 
 #include "hd2d/osd_font.h"
 #include "input.h"
+#include "settings.h"
 
 #define PIC_W 256
 #define PIC_H 224
@@ -68,6 +69,10 @@ static const char *const group_key[G_COUNT] = {"dpad", "face", "l", "r", "select
 #define SMALL_HH 2.5f
 #define MARGIN 4.0f
 
+/* port: the touch options (touch.h): opacity and size in percent, hand
+   0 = D-pad on the left (right-handed), 1 = mirrored. */
+static int opt_opacity = TOUCH_OPACITY_DEFAULT, opt_size = 100, opt_hand;
+
 typedef struct {
     float x, y, hw, hh, cr;   /* centre, half size, corner radius (px) */
 } shape;
@@ -121,6 +126,7 @@ static void layout_make(layout *L, int w, int h, touch_rect pic, float k)
         if (kk > h / 60.0f)
             kk = h / 60.0f;
     }
+    kk *= (float)opt_size / 100.0f;   /* port: touch_size */
     L->k = kk;
     float lx, rx, cy = h - (MARGIN + 2 * SMALL_HH + MARGIN + DPAD_R) * kk;
     if (L->wide) {
@@ -137,6 +143,11 @@ static void layout_make(layout *L, int w, int h, touch_rect pic, float k)
         L->gx[G_START] = w / 2.0f + (SMALL_HW + 1.5f) * kk;
         L->gy[G_SELECT] = L->gy[G_START] = h - (MARGIN + SMALL_HH) * kk;
         L->gy[G_L] = L->gy[G_R] = cy - (DPAD_R + MARGIN + SHOULDER_HH) * kk;
+    }
+    if (opt_hand) {   /* port: touch_hand: the sides trade places */
+        float t = lx;
+        lx = rx;
+        rx = t;
     }
     L->gx[G_DPAD] = L->gx[G_L] = lx;
     L->gx[G_FACE] = L->gx[G_R] = rx;
@@ -790,6 +801,7 @@ void touch_test_inject(long frame)
 #define MAX_VERTS 60000
 static SDL_Vertex verts[MAX_VERTS];
 static int n_verts;
+static int alpha_pct = 100;   /* touch_opacity while building (edit mode: full) */
 
 typedef struct {
     Uint8 r, g, b, a;
@@ -804,9 +816,9 @@ static void tri(float x0, float y0, float x1, float y1, float x2, float y2, rgba
     v[0].position.x = x0, v[0].position.y = y0;
     v[1].position.x = x1, v[1].position.y = y1;
     v[2].position.x = x2, v[2].position.y = y2;
-    v[0].color = (SDL_Color){c0.r, c0.g, c0.b, c0.a};
-    v[1].color = (SDL_Color){c1.r, c1.g, c1.b, c1.a};
-    v[2].color = (SDL_Color){c2.r, c2.g, c2.b, c2.a};
+    v[0].color = (SDL_Color){c0.r, c0.g, c0.b, (Uint8)(c0.a * alpha_pct / 100)};
+    v[1].color = (SDL_Color){c1.r, c1.g, c1.b, (Uint8)(c1.a * alpha_pct / 100)};
+    v[2].color = (SDL_Color){c2.r, c2.g, c2.b, (Uint8)(c2.a * alpha_pct / 100)};
     v[0].tex_coord.x = v[0].tex_coord.y = 0;
     v[1].tex_coord = v[2].tex_coord = v[0].tex_coord;
     n_verts += 3;
@@ -911,6 +923,7 @@ static const rgba FACE_RING[4] = {{220, 60, 60, 150}, {235, 195, 40, 150}, {60, 
 static void build(const layout *L, uint16_t held, int edit)
 {
     n_verts = 0;
+    alpha_pct = edit ? 100 : opt_opacity;
     float k = L->k;
     /* D-pad: a disc, four arrows, a bright spot toward the held direction. */
     {
@@ -1031,4 +1044,56 @@ int touch_shot_sdl(SDL_Renderer *ren, SDL_Texture *frame, int w, int h, uint8_t 
     SDL_SetRenderTarget(ren, NULL);
     SDL_DestroyTexture(t);
     return r ? -1 : 0;
+}
+
+/* ---- port: options (touch.h) ---- */
+
+void touch_options_set(int opacity_pct, int size_pct, int hand)
+{
+    opt_opacity = opacity_pct < TOUCH_OPACITY_MIN ? TOUCH_OPACITY_MIN
+                  : opacity_pct > 100 ? 100 : opacity_pct;
+    opt_size = size_pct < TOUCH_SIZE_MIN ? TOUCH_SIZE_MIN
+               : size_pct > TOUCH_SIZE_MAX ? TOUCH_SIZE_MAX : size_pct;
+    opt_hand = hand != 0;
+}
+
+void touch_options_get(int *opacity_pct, int *size_pct, int *hand)
+{
+    if (opacity_pct)
+        *opacity_pct = opt_opacity;
+    if (size_pct)
+        *size_pct = opt_size;
+    if (hand)
+        *hand = opt_hand;
+}
+
+static int get_opacity(void *u) { (void)u; return opt_opacity; }
+static void set_opacity(void *u, int v) { (void)u; touch_options_set(v, opt_size, opt_hand); }
+static int get_size(void *u) { (void)u; return opt_size; }
+static void set_size(void *u, int v) { (void)u; touch_options_set(opt_opacity, v, opt_hand); }
+static int get_hand(void *u) { (void)u; return opt_hand; }
+static void set_hand(void *u, int v) { (void)u; touch_options_set(opt_opacity, opt_size, v); }
+
+void touch_register_settings(void)
+{
+    static const char *const hands[2] = {"Right hand", "Left hand"},
+                             *const hand_values[2] = {"right", "left"};
+    settings_register(&(setting){.label = "Touch controls", .category = "Controls",
+                                 .type = SETTING_INFO, .flags = SETTING_HEADING});
+    settings_register(&(setting){
+        .key = "touch_opacity", .label = "Touch opacity", .category = "Controls",
+        .type = SETTING_INT, .min = TOUCH_OPACITY_MIN, .max = 100, .step = 5, .format = "%d%%",
+        .get = get_opacity, .set = set_opacity,
+        .help = "How see-through the on-screen buttons are."});
+    settings_register(&(setting){
+        .key = "touch_size", .label = "Touch size", .category = "Controls", .type = SETTING_INT,
+        .min = TOUCH_SIZE_MIN, .max = TOUCH_SIZE_MAX, .step = 5, .format = "%d%%",
+        .get = get_size, .set = set_size,
+        .help = "All the on-screen buttons larger or smaller. (Long-press an empty spot to "
+                "move and resize them one by one.)"});
+    settings_register(&(setting){
+        .key = "touch_hand", .label = "Touch layout", .category = "Controls",
+        .type = SETTING_ENUM, .options = hands, .values = hand_values, .count = 2,
+        .get = get_hand, .set = set_hand,
+        .help = "Right hand: D-pad on the left. Left hand: the sides swapped."});
 }

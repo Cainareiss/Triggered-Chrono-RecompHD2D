@@ -24,6 +24,8 @@
 #ifndef CT_SAVES_H
 #define CT_SAVES_H
 
+#include <time.h>
+
 #define SAVES_INTERVAL_MS 3000u
 
 /* path: --save FILE, or NULL for the preferences folder. Returns 0, or 1
@@ -58,5 +60,50 @@ void saves_after_state_load(void);
    0 on success, 1 on failure (printed). */
 int saves_import(const char *from, const char *file, const char *game_id);
 int saves_export(const char *to, const char *file, const char *game_id);
+
+/* port: rotating backups of the save file, in its folder as
+   FILE.backup-YYYYmmdd-HHMMSS (ct.srm.backup-20261116-140322): one is made
+   when the game starts and one before each time the save file is replaced
+   (unless the newest backup is already the same). Kept: the newest
+   BACKUPS_KEEP_LAST, plus the newest of each of the last BACKUPS_KEEP_DAYS
+   days that has none among those. */
+#define BACKUPS_KEEP_LAST 5
+#define BACKUPS_KEEP_DAYS 7
+#define BACKUPS_MAX_LIST 64
+#define SAVES_RESTORE_ROWS 6   /* the F10 list shows this many */
+
+typedef struct {
+    char stamp[16];    /* YYYYmmdd-HHMMSS, as in the file's name */
+    char label[24];    /* "2026-11-16 14:03:22" */
+    long long when;    /* local time, seconds since 1970 */
+} saves_backup;
+
+/* A backup of the save now (after writing out any change). 0 on success
+   (also when the newest backup is the same), -1 when saving is off or the
+   save can't be read. */
+int saves_backup_now(void);
+/* The backups, newest first: how many were written to out (at most max). */
+int saves_backup_list(saves_backup *out, int max);
+/* Make backup `index` (of saves_backup_list) the save: the save it
+   replaces is kept as FILE.before-restore-YYYYmmdd-HHMMSS, the running
+   game's save RAM becomes the backup's. Refused (-1, nothing touched)
+   unless the backup is exactly CT_SRAM_SIZE (8,192) bytes. 0 on success. */
+int saves_backup_restore(int index);
+
+/* Testing: the clock the names and pruning use (NULL: time()), and the
+   automatic backups on / off (on by default). */
+void saves_set_clock(time_t (*fn)(void));
+void saves_backup_auto(int on);
+
+/* port: the user's Reset. game_reset_request asks the main loop to press
+   the console's reset button at the next frame (as the script's "reset F"
+   does); main's reset hook calls game_reset_take, which is 1 once per
+   request. */
+int game_reset_request(void);
+int game_reset_take(void);
+
+/* Register the F10 Save states rows: "Back up now", the restore list,
+   "Reset the game" (settings.h). */
+void saves_register_settings(void);
 
 #endif

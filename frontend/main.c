@@ -204,6 +204,7 @@
 #include "replay.h"
 #include "resample.h"
 #include "saves.h"    /* port: save RAM on disk */
+#include "overlays.h"  /* port: FPS, clock, battery, play time */
 #include "sched.h"
 #include "touch.h"      /* port: on-screen touch controller */
 #include "hd2d/osd_font.h" /* port: the co-op turn tag */
@@ -1883,6 +1884,10 @@ static void register_settings(void)
        integer scale, CRT, battery: QOL's own rows (qol.h). */
     qol_register_settings();
     timectl_init();   /* port: game speed, rewind seconds; the rewind and step actions */
+    input_register_settings();      /* port: A/B and X/Y swap, stick dead zone */
+    touch_register_settings();      /* port: touch opacity, size, hand */
+    overlays_register_settings();   /* port: overlays */
+    saves_register_settings();      /* port: save backups, Reset */
 
     /* Audio */
     settings_register(&(setting){.key = "volume", .label = "Volume", .category = "Audio",
@@ -2336,6 +2341,7 @@ static void pace_frame(void)
             pace.wmax = ms;
         pace.n++, pace.wn++;
         pace.sum += ms, pace.wsum += ms;
+        overlays_note_frame(ms);   /* port: the FPS overlay */
         if (ms > 25.0)
             pace.late++, pace.wlate++;
         if (pace.wn == 60) {
@@ -2847,6 +2853,7 @@ static void on_frame(long f)
         pace_frame();
     }
     saves_frame(f);   /* port */
+    overlays_update(SDL_GetTicks(), f);   /* port: play time, battery */
     poll_input(f);
     menu_test_frame(f);   /* port: --menu-test (the menu opens after this frame: main) */
     set_input(f + 1);
@@ -2860,6 +2867,12 @@ static void close_record(void)
 /* The script's reset button (replay.h "reset F"). */
 static int script_reset(long frame)
 {
+    if (game_reset_take()) {   /* port: the user's Reset (saves.h game_reset_request) */
+        if (rec.f)
+            osd_show("No reset while recording");
+        else
+            return 1;
+    }
     return replay_reset(&script, frame);
 }
 
@@ -3484,6 +3497,7 @@ int main(int argc, char **argv)
     }
     if (!no_save)   /* port: the save RAM from disk (saves.h) */
         saves_open(save_path, game_id);
+    overlays_init(game_id);   /* port: the play time file */
     char title[22];   /* ROM header title, $FFC0, 21 bytes, space padded */
     memcpy(title, bus_rom() + 0xFFC0, 21);
     title[21] = 0;

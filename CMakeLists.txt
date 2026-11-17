@@ -201,7 +201,8 @@ if(SDL2_FOUND)
         frontend/rumble_out.c # port: simulated rumble on the controllers
         # port: frontend actions, their bindings, button glyphs in messages
         frontend/actions.c frontend/bindings.c frontend/glyphs.c frontend/osd_text.c
-        frontend/settings.c   # port: the settings registry (settings.h)
+        frontend/settings.c    # port: the settings registry (settings.h)
+        frontend/overlays.c    # port: the corner overlays' data (overlays.h; needs qol.c)
         frontend/timectl.c frontend/timectl_ring.c)   # port: rewind, slow motion, frame step (timectl.h)
     target_include_directories(ct_input PUBLIC frontend)
     target_include_directories(ct_input PRIVATE runtime)   # port: rumble.h (rumble_out.c)
@@ -288,7 +289,7 @@ if(SDL2_FOUND)
         COMMENT "menu font"
         VERBATIM)
     add_library(ct_menu STATIC frontend/menu.cpp frontend/ui_backend.cpp frontend/quickmenu.cpp
-        ${CT_MENU_FONT_GEN})
+        frontend/overlays_draw.cpp ${CT_MENU_FONT_GEN})
     target_include_directories(ct_menu PUBLIC frontend PRIVATE ${CMAKE_BINARY_DIR}/menu_gen)
     target_compile_definitions(ct_menu PRIVATE CT_MENU_FONT)
     # The version the menu's About tab shows (the release in
@@ -505,6 +506,13 @@ if(SDL2_FOUND)
     target_compile_options(test_timectl PRIVATE ${CT_WARN})
     add_test(NAME timectl COMMAND test_timectl)
     # port: the settings registry the menu shows (frontend/settings.h)
+    # port: overlays' data, backups of the save file, touch / controls rows
+    add_executable(test_q3 test/test_q3.c frontend/qol.c frontend/saves.c)
+    target_include_directories(test_q3 PRIVATE test)
+    target_link_libraries(test_q3 ct_input ct_hd2d ct_sched ct_tables_empty ct_packs)
+    target_compile_options(test_q3 PRIVATE ${CT_WARN})
+    add_test(NAME q3 COMMAND test_q3)
+
     add_executable(test_settings test/test_settings.c)
     target_link_libraries(test_settings ct_input)
     target_compile_options(test_settings PRIVATE ${CT_WARN})
