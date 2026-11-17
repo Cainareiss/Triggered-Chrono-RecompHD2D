@@ -102,6 +102,7 @@ are mapped by position, as on the SNES pad:
 
 | Combo | What it does |
 | --- | --- |
+| "..." (the Deck's misc1 button), or F1 | Opens the quick menu (below) |
 | R5 (back button), or L3 + R3 (click both sticks together) | Opens the settings menu (below) |
 | R3 (click and let go of the right stick) | Cycle the look: original, subtle, HD-2D, HD-2D Steam Deck, 3D diorama, 3D diorama for the Steam Deck |
 | L3 (click and let go of the left stick) | Cycle the picture shape: 4:3, pixel 8:7, stretch |
@@ -113,6 +114,23 @@ open the game's menu. The answer to the question doesn't reach the game either.
 
 None of these clash with the game's own soft reset (L + R + Select + Start): the stick
 clicks and the back buttons are not SNES buttons.
+
+### The quick menu
+
+The **"..." button** (misc1, below the right trackpad on a Deck) opens a sheet of big
+tiles over the paused picture: resume, quick save and load, slot save and load, mute and
+volume, the look, aspect, integer scale, CRT and fullscreen, and **All settings...**
+for the full menu. The game waits behind it. Move the ring with the d-pad or left
+stick, **A** runs a tile, left / right adjust the volume slider, **L1 / R1** jump a
+section, **B**, **Start** or "..." again close it. It is made for the 7-inch screen:
+tiles of at least 72 px at 1280x800, four columns held wide, three held tall.
+
+On a touchscreen, tap a tile, drag the volume slider, drag the sheet to scroll, tap above
+it to close. To open it by touch, tap the small handle at the top edge's middle (it
+shows while you use the touchscreen, fades after a few seconds, and is left out where
+it would touch the on-screen controller) or tap **three fingers** together on empty
+spots. The bottom line shows the buttons of what you used last.
+[USER-GUIDE.md](USER-GUIDE.md#the-quick-menu) has the details.
 
 ### The menu
 
@@ -152,11 +170,12 @@ are not SNES buttons. They drive the frontend instead:
 | R4 (upper right) | F9 | Quick load |
 | L5 (lower left) | Tab (hold) | Fast-forward while held |
 | R5 (lower right) | F10 | The settings menu |
+| "..." (misc1) | F1 | The quick menu |
 | | F8 | Screenshot |
 
 What they do, and the rest of the quality-of-life features, is in [Quality of life on a
 handheld](#quality-of-life-on-a-handheld) below; R5 opens [the menu](#the-menu). The keys
-avoid F1-F4 and F11 (look, debug view, aspect, co-op, fullscreen), F5
+avoid F2-F4 and F11 (debug view, aspect, co-op, fullscreen), F5
 (the asset packs' reload) and F12 (Steam's screenshot key).
 
 To change them, use the menu's **Controls** tab, or edit `settings.ini` (in
@@ -167,18 +186,19 @@ bind_paddle2=quicksave     # L4
 bind_paddle1=quickload     # R4
 bind_paddle4=ffwd          # L5
 bind_paddle3=menu          # R5
-bind_misc1=none            # the Deck's ... button, a Switch Pro's capture button
+bind_misc1=quickmenu       # the Deck's ... button, a Switch Pro's capture button
 bind_touchpad=none         # trackpad / touchpad click
 key_quicksave=F6
 key_quickload=F9
 key_ffwd=Tab
 key_menu=F10
+key_quickmenu=F1
 key_screenshot=F8          # "none" for no key
 ```
 
-Actions: `none`, `quicksave`, `quickload`, `ffwd`, `menu`, `screenshot`. Keys use SDL's
+Actions: `none`, `quicksave`, `quickload`, `ffwd`, `menu`, `screenshot`, `quickmenu`. Keys use SDL's
 key names. Keys the game or the frontend already uses (arrows, Z X A S Q W, Enter, Right
-Shift, F1-F4, F11) are refused. SDL numbers the Deck's back buttons paddle1 = R4,
+Shift, F2-F4, F11) are refused; F1 only goes to `quickmenu`. SDL numbers the Deck's back buttons paddle1 = R4,
 paddle2 = L4, paddle3 = R5, paddle4 = L5; on the first Steam Controller paddle1 is the
 right grip and paddle2 the left one.
 

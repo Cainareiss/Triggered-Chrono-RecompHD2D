@@ -227,19 +227,51 @@ only the screen's shaking and flashing rumble.
 | F6 | L4 | Quick save |
 | F9 | R4 | Quick load |
 | Tab (hold) | L5 | Fast-forward while held |
+| F1 | "..." (misc1) | The quick menu (below) |
 | F10 | R5 | The menu (below); L3 + R3 together on any controller |
 | F8 | | Screenshot |
 
-What they do is described in [Quality of life](#quality-of-life); F10 / R5 open [the
-menu](#the-menu). A Steam Controller's grips are R4 and L4 (paddle1 and paddle2), an Xbox
+What they do is described in [Quality of life](#quality-of-life); F1 / "..." open [the quick
+menu](#the-quick-menu), F10 / R5 [the menu](#the-menu). A Steam Controller's grips are R4 and L4 (paddle1 and paddle2), an Xbox
 Elite pad's paddles P1-P4 likewise. `settings.ini` changes them: `bind_paddle1=` ...
 `bind_paddle4=`, `bind_misc1=`, `bind_touchpad=` take an action (`none`, `quicksave`,
-`quickload`, `ffwd`, `menu`, `screenshot`), and `key_quicksave=F6` and the like take a
+`quickload`, `ffwd`, `menu`, `screenshot`, `quickmenu`), and `key_quicksave=F6` and the like take a
 key name (`none` for no key). Details, and how this works with Steam Input:
 [HANDHELD.md](HANDHELD.md#back-buttons-and-grips).
 
 Messages on screen show the buttons of what you used last, a controller's (Steam Deck,
 Steam Controller, Xbox, PlayStation, Switch) or the keyboard's, as small pictures.
+
+### The quick menu
+
+**F1**, the Deck's **"..." button** (misc1) or, on a touchscreen, **three fingers
+tapped together** on empty spots, or a tap on the small **handle** at the top edge's
+middle (it shows while you use the touchscreen and fades after a few seconds) opens the
+quick menu: a sheet of big tiles over the paused picture, for what you want mid-play
+without going through the settings. Like the menu, it makes the game wait: no frame
+runs and the sound stops. Closing it (B, Start, F1, Escape, or a tap above the sheet)
+carries on from the same frame.
+
+| Section | Tiles |
+| --- | --- |
+| Game | Resume; Quick save; Quick load; Mute; Slot (pick 1-4), Save to slot, Load slot; Volume (a slider) |
+| Look | Look (cycles the HD-2D look, as R3 does; HD-2D only); Aspect; Integer scale; CRT look; Fullscreen |
+| More | All settings... opens the F10 menu |
+
+Tiles are at least 72 px at 1280x800 and follow the menu text size setting; there are
+four columns on a wide screen, three on a tall one. A tile is a setting the F10 menu
+has too, so the two always agree and `settings.ini` keeps them.
+
+| | Controller | Keyboard | Touch and mouse |
+| --- | --- | --- | --- |
+| Move the focus ring | D-pad or left stick | Arrow keys | Tap a tile |
+| Run, toggle, step | A | Enter or Space | Tap |
+| Adjust a slider or stepper | Left / right | Left / right | Drag the slider, tap an arrow |
+| Next / previous section | R1 / L1 | W / Q, Page Down / Page Up | Drag the sheet to scroll |
+| Close | B, Start, or the open button again | Escape, Backspace or F1 | Tap above the sheet |
+
+The line at the bottom shows the buttons of what you used last. F1 used to cycle the
+look: that is the Look tile now, and R3 still cycles it.
 
 ### The menu
 
@@ -291,12 +323,12 @@ renderer adds lighting and blur, not new art. More detail is in [HD2D.md](HD2D.m
 
 | Key | Controller | What it does |
 | --- | --- | --- |
-| F1 | R3 (click and let go of the right stick) | Cycle the look: original, subtle, HD-2D (the default), HD-2D Steam Deck, 3D diorama |
+| | R3 (click and let go of the right stick) | Cycle the look: original, subtle, HD-2D (the default), HD-2D Steam Deck, 3D diorama (also the Look tile of the [quick menu](#the-quick-menu), F1) |
 | F2 | | Cycle the debug views: layers, depth, blur, side-by-side compare, off |
 | F3 | L3 (click and let go of the left stick) | Cycle the picture shape: 4:3 (default), pixel 8:7, stretch |
 | F11 | | Toggle fullscreen |
 
-F11 works without `--hd2d` too. F1–F3, R3 and L3 only do something with `--hd2d`. Each
+F11 works without `--hd2d` too. F2, F3, R3 and L3 only do something with `--hd2d`. Each
 change shows a short message on screen, and the look and the picture shape are
 remembered for next time.
 
