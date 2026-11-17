@@ -656,12 +656,15 @@ def emit_module(reg: funcs.Registry, metas: list[funcs.FuncMeta], module: str) -
 
 
 def calls_extern(reg: funcs.Registry, addr: int, st: decode.State, memo: dict) -> bool:
-    """Can (addr, st) reach an extern hook it would take even in the frame
-    scheduler? Direct calls and jumps to an extern (returning or not) run the
-    real code there (extern_call, extern_tail); an extern in a jump table's
-    case still takes the hook, which stands in for ROM code the translation
-    doesn't run, so a function that can reach one (directly or through its
-    callees) is interpreted in system mode."""
+    """Can (addr, st) reach a noreturn extern, or an extern in a jump table's
+    case? Direct calls and jumps to an extern run the real code in the frame
+    scheduler (extern_call, extern_tail hand it to the interpreter); the
+    caller of a function that can reach a noreturn one must not take that
+    call as returning, so it goes through the dispatcher (_via_dispatch) and
+    hands its rest over when the callee never comes back. An extern in a
+    jump table's case still takes the hook (takes_hook), which stands in for
+    ROM code the translation doesn't run: such a function is interpreted in
+    system mode."""
     key = (addr,) + st.key()
     if key in memo:
         return memo[key]
@@ -669,8 +672,10 @@ def calls_extern(reg: funcs.Registry, addr: int, st: decode.State, memo: dict) -
     fn = reg.function(addr, st)
     edges = [(t, s) for t, s in fn.calls.values()] + [(t, s) for t, s in fn.tails.values()]
     edges += [(t, s) for ts, s in fn.tables.values() for t in ts]
-    result = any(t in reg.externs for ts, _ in fn.tables.values() for t in ts) or any(
-        calls_extern(reg, t, s, memo) for t, s in edges if t not in reg.externs)
+    direct = [t for t, _ in list(fn.calls.values()) + list(fn.tails.values())]
+    result = any(t in reg.externs for ts, _ in fn.tables.values() for t in ts) or \
+        any(t in reg.externs and reg.externs[t].noreturn for t in direct) or any(
+            calls_extern(reg, t, s, memo) for t, s in edges if t not in reg.externs)
     memo[key] = result
     return result
 
