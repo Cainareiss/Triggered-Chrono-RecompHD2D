@@ -3368,16 +3368,13 @@ int main(int argc, char **argv)
     }
     if (scale < 1)
         scale = 1;
-    {   /* port: Steam Game Mode (device.h): fullscreen, HD-2D unless --no-hd2d */
+    {   /* port: Steam Game Mode (device.h): fullscreen; the original look is the default, HD-2D is chosen (--hd2d or the Look tab) */
         const char *why;
         game_mode = device_game_mode(&why);
         if (game_mode)
-            fprintf(stderr, "ct_sdl: Steam Game Mode (%s): fullscreen, no cursor%s\n", why,
-                    hd2d_mode >= 0 ? ", HD-2D" : "");
+            fprintf(stderr, "ct_sdl: Steam Game Mode (%s): fullscreen, no cursor\n", why);
         if (!hd2d_mode && renderer_saved >= 0)   /* port: the menu's choice (settings.ini renderer=) */
             hd2d_mode = renderer_saved ? 1 : -1;
-        if (game_mode && !hd2d_mode)
-            hd2d_mode = 1;
         int no_hd2d = hd2d_mode < 0;
         if (hd2d_mode < 0)
             hd2d_mode = 0;

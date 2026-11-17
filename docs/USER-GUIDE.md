@@ -99,8 +99,8 @@ flatpak run io.github.dittobyte.CtRecomp --hd2d
 | --- | --- |
 | `--help` | Print the options and the keyboard controls, then quit |
 | `--rom FILE` | Use this ROM file |
-| `--hd2d` | Draw with the HD-2D renderer (on by default in Steam's Game Mode) |
-| `--no-hd2d` | The original look, also in Game Mode |
+| `--hd2d` | Draw with the HD-2D renderer (off by default, also in Steam's Game Mode; the menu's Look tab can turn it on and remembers it) |
+| `--no-hd2d` | The original look, even if the menu saved HD-2D |
 | `--fullscreen` | Start fullscreen |
 | `--scale N` | Window size, as a multiple of the console's 256×224 picture (default 3). Without it, the size you last left the window at is used |
 | `--interp-only` | Don't build or load the game module; run everything in the interpreter |

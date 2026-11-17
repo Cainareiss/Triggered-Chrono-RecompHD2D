@@ -68,9 +68,9 @@ cat <<EOF
      Name:           CT Recomp
      Target:         $(q "$img")
      Start in:       $(q "$dir")
-     Launch options: (leave empty; in Game Mode HD-2D is already on)
+     Launch options: (leave empty; the original look is the default)
    Optional launch options:
-     --no-hd2d            the original look
+     --hd2d               the HD-2D look (or choose it in the menu, Look tab)
      --preset subtle      a lighter HD-2D look (or: off, hd2d, deck)
      --pacing vsync       pace by the display's vsync (60 Hz screens)
 

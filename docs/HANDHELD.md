@@ -55,7 +55,7 @@ packaging/steam/add-to-steam.sh ~/Applications/CT_Recomp-x86_64.AppImage
    **Browse...**. Pick the AppImage (choose "All Files" as the file type if it isn't
    listed), then **Add Selected Programs**.
 2. Right-click the new entry > **Properties...**. Name it `CT Recomp`. Leave the launch
-   options empty: in Game Mode the HD-2D look is on by default.
+   options empty: the game starts with the original look; turn HD-2D on in the menu (**Look** tab, renderer) or add `--hd2d`.
 3. **Properties** > **Controller**: choose the **Gamepad** layout. A keyboard or desktop
    layout sends keys rather than buttons.
 4. Optional artwork: `packaging/steam/artwork/` has a capsule (`grid.png`, 600x900), wide
@@ -413,7 +413,7 @@ pad 2 input (the `coop_*` ctests).
 ## Looks, frame rate and battery
 
 In Game Mode the engine starts fullscreen at the screen's size, with no mouse cursor and
-the HD-2D look on. Add `--no-hd2d` to the launch options for the original look.
+the original look. Turn HD-2D on in the menu (**Look** tab) or add `--hd2d` to the launch options; the Deck then gets its lighter preset by default.
 
 - **Steam Deck:** with no look saved yet, the engine picks the **deck** preset. It is the
   HD-2D look with a shorter depth-of-field blur and a single bloom level. On the 16:10
