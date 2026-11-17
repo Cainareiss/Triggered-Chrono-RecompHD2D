@@ -1977,6 +1977,13 @@ state = "m1x0"
 returns = "RTL"
 exit_state = "m1x0"
 
+# Menu_RunWinSlots calls the slot's handler through Menu_CallSlotVector (JMP
+# ($0050)); the handlers return in m0x0 as often as in the assumed m1x0 (Leene
+# Square, menu_tour and the other replays: $C20541 reached with m0x0).
+[[cont]]
+site = 0xC2053E
+states = ["m0x0"]
+
 # Not registered on purpose: $C198C5 (EnemyAI action-prep case 4). It ends in
 # JMP $8C90 into the loop that calls it, so as an entry it would swallow that
 # loop and its callee's RTS would be ambiguous. tools/discover.py proposes it
@@ -11991,7 +11998,8 @@ source = "profile"
 [[func]]
 name = "Menu_HighlightPanel3Rows"
 addr = 0xC29E76
-states = ["m0x0"]
+states = ["m0x0", "m1x1"]
+profile_states = ["m1x1"]
 e = 0
 module = "bankc2"
 source = "profile"
@@ -12047,7 +12055,8 @@ source = "profile"
 [[func]]
 name = "Menu_HighlightItemTabStrip"
 addr = 0xC2B6AE
-states = ["m1x0"]
+states = ["m1x0", "m1x1"]
+profile_states = ["m1x1"]
 e = 0
 module = "bankc2"
 source = "profile"
@@ -12079,7 +12088,8 @@ source = "profile"
 [[func]]
 name = "Menu_DrawConfigToggles"
 addr = 0xC2C3E4
-states = ["m0x0"]
+states = ["m0x0", "m1x0"]
+profile_states = ["m1x0"]
 e = 0
 module = "bankc2"
 source = "profile"
@@ -12327,7 +12337,7 @@ source = "profile"
 [[func]]
 name = "Menu_CopyTilemapRectCmd"
 addr = 0xC2EF05
-states = ["m1x0"]
+states = ["m1x0", "m0x0"]
 e = 0
 module = "bankc2"
 source = "profile"
@@ -12391,7 +12401,8 @@ source = "profile"
 [[func]]
 name = "MenuSprite_AssignChars0to6"
 addr = 0xC2F566
-states = ["m1x0"]
+states = ["m1x0", "m1x1"]
+profile_states = ["m1x1"]
 e = 0
 module = "bankc2"
 source = "profile"
@@ -15217,7 +15228,8 @@ source = "profile"
 [[func]]
 name = "MenuTask_Sleep"
 addr = 0xC2821E
-states = ["m0x0", "m1x0"]
+states = ["m0x0", "m1x0", "m0x1"]
+profile_states = ["m0x1"]
 e = 0
 module = "bankc2"
 source = "profile"
@@ -15407,6 +15419,298 @@ e = 0
 module = "bankc3"
 
 [[func]]
+name = "C2Scene_TaskRunScript"
+addr = 0xC20F63
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C21DD4"
+addr = 0xC21DD4
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C220A2"
+addr = 0xC220A2
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C22105"
+addr = 0xC22105
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C22F0F"
+addr = 0xC22F0F
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C22F94"
+addr = 0xC22F94
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C2309E"
+addr = 0xC2309E
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C23264"
+addr = 0xC23264
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C23404"
+addr = 0xC23404
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C23AE2"
+addr = 0xC23AE2
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C25628"
+addr = 0xC25628
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "C2Scene_PlaceBelowView"
+addr = 0xC2754D
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C27575"
+addr = 0xC27575
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C27598"
+addr = 0xC27598
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C275C3"
+addr = 0xC275C3
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C278A1"
+addr = 0xC278A1
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "BankC2_Entry8000"
+addr = 0xC28000
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C28213"
+addr = 0xC28213
+states = ["m1x0", "m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C283BD"
+addr = 0xC283BD
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_Draw4IndexedStrings"
+addr = 0xC2A6F0
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_ItemCursorRowSelect"
+addr = 0xC2AD2E
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_RefreshTechRowMpState"
+addr = 0xC2BB1F
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_TechGetPartners"
+addr = 0xC2BBD6
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Menu_ComputeTechMpCost"
+addr = 0xC2BC22
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Menu_ApplyMpCostStuds"
+addr = 0xC2BC59
+states = ["m0x0", "m1x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Menu_ConfigUpdateDesc"
+addr = 0xC2C4BC
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2EFF4"
+addr = 0xC2EFF4
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F005"
+addr = 0xC2F005
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F011"
+addr = 0xC2F011
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F036"
+addr = 0xC2F036
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F068"
+addr = 0xC2F068
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F08D"
+addr = 0xC2F08D
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F0A2"
+addr = 0xC2F0A2
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F0B8"
+addr = 0xC2F0B8
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F0D1"
+addr = 0xC2F0D1
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_DrawDescStringCC2EB1"
+addr = 0xC2F2F3
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Menu_UpdateDescWindowFF"
+addr = 0xC2F943
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
 name = "Audio_ServiceExit"
 addr = 0xC70192
 states = ["m1x0"]
@@ -15426,6 +15730,7 @@ addr = 0xC70A39
 states = ["m1x0"]
 e = 0
 module = "bankc7"
+source = "profile"
 
 [[func]]
 name = "BattleCF_ExitBattle"
@@ -15433,6 +15738,7 @@ addr = 0xCFFBE5
 states = ["m1x0"]
 e = 0
 module = "bankcf"
+source = "profile"
 
 # JSR from Loc_C0264F ($C026BA, $C026D1, $C026E4), all m1x0 straight from the
 # routine's entry (no earlier callee changes M/X); discover.py skips these
@@ -15460,3 +15766,546 @@ addr = 0xC0FF14
 states = ["m1x0", "m0x0", "m1x1", "m0x1"]
 e = 0
 module = "bankc0"
+
+# ---- NMI/IRQ handlers behind the WRAM trampolines $000500/$000504 (#105) ----
+# The hardware vectors JML $000500 / $000504, a JML each mode installs
+# (Menu_InstallInterruptVectors, Mode7Engine_Init, Boot_InstallVectors, the
+# battle's own, Field_Install*Vector). An interrupt arrives in any M/X, and
+# the profile saw $000500 entered m1x0, m0x0 and m1x1 and $000504 m1x0, m0x0
+# and m1x1; every handler starts with REP/SEP or saves P itself, so all four
+# states are registered.
+
+[[func]]
+name = "Menu_NmiHandler"
+addr = 0xC2015E
+states = ["m0x0", "m1x0", "m0x1", "m1x1"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_IrqHandler"
+addr = 0xC20345
+states = ["m0x0", "m1x0", "m0x1", "m1x1"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Mode7_NmiHandler"
+addr = 0xC30548
+states = ["m0x0", "m1x0", "m0x1", "m1x1"]
+e = 0
+module = "bankc3"
+source = "profile"
+
+[[func]]
+name = "Mode7_IrqHandler"
+addr = 0xC30529
+states = ["m0x0", "m1x0", "m0x1", "m1x1"]
+e = 0
+module = "bankc3"
+source = "profile"
+
+[[func]]
+name = "Battle_NmiHandler"
+addr = 0xD1E77C
+states = ["m0x0", "m1x0", "m0x1", "m1x1"]
+e = 0
+module = "bankd1"
+source = "profile"
+
+[[func]]
+name = "Battle_IrqHandler"
+addr = 0xD1FE97
+states = ["m0x0", "m1x0", "m0x1", "m1x1"]
+e = 0
+module = "bankd1"
+source = "profile"
+
+[[func]]
+name = "Boot_NmiHandler"
+addr = 0xFDDE15
+states = ["m0x0", "m1x0", "m0x1", "m1x1"]
+e = 0
+module = "bankfd"
+source = "profile"
+
+[[func]]
+name = "Boot_IrqHandler"
+addr = 0xFDDE87
+states = ["m0x0", "m1x0", "m0x1", "m1x1"]
+e = 0
+module = "bankfd"
+source = "profile"
+
+# ---- lane C: continuation states / hand-offs ----
+
+# Mode7_VblankUpdate calls the Mode-7 overlay's frame routine at $7E39BE
+# (WRAM code, not compiled); it returns with 16-bit A (m0x0 in every replay
+# that reaches it: world_map_save, menu_tour, Leene Square).
+[[cont]]
+site = 0xC308F7
+states = ["m0x0"]
+
+
+# ---- discovered by tools/discover.py (entry state from call sites) ----
+
+[[func]]
+name = "Sub_C220AF"
+addr = 0xC220AF
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C220DF"
+addr = 0xC220DF
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C22116"
+addr = 0xC22116
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C22152"
+addr = 0xC22152
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C2216F"
+addr = 0xC2216F
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Loc_C22345"
+addr = 0xC22345
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Loc_C22353"
+addr = 0xC22353
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Loc_C22379"
+addr = 0xC22379
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Sub_C22FA5"
+addr = 0xC22FA5
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C22FAE"
+addr = 0xC22FAE
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C230CD"
+addr = 0xC230CD
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C23279"
+addr = 0xC23279
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C23439"
+addr = 0xC23439
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C2563F"
+addr = 0xC2563F
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C25663"
+addr = 0xC25663
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C25699"
+addr = 0xC25699
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_C256F9"
+addr = 0xC256F9
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_BuildSortedEquipList"
+addr = 0xC28953
+states = ["m1x0", "m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_DrawBlinkRowMarker"
+addr = 0xC289FA
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_CursorBlinkGate"
+addr = 0xC28B6E
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Menu_ApplyListScrollInput"
+addr = 0xC293BF
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_DrawCharDetailPanel"
+addr = 0xC2A22F
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_DrawSelLabelString"
+addr = 0xC2A38B
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_HighlightTabStripAt"
+addr = 0xC2A3ED
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_WindowScrollStepDown"
+addr = 0xC2A7B7
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_WindowScrollStepUp"
+addr = 0xC2A970
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_WriteTileByte"
+addr = 0xC2AA19
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_WmdataWrite3"
+addr = 0xC2AA23
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "InventoryMenu_AB62"
+addr = 0xC2AB62
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "InventoryMenu_ABE9"
+addr = 0xC2ABE9
+states = ["m1x1"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_DrawItemListRows"
+addr = 0xC2AE43
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_SetItemRowParams"
+addr = 0xC2AE65
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_SetItemRowParamsY"
+addr = 0xC2AE75
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_SubTabCursorInput"
+addr = 0xC2B520
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "TechMenu_B568"
+addr = 0xC2B568
+states = ["m1x1"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "TechMenu_B5C8"
+addr = 0xC2B5C8
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Menu_TechRebuildOnSelChange"
+addr = 0xC2BC6F
+states = ["m1x1"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Tech_RebuildLists"
+addr = 0xC2BCAE
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Tech_BuildGroupList"
+addr = 0xC2BCCD
+states = ["m1x1"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Tech_BuildAvailableList"
+addr = 0xC2BD00
+states = ["m1x1"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Menu_DrawTechListRows"
+addr = 0xC2BD6B
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Menu_DrawTechListRow"
+addr = 0xC2BD99
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Menu_DrawTechName"
+addr = 0xC2BDB2
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+
+[[func]]
+name = "Menu_DrawTechBit6Marker"
+addr = 0xC2BDEB
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_DrawTechTabText"
+addr = 0xC2BE16
+states = ["m1x1"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_ConfigCursorTick"
+addr = 0xC2BFD4
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PartyMenu_Init"
+addr = 0xC2C9E5
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "NameEntry_SetupScreen"
+addr = 0xC2E40E
+states = ["m1x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_ClampListCursorRow"
+addr = 0xC2EA53
+states = ["m1x0", "m1x1"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "PointersToRo_C2F071"
+addr = 0xC2F071
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_DrawIndexedString7D00"
+addr = 0xC2F2DC
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Menu_RunTextToCompletion"
+addr = 0xC2FAA8
+states = ["m0x0"]
+e = 0
+module = "bankc2"
+source = "profile"
+
+[[func]]
+name = "Sub_CFFCF5"
+addr = 0xCFFCF5
+states = ["m1x0"]
+e = 0
+module = "bankcf"
+source = "profile"
+
+[[func]]
+name = "M7Scene_UploadOam"
+addr = 0xFDF222
+states = ["m1x0"]
+e = 0
+module = "bankfd"
+
+[[func]]
+name = "M7Scene_UploadPalette"
+addr = 0xFDF266
+states = ["m1x0"]
+e = 0
+module = "bankfd"
+
+# EventCmd_Mode7Scene: after its frame ticks it reloads S=$06FF (TXS at
+# $C03FD9) and jumps into the Mode-7 engine or the warp stubs, which restart
+# the machine's main loop: nothing returns to this routine's caller (the same
+# stack reload as the BRL Engine_EntryTable path).
+[[handoff]]
+site = 0xC03FE0
+
+[[handoff]]
+site = 0xC03FE8
+
+[[handoff]]
+site = 0xC03FF0
+
+[[handoff]]
+site = 0xC03FF8
+
+[[handoff]]
+site = 0xC03FFC
+
+# Audio_Init_Entry -> Audio_UploadDriver: PHP at $C7003A saves the caller's P
+# before the first REP, and the tail $C70192 (Audio_ServiceExit) restores it
+# with PLP at $C7019D, so the RTL leaves M/X as they were at entry.
+[[exit]]
+addr = 0xC70000
+state = "m1x0"
+returns = "RTL"
+exit_state = "m1x0"
+
+# Not registered on purpose: $C00097 (the field frame loop, m1x0). The
+# interpreter re-enters it after a stack reload, so its 14 instructions run
+# interpreted every frame (about 0.013% of a replay), but as an entry the
+# endless loop fails diff_all's random-state trials (a callee entered m1x1
+# where the loop expects m1x0: gen and interpreter fault in different places).

@@ -744,7 +744,9 @@ def decode_function(rom: bytes, entry: int, st: State, resolve=None) -> Function
                         fn.exit_states.add(('?', None, None))
                     break
                 fn.tails[ikey] = (i.operand, cst)
-                fn.exit_states |= resolve.tail_required(addr, i.operand, cst)
+                exits = resolve.tail_required(addr, i.operand, cst)
+                if addr not in getattr(resolve, 'handoffs', ()):   # [[handoff]]: no return
+                    fn.exit_states |= exits
                 break
             elif mn == 'JMP' and i.mode == 'abs':
                 target = (addr & 0xFF0000) | i.operand
@@ -755,7 +757,8 @@ def decode_function(rom: bytes, entry: int, st: State, resolve=None) -> Function
                 exits = resolve.tail(addr, target, cst) if resolve is not None and not own else None
                 if exits is not None:
                     fn.tails[ikey] = (target, cst)
-                    fn.exit_states |= exits
+                    if addr not in getattr(resolve, 'handoffs', ()):   # [[handoff]]: no return
+                        fn.exit_states |= exits
                     break
                 addr, cur = target, nxt
                 continue
@@ -775,7 +778,7 @@ def decode_function(rom: bytes, entry: int, st: State, resolve=None) -> Function
                             raise
                 if exits is None:   # not compiled for this state, or returns who knows how
                     fn.interp_calls[ikey] = (target, cst)
-                    exits = {(nxt.m, nxt.x)}
+                    exits = {(nxt.m, nxt.x)} | set(getattr(resolve, 'conts', {}).get(addr, ()))
                 nxt = _continue(fn, ikey, i, nxt, exits, work)
                 if nxt is None:
                     break
@@ -792,8 +795,10 @@ def decode_function(rom: bytes, entry: int, st: State, resolve=None) -> Function
                         if addr not in getattr(resolve, 'handoffs', ()):   # [[handoff]]: no return
                             fn.exit_states.add(('?', None, None))   # whatever the target does
                         break
-                    nxt = _continue(fn, ikey, i, nxt, {(nxt.m, nxt.x)}, work)
-                    if not nxt.e:
+                    exits = {(nxt.m, nxt.x)} | set(getattr(resolve, 'conts', {}).get(addr, ()))
+                    many = len(exits) > 1   # [[cont]]: explicit continuation states win over the automatic ones
+                    nxt = _continue(fn, ikey, i, nxt, exits, work)
+                    if not many and not nxt.e:
                         # only pairs whose continuation ends the way the assumed one
                         # does (the callers know no other exit)
                         combos = dict(_plp_combos(rom, i.next_addr, nxt, resolve))
