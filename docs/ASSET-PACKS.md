@@ -157,6 +157,11 @@ own and list it first: `--pack myart --pack my4x`. Copy the entry from the place
 pack's `pack.toml` into yours (the `[[tile]]` block with its `key`, `file`, `w` and `h`),
 and put your picture at `file`.
 
+Every `file` in a `pack.toml` (tiles, poses, models, music) and every buffer or image
+a glTF names must stay inside its pack's folder, so a shared pack is data only. A path
+that is absolute, has a `..` part, a backslash or a drive letter, or a symlink that
+points outside the folder is refused with a message on stderr, and that entry is not loaded.
+
 ## Poses: a whole frame as one picture
 
 The SNES draws a character from several OAM pieces, and a `[[tile]]` replaces one piece.

@@ -123,6 +123,13 @@ typedef struct {
    for key = value, 0 for a line to skip. */
 int packs_toml_parse(char *s, packs_toml_line *t);
 
+/* Is rel (a path a manifest names) safe to open under root? A pack is data
+   only: refuses empty, absolute, backslash, drive/colon and ".." paths, and
+   any existing file whose real path leaves root (a symlink out). 0 = fine;
+   -1 = refused, with the reason in why (whylen bytes; may be NULL). A file
+   that does not exist is fine here: opening it reports that. */
+int packs_path_ok(const char *root, const char *rel, char *why, int whylen);
+
 /* ---- models (pack.toml [[model]]; the 3D path hooks them up later) ---- */
 /* ---- poses (pack.toml [[pose]]): a whole animation frame as one picture ----
    Keyed by the game module's pose key (module.h ct_scene_pose): one

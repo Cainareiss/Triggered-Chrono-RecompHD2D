@@ -9,8 +9,10 @@
  *
  * usage: test_packs SOURCE_DIR TMP_DIR */
 #include <stdio.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "packs.h"
 #include "pngio.h"
@@ -445,6 +447,82 @@ static void test_poses_and_keys(const char *tmp)
     CHECK(!packs_have_poses() && packs_lookup_pose(0x01000002) == NULL, "unload: no poses");
 }
 
+/* A pack is data only: a manifest path that leaves the pack is refused. */
+static void write_text(const char *path, const char *text)
+{
+    FILE *f = fopen(path, "w");
+    if (f) {
+        fputs(text, f);
+        fclose(f);
+    }
+}
+
+static void test_traversal(const char *tmp)
+{
+    char cmd[4400], root[4096], evil[4096], good[4096], path[4400], toml[4096];
+    char abstmp[4096];
+    if (!realpath(tmp, abstmp))
+        snprintf(abstmp, sizeof abstmp, "%s", tmp);
+    snprintf(root, sizeof root, "%s/trav", abstmp);
+    snprintf(evil, sizeof evil, "%s/evil", root);
+    snprintf(good, sizeof good, "%s/good", root);
+    snprintf(cmd, sizeof cmd, "mkdir -p '%s/tiles' '%s/models' '%s/tiles'", evil, evil, good);
+    CHECK(system(cmd) == 0, "mkdir");
+    static uint8_t px[8 * 8 * 4];
+    memset(px, 0x55, sizeof px);
+    snprintf(path, sizeof path, "%s/outside.png", root);
+    CHECK(!pngio_write_rgba(path, px, 8, 8), "write outside.png");
+    snprintf(path, sizeof path, "%s/tiles/ok.png", good);
+    CHECK(!pngio_write_rgba(path, px, 8, 8), "write ok.png");
+    snprintf(path, sizeof path, "%s/tiles/link.png", evil);
+    CHECK(symlink("../../outside.png", path) == 0, "symlink");
+    write_text(strcat(strcpy(path, root), "/outside.bin"), "xxxx");
+    write_text(strcat(strcpy(path, evil), "/models/m.gltf"),
+               "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"uri\":\"../../outside.bin\","
+               "\"byteLength\":4}]}");
+
+    const char *bad[] = {"../outside.png", "tiles/../../outside.png", "ABS", "tiles\\\\x.png",
+                         "C:/x.png", "tiles/link.png"};
+    char *p = toml;
+    p += sprintf(p, "[pack]\nversion = 1\n");
+    for (size_t k = 0; k < sizeof bad / sizeof *bad; k++) {
+        char abs[4200];
+        snprintf(abs, sizeof abs, "%s/outside.png", root);
+        p += sprintf(p, "\n[[tile]]\nkey = \"%016zx\"\nfile = \"%s\"\nw = 8\nh = 8\n", k + 1,
+                     !strcmp(bad[k], "ABS") ? abs : bad[k]);
+    }
+    p += sprintf(p, "\n[[model]]\nfile = \"../outside.png\"\nmap = 0x1F0\n");
+    p += sprintf(p, "\n[[model]]\nfile = \"models/m.gltf\"\nmap = 0x1F0\n");
+    snprintf(path, sizeof path, "%s/pack.toml", evil);
+    write_text(path, toml);
+
+    const char *dirs[1] = {evil};
+    packs_load(dirs, 1);
+    int tiles = 0;
+    for (uint64_t k = 1; k <= 6; k++)
+        tiles += packs_lookup_tile(k) != NULL;
+    CHECK(tiles == 0, "tiles naming paths outside the pack: %d loaded", tiles);
+    int n = -1;
+    const packs_model *pm = packs_models(&n);
+    CHECK(n == 1 && pm[0].primitives == 0 && pm[0].meshes == 0,
+          "model paths outside the pack: none kept, the glTF with an outside buffer has no mesh (%d)", n);
+    packs_unload();
+
+    packs_model m;
+    char err[512];
+    memset(&m, 0, sizeof m);
+    snprintf(path, sizeof path, "%s/models/m.gltf", evil);
+    CHECK(packs_model_parse(path, &m, err, sizeof err) == -1 && strstr(err, "'..'"),
+          "glTF buffer outside the pack: %s", err);
+
+    snprintf(path, sizeof path, "%s/pack.toml", good);
+    write_text(path, "[pack]\nversion = 1\n\n[[tile]]\nkey = \"00000000000000aa\"\n"
+                     "file = \"tiles/ok.png\"\nw = 8\nh = 8\n");
+    dirs[0] = good;
+    CHECK(packs_load(dirs, 1) == 1, "a normal entry still loads");
+    packs_unload();
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) {
@@ -463,6 +541,7 @@ int main(int argc, char **argv)
     test_dump_and_load(tmp);
     test_models(argv[1]);
     test_poses_and_keys(tmp);
+    test_traversal(tmp);
     printf("packs: %ld checks, %ld failed\n", checks, fails);
     return fails ? 1 : 0;
 }

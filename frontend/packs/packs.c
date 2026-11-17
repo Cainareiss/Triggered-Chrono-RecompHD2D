@@ -19,6 +19,57 @@
 
 #include "pngio.h"
 
+/* ---- manifest paths: a pack is data only, so a path stays inside it ---- */
+
+static char *real_path(const char *p, char *out)
+{
+#ifdef _WIN32
+    return _fullpath(out, p, 4096);
+#else
+    return realpath(p, out);
+#endif
+}
+
+int packs_path_ok(const char *root, const char *rel, char *why, int whylen)
+{
+    const char *bad = NULL;
+    if (!rel || !rel[0])
+        bad = "empty path";
+    else if (rel[0] == '/')
+        bad = "absolute path";
+    else if (strchr(rel, '\\'))
+        bad = "backslash in path";
+    else if (strchr(rel, ':'))
+        bad = "drive prefix or colon in path";
+    else {
+        for (const char *s = rel; *s;) {
+            size_t n = strcspn(s, "/");
+            if (n == 2 && s[0] == '.' && s[1] == '.') {
+                bad = "'..' in path";
+                break;
+            }
+            s += n + (s[n] ? 1 : 0);
+        }
+    }
+    if (!bad) {
+        char full[4096], rr[4096], rf[4096];
+        if (snprintf(full, sizeof full, "%s/%s", root, rel) >= (int)sizeof full)
+            bad = "path too long";
+        else if (real_path(full, rf)) {   /* missing files are the loader's to report */
+            size_t n;
+            if (!real_path(root, rr))
+                bad = "pack folder unreadable";
+            else if ((n = strlen(rr)) > 1 && rr[n - 1] == '/')
+                rr[--n] = 0;
+            if (!bad && (strncmp(rf, rr, n) || (rf[n] != '/' && rf[n] != 0 && n > 1)))
+                bad = "leaves the pack folder (symlink)";
+        }
+    }
+    if (bad && why && whylen > 0)
+        snprintf(why, (size_t)whylen, "%s", bad);
+    return bad ? -1 : 0;
+}
+
 /* ---- a uint64 -> int map (open addressing; key 0 is "empty") ---- */
 
 typedef struct {
@@ -702,7 +753,7 @@ static void load_one(const char *dir, pending **list, int *n, int *cap, kmap *ha
     }
     packs_toml_line t = {0};
     char key[64] = "", file[1024] = "";
-    int w = 0, h = 0, loaded = 0, missing = 0, flip = 0, models = 0;
+    int w = 0, h = 0, loaded = 0, missing = 0, rejected = 0, flip = 0, models = 0;
     packs_model mdl;
     model_defaults(&mdl);
     char table[32] = "";
@@ -721,8 +772,16 @@ static void load_one(const char *dir, pending **list, int *n, int *cap, kmap *ha
                     snprintf(path, sizeof path, "%s/%s", dir, file);
                     int iw, ih;
                     const char *err = NULL;
-                    uint8_t *img = pngio_read_rgba(path, &iw, &ih, &err);
-                    if (!img) {
+                    char why[96];
+                    uint8_t *img = NULL;
+                    int unsafe = packs_path_ok(dir, file, why, sizeof why);
+                    if (unsafe)
+                        fprintf(stderr, "packs: %s: file \"%s\": %s: skipped\n", dir, file, why);
+                    else
+                        img = pngio_read_rgba(path, &iw, &ih, &err);
+                    if (unsafe) {
+                        rejected++;
+                    } else if (!img) {
                         if (missing++ < 5)
                             fprintf(stderr, "packs: %s: %s\n", path, err ? err : "unreadable");
                     } else if (iw > 2048 || ih > 2048) {
@@ -747,10 +806,16 @@ static void load_one(const char *dir, pending **list, int *n, int *cap, kmap *ha
                     }
                 }
             } else if (!strcmp(table, "model") && file[0]) {
+                char why[96];
                 packs_model *nm = realloc(L.models, (size_t)(L.nmodels + 1) * sizeof *nm);
                 if (mdl.map < 0 && !mdl.n_tiles) {
                     fprintf(stderr, "packs: %s: [[model]] %s: needs map (with cells) or tiles\n",
                             dir, file);
+                } else if (packs_path_ok(dir, file, why, sizeof why)) {
+                    fprintf(stderr, "packs: %s: [[model]] file \"%s\": %s: skipped\n", dir, file, why);
+                    rejected++;
+                    if (nm)
+                        L.models = nm;   /* grown by one, unused */
                 } else if (nm) {
                     L.models = nm;
                     if (snprintf(mdl.file, sizeof mdl.file, "%s/%s", dir, file) >= (int)sizeof mdl.file)
@@ -782,6 +847,8 @@ static void load_one(const char *dir, pending **list, int *n, int *cap, kmap *ha
     fclose(f);
     fprintf(stderr, "packs: %s: %d replacements%s", dir, loaded,
             missing ? " (some files missing or unreadable)" : "");
+    if (rejected)
+        fprintf(stderr, ", %d paths refused (outside the pack)", rejected);
     if (models)
         fprintf(stderr, ", %d models", models);
     fputc('\n', stderr);
