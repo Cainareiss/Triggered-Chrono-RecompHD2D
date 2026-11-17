@@ -66,6 +66,11 @@ int overlays_battery_percent(void);
 /* Register the settings rows (settings.h). */
 void overlays_register_settings(void);
 
+/* Draw the overlays that are on, over the picture, while no menu is open:
+   one UI frame (ui_backend.h) with overlays_draw in it; does nothing, and
+   starts no UI frame, while none is on. Call before the buffer swap. */
+void overlays_present(int w, int h);
+
 #ifdef __cplusplus
 }
 struct ImDrawList;

@@ -690,6 +690,7 @@ static void present_plain(const uint8_t *bgrx)
         int s = ph / 180 > 2 ? ph / 180 : 2;
         osd_sdl_draw(ren, px + s * 4, py + s * 4, s, 1);
         padtest_draw(w, h);   /* port: the controller test's checklist */
+        overlays_present(w, h);   /* port: FPS, clock, battery, play time (overlays.h) */
     }
     SDL_RenderPresent(ren);
 }
@@ -774,6 +775,7 @@ static void present_hd2d(void)
         if (touch_gl_ok)
             touch_gl_draw(w, h);   /* port: touch overlay */
         padtest_draw(w, h);   /* port: the controller test's checklist */
+        overlays_present(w, h);   /* port: FPS, clock, battery, play time (overlays.h) */
     }
     SDL_GL_SwapWindow(win);
     if (log_gpu && sched_frame_count() % 60 == 0)

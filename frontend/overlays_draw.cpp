@@ -5,6 +5,7 @@
 #include "overlays.h"
 
 #include "imgui.h"
+#include "ui_backend.h"
 
 void overlays_draw(ImDrawList *dl, int w, int h)
 {
@@ -31,4 +32,15 @@ void overlays_draw(ImDrawList *dl, int w, int h)
     for (int k = 0; k < n; k++)
         dl->AddText(font, px, ImVec2(x + pad, y + pad + k * px * 1.15f),
                     IM_COL32(255, 255, 255, 230), lines[k]);
+}
+
+extern "C" void overlays_present(int w, int h)
+{
+    char lines[OVERLAY_COUNT][32];
+    if (overlays_lines(lines, OVERLAY_COUNT) <= 0 || !ui_ensure())
+        return;
+    ui_frame_begin(w, h);
+    ImGui::NewFrame();
+    overlays_draw(ImGui::GetForegroundDrawList(), w, h);
+    ui_frame_end();
 }

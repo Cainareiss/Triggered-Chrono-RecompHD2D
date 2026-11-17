@@ -492,6 +492,11 @@ if(SDL2_FOUND)
     add_test(NAME sdl_quickmenu COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_quickmenu.py
         $<TARGET_FILE:ct_sdl> 400 150)
     list(APPEND ct_game_tests sdl_quickmenu)
+    # port: the corner overlays (frontend/overlays.h) drawn over the plain picture:
+    # a clean run with three on, every frame hash as without them.
+    add_test(NAME sdl_overlays COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_overlays_present.py
+        $<TARGET_FILE:ct_sdl> 300)
+    list(APPEND ct_game_tests sdl_overlays)
 endif()
 
 set_tests_properties(${ct_game_tests} PROPERTIES LABELS rom ENVIRONMENT
