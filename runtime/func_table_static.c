@@ -11,11 +11,18 @@
 #include "func_table.h"
 #include "module.h"
 
-__attribute__((weak)) int ct_game_scene(ct_scene *out);   /* NULL: none linked */
-__attribute__((weak)) int ct_game_rumble(long frame);      /* rumble.h; NULL: none */
-__attribute__((weak)) extern const ct_music_hooks ct_game_music;
-__attribute__((weak)) int ct_game_text(ct_text *out);
-__attribute__((weak)) int ct_game_pose(int obj, ct_scene_pose *out, uint8_t *rgba, int max);
+/* port: PS5 titles (docs/PS5.md): hidden, so a missing one is NULL at
+   link time, not an import the console's loader can't resolve. */
+#ifdef CT_PS5
+#define CT_WEAK_LINKED __attribute__((weak, visibility("hidden")))
+#else
+#define CT_WEAK_LINKED __attribute__((weak))
+#endif
+CT_WEAK_LINKED int ct_game_scene(ct_scene *out);   /* NULL: none linked */
+CT_WEAK_LINKED int ct_game_rumble(long frame);      /* rumble.h; NULL: none */
+CT_WEAK_LINKED extern const ct_music_hooks ct_game_music;
+CT_WEAK_LINKED int ct_game_text(ct_text *out);
+CT_WEAK_LINKED int ct_game_pose(int obj, ct_scene_pose *out, uint8_t *rgba, int max);
 
 __attribute__((constructor)) static void install_linked_tables(void)
 {

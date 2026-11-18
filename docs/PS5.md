@@ -64,7 +64,36 @@ but the PS5's Zen 2 CPU should keep up.
 As with every build of this port, a file built with `CT_ROM` set holds code made from your
 ROM. Keep it on your own console and don't share it (docs/MODULES.md).
 
-## Install
+## Install as a title (eboot.bin, recommended)
+
+`packaging/ps5/title/build-title.sh` builds a real PS5 app folder, not a payload:
+
+```
+PPSA28350/
+  eboot.bin            the program (a fake-signed SELF)
+  sce_sys/param.json   title ID PPSA28350, "CT Recomp"
+  sce_sys/icon0.png
+  sce_module/libc.prx  the runtime shim the title loads
+```
+
+It uses [ps5-native-app-boilerplate](https://github.com/drakmor/ps5-native-app-boilerplate)
+at a pinned commit and applies `packaging/ps5/title/boilerplate.patch` to it. The patch adds
+the SDK library path at link time and fixes the RELRO file offset for programs where
+`.data.rel.ro` comes before `.got`. The engine is compiled against the boilerplate's
+pinned SDK and PacBrew's SDL2. It is linked in as one object, with missing game hooks
+resolved to NULL. Set `CT_ROM` to compile the game in.
+
+On the console you need etaHEN or kstuff (fake-signed SELFs), plus ShadowMountPlus:
+
+1. Copy the `PPSA28350` folder to `/data/homebrew/` over FTP.
+2. Put your ROM in it as `rom.sfc`. The title sees its folder as `/app0`.
+3. Run the exploit, then kstuff/etaHEN, then ShadowMountPlus. **CT Recomp** appears on the
+   home screen. Start it like any game.
+
+The title writes its log to the first writable folder in its list (see the next section),
+normally `/data/ct-recomp/ct-recomp.log`, because `/app0` is read-only.
+
+## Install as a payload folder (websrv launcher)
 
 `packaging/ps5/build.sh` makes a homebrew app folder, `build-ps5/homebrew/ct-recomp/`:
 
@@ -90,7 +119,7 @@ $PS5_PAYLOAD_SDK/bin/prospero-deploy -h PS5_IP -p 9021 build-ps5/homebrew/ct-rec
 
 Sent that way, it has no ROM argument. It looks for `rom.sfc` (or any single `*.sfc` /
 `*.smc`), and `ct_game.so` for the engine build, in these folders, in this order: its own
-folder, `/mnt/usb0/ct-recomp/`, `/mnt/usb1/ct-recomp/`, `/data/ct-recomp/`. If there's no
+folder, `/app0` (a title's folder), `/mnt/usb0/ct-recomp/`, `/mnt/usb1/ct-recomp/`, `/data/ct-recomp/`. If there's no
 ROM, a notification tells you where to put it.
 
 The controls are the same as with a controller on the desktop (docs/USER-GUIDE.md). To quit,

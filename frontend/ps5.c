@@ -29,6 +29,7 @@ int sceSystemServiceHideSplashScreen(void);
 static char self_dir[256];
 static const char *dirs[] = {
     self_dir,
+    "/app0",   /* an installed title's own folder (eboot.bin), read-only */
     "/mnt/usb0/ct-recomp",
     "/mnt/usb1/ct-recomp",
     "/data/ct-recomp",
@@ -67,19 +68,26 @@ void ps5_init(const char *argv0)
     else if (!getcwd(self_dir, sizeof self_dir) || !strcmp(self_dir, "/"))
         self_dir[0] = 0;   /* no usable folder: is_dir("") fails */
     mkdir("/data/ct-recomp", 0777);   /* so the log always has a home */
-    const char *log_dir = "/data/ct-recomp";
-    for (size_t k = 0; k < N_DIRS; k++)
-        if (is_dir(dirs[k])) {
-            log_dir = dirs[k];
-            break;
-        }
+    /* The first folder the log can be written in (/app0 can't). */
     char path[256];
-    snprintf(path, sizeof path, "%s/ct-recomp.log", log_dir);
-    if (freopen(path, "w", stderr))
+    int logged = 0;
+    for (size_t k = 0; k < N_DIRS && !logged; k++) {
+        if (!is_dir(dirs[k]))
+            continue;
+        snprintf(path, sizeof path, "%s/ct-recomp.log", dirs[k]);
+        FILE *probe = fopen(path, "w");
+        if (!probe)
+            continue;
+        fclose(probe);
+        chmod(path, 0666);   /* FTP servers can read it */
+        logged = 1;
+    }
+    if (logged && freopen(path, "w", stderr))
         setvbuf(stderr, NULL, _IOLBF, 0);   /* line by line: survives a crash */
-    if (freopen(path, "a", stdout))
+    if (logged && freopen(path, "a", stdout))
         setvbuf(stdout, NULL, _IOLBF, 0);
-    fprintf(stderr, "ct_ps5: log %s (program folder \"%s\")\n", path, self_dir);
+    fprintf(stderr, "ct_ps5: log %s (program folder \"%s\")\n", logged ? path : "(none)",
+            self_dir);
     sceSystemServiceHideSplashScreen();
 }
 
@@ -120,7 +128,7 @@ int ps5_find_files(const char **rom, const char **module, int want_module)
             }
         if (!*rom) {
             ps5_notify("ct-recomp: no ROM found.\nCopy your own headerless dump as "
-                       "rom.sfc into %s", self_dir[0] ? self_dir : "/data/ct-recomp");
+                       "rom.sfc into the app's folder or /data/ct-recomp.");
             return 1;
         }
     }
