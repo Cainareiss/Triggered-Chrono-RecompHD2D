@@ -44,15 +44,15 @@ packaging/ps5/build-deps.sh
 
 # 3a. Recommended: the game compiled in, from your ROM.
 CT_ROM=rom/your_dump.sfc packaging/ps5/build.sh
-#   -> build-ps5/ct_sdl.stripped.elf   (for your console only)
+#   -> build-ps5/homebrew/ct-recomp/   (for your console only)
 
 # 3b. Or the engine only (no game code, so it can be shared):
 packaging/ps5/build.sh
-#   -> build-ps5/ct_sdl_engine.stripped.elf
+#   -> build-ps5/homebrew/ct-recomp/
 #   Its game module, built from your ROM with the PS5 compiler:
 python3 tools/build_module.py --game game/ct --rom rom/your_dump.sfc \
     --out build-ps5 --cc "$PS5_PAYLOAD_SDK/bin/prospero-clang"
-#   -> build-ps5/ct_game.so
+#   -> build-ps5/ct_game.so; run build.sh again to put it in the folder
 ```
 
 `ct_sdl.elf` is the safest choice, because it's one self-contained payload.
@@ -64,36 +64,34 @@ but the PS5's Zen 2 CPU should keep up.
 As with every build of this port, a file built with `CT_ROM` set holds code made from your
 ROM. Keep it on your own console and don't share it (docs/MODULES.md).
 
-## Copy the files to the console
+## Install
 
-The payload looks for its files in these folders, in this order:
+`packaging/ps5/build.sh` makes a homebrew app folder, `build-ps5/homebrew/ct-recomp/`:
 
 ```
-/mnt/usb0/ct-recomp/    a USB drive (exFAT or FAT32), folder ct-recomp
-/mnt/usb1/ct-recomp/
-/data/ct-recomp/        internal storage
+ct-recomp/
+  eboot.elf          the payload (ct_sdl.elf, or ct_sdl_engine.elf + ct_game.so)
+  homebrew.js        the launcher tile: lists the ROMs here and starts the one you pick
+  sce_sys/icon0.png  the tile's icon
 ```
 
-Put `rom.sfc` there, or any single `*.sfc` / `*.smc` file. For the engine build, put
-`ct_game.so` there too. A USB stick is the easiest way. You can also use an FTP payload
-(e.g. ftpsrv, port 2121):
+1. Copy the whole `ct-recomp` folder to `/data/homebrew/` over FTP (e.g. ftpsrv, port 2121),
+   or to a USB drive's `homebrew/` folder (exFAT or FAT32).
+2. Put your ROM in that folder as `rom.sfc`.
+3. Run the exploit for your firmware. Then start the websrv payload and open the Homebrew
+   Launcher (or `http://PS5_IP:8080`). **CT Recomp** appears as a tile: pick it, then pick
+   the ROM.
+
+You can also send `eboot.elf` to the ELF loader (port 9021) yourself:
 
 ```sh
-curl -T rom/your_dump.sfc ftp://PS5_IP:2121/data/ct-recomp/rom.sfc
+$PS5_PAYLOAD_SDK/bin/prospero-deploy -h PS5_IP -p 9021 build-ps5/homebrew/ct-recomp/eboot.elf
 ```
 
-## Run
-
-1. Run the exploit for your firmware until the ELF loader is listening (port 9021).
-2. Send the payload from your PC:
-
-   ```sh
-   $PS5_PAYLOAD_SDK/bin/prospero-deploy -h PS5_IP -p 9021 build-ps5/ct_sdl.stripped.elf
-   # or: socat -u FILE:build-ps5/ct_sdl.stripped.elf TCP:PS5_IP:9021
-   ```
-
-   A homebrew launcher that runs ELFs from `/data` works too.
-3. If there's no ROM, a notification tells you where to put it.
+Sent that way, it has no ROM argument. It looks for `rom.sfc` (or any single `*.sfc` /
+`*.smc`), and `ct_game.so` for the engine build, in these folders, in this order: its own
+folder, `/mnt/usb0/ct-recomp/`, `/mnt/usb1/ct-recomp/`, `/data/ct-recomp/`. If there's no
+ROM, a notification tells you where to put it.
 
 The controls are the same as with a controller on the desktop (docs/USER-GUIDE.md). To quit,
 hold **Create + Options** for 2 seconds, then press **Cross**. Settings and saves go in
@@ -101,8 +99,8 @@ hold **Create + Options** for 2 seconds, then press **Cross**. Settings and save
 
 ## When something goes wrong
 
-Everything the program prints goes to `ct-recomp.log` in the first folder above that
-exists (otherwise `/data/ct-recomp/`). It's line-buffered, so it's complete up to a crash.
+Everything the program prints goes to `ct-recomp.log` in the first of those folders that
+exists, which is normally the app folder. It's line-buffered, so it's complete up to a crash.
 Fetch it over FTP or from the USB drive. When you report a problem, include it with your
 firmware version and the loader you used.
 
@@ -116,4 +114,7 @@ firmware version and the loader you used.
   the ROM and module in the folders above. Elsewhere this file compiles to nothing.
 - `frontend/main.c` (`#ifdef CT_PS5`): always fullscreen, the ROM and module from those
   folders, and the original renderer when no GL context can be made.
-- `packaging/ps5/`: the dependency and build scripts.
+- `frontend/main.c` also takes a bare ROM path as its argument on the PS5, which is what the
+  launcher passes.
+- `packaging/ps5/`: the dependency and build scripts, and the launcher tile
+  (`homebrew/homebrew.js`).

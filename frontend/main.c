@@ -3003,7 +3003,7 @@ int main(int argc, char **argv)
     static const char *import_srm, *export_srm;   /* port: QOL */
     static int recording, scripted;
 #ifdef CT_PS5
-    ps5_init();   /* port: the log file, the splash screen */
+    ps5_init(argc > 0 ? argv[0] : NULL);   /* port: the log file, the splash screen */
 #endif
     register_settings();   /* port: the settings registry (settings.h), before reading them */
     settings_load();   /* port: saved HD-2D settings; options below override */
@@ -3230,6 +3230,10 @@ int main(int argc, char **argv)
             export_srm = argv[++k];
         } else if (qol_option(argc, argv, &k) > 0) {
             /* port: QOL options (qol.h); a bad one is a usage error below */
+#ifdef CT_PS5
+        } else if (argv[k][0] != '-' && !rom_arg) {
+            rom_arg = argv[k];   /* port: a launcher passes the ROM alone (ps5.h) */
+#endif
         } else {
             usage(stderr);
             return 2;

@@ -6,9 +6,12 @@
  * an ELF loader on a jailbroken console: no command line, no terminal, no
  * Python or compiler, so the frontend finds its files in fixed folders:
  *
- *   /data/ct-recomp/        ROM (*.sfc), ct_game.so, ct-recomp.log
- *   /mnt/usb0/ct-recomp/    the same, on a USB drive (checked first)
- *   /mnt/usb1/ct-recomp/
+ *   <the program's folder>  e.g. /data/homebrew/ct-recomp/ (checked first)
+ *   /mnt/usb0/ct-recomp/    ROM (*.sfc), ct_game.so, ct-recomp.log
+ *   /mnt/usb1/ct-recomp/    the same, on a second USB drive
+ *   /data/ct-recomp/        the same, on internal storage
+ *
+ * A homebrew launcher may also pass the ROM's path as the one argument.
  *
  * Settings and saves go where SDL_GetPrefPath puts them on the PS5:
  * /user/home/<user id>/ct-recomp/.
@@ -20,8 +23,9 @@
 
 /* Send stdout and stderr to <first folder that exists>/ct-recomp.log
    (a payload's output otherwise goes nowhere a player can read) and hide
-   the system splash screen. Call first in main. */
-void ps5_init(void);
+   the system splash screen. argv0 (may be NULL) names the program's
+   folder, searched first. Call first in main. */
+void ps5_init(const char *argv0);
 
 /* Fill in what the command line didn't give: the ROM (rom.sfc, else the
    first *.sfc / *.smc in a folder above) and, when want_module is set, the

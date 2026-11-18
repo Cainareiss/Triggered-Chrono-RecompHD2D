@@ -28,4 +28,16 @@ done
 for f in "$out"/ct_sdl_engine.elf "$out"/ct_sdl.elf; do
     [ -f "$f" ] && "$PS5_PAYLOAD_SDK/bin/prospero-strip" -o "${f%.elf}.stripped.elf" "$f"
 done
-ls -l "$out"/*.elf "$out"/ct_game.so 2>/dev/null || true
+# The homebrew launcher's folder (websrv): copy it to /data/homebrew/ or
+# a USB drive's homebrew/ folder, and put rom.sfc in it.
+app=$out/homebrew/ct-recomp
+rm -rf "$app" && mkdir -p "$app/sce_sys"
+if [ -f "$out/ct_sdl.stripped.elf" ]; then
+    cp "$out/ct_sdl.stripped.elf" "$app/eboot.elf"
+else
+    cp "$out/ct_sdl_engine.stripped.elf" "$app/eboot.elf"
+    [ -f "$out/ct_game.so" ] && cp "$out/ct_game.so" "$app/"
+fi
+cp "$src/packaging/ps5/homebrew/homebrew.js" "$app/"
+cp "$src/packaging/icons/512x512/ct-recomp.png" "$app/sce_sys/icon0.png"
+ls -lR "$out/homebrew"

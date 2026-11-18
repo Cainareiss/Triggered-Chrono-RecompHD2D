@@ -13,6 +13,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 /* libkernel and libSceSystemService (linked through SDL2). */
 typedef struct {
@@ -23,9 +24,11 @@ int sceKernelSendNotificationRequest(int device, ps5_notify_request *req, size_t
                                      int blocking);
 int sceSystemServiceHideSplashScreen(void);
 
-/* USB first: a drive the player plugged in wins over an older copy in
-   /data. */
-static const char *const dirs[] = {
+/* The program's own folder (a homebrew launcher's app folder) first, then
+   USB: a drive the player plugged in wins over an older copy in /data. */
+static char self_dir[256];
+static const char *dirs[] = {
+    self_dir,
     "/mnt/usb0/ct-recomp",
     "/mnt/usb1/ct-recomp",
     "/data/ct-recomp",
@@ -56,8 +59,13 @@ void ps5_notify(const char *fmt, ...)
     sceKernelSendNotificationRequest(0, &req, sizeof req, 0);
 }
 
-void ps5_init(void)
+void ps5_init(const char *argv0)
 {
+    const char *slash = argv0 ? strrchr(argv0, '/') : NULL;
+    if (slash && argv0[0] == '/' && (size_t)(slash - argv0) < sizeof self_dir)
+        snprintf(self_dir, sizeof self_dir, "%.*s", (int)(slash - argv0), argv0);
+    else if (!getcwd(self_dir, sizeof self_dir) || !strcmp(self_dir, "/"))
+        self_dir[0] = 0;   /* no usable folder: is_dir("") fails */
     mkdir("/data/ct-recomp", 0777);   /* so the log always has a home */
     const char *log_dir = "/data/ct-recomp";
     for (size_t k = 0; k < N_DIRS; k++)
@@ -71,7 +79,7 @@ void ps5_init(void)
         setvbuf(stderr, NULL, _IOLBF, 0);   /* line by line: survives a crash */
     if (freopen(path, "a", stdout))
         setvbuf(stdout, NULL, _IOLBF, 0);
-    fprintf(stderr, "ct_ps5: log %s\n", path);
+    fprintf(stderr, "ct_ps5: log %s (program folder \"%s\")\n", path, self_dir);
     sceSystemServiceHideSplashScreen();
 }
 
@@ -79,6 +87,8 @@ void ps5_init(void)
    out, or 0. */
 static int find_rom_in(const char *dir, char *out, size_t n)
 {
+    if (!*dir)
+        return 0;
     snprintf(out, n, "%s/rom.sfc", dir);
     if (is_file(out))
         return 1;
@@ -109,8 +119,8 @@ int ps5_find_files(const char **rom, const char **module, int want_module)
                 rom_dir = dirs[k];
             }
         if (!*rom) {
-            ps5_notify("ct-recomp: no ROM found.\nCopy your own headerless dump to "
-                       "/data/ct-recomp/rom.sfc or a USB drive's ct-recomp folder.");
+            ps5_notify("ct-recomp: no ROM found.\nCopy your own headerless dump as "
+                       "rom.sfc into %s", self_dir[0] ? self_dir : "/data/ct-recomp");
             return 1;
         }
     }
