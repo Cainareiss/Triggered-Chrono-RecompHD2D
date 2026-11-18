@@ -213,6 +213,7 @@
 #include "padtest.h"    /* port: the controller test (--pad-test) */
 #include "rumble.h"     /* port: simulated rumble: the events */
 #include "rumble_out.h" /* port: simulated rumble: the controllers */
+#include "ps5.h"        /* port: PlayStation 5 homebrew (docs/PS5.md) */
 
 #ifndef CT_VERSION
 #define CT_VERSION "dev"
@@ -2739,6 +2740,10 @@ static int open_window(const char *title, int scale, int fullscreen)
        window is the whole screen anyway: start fullscreen. */
     if (game_mode)
         fullscreen = 1;
+#ifdef CT_PS5
+    else if (1)
+        fullscreen = 1;   /* port: a console: the whole screen, always */
+#endif
     else if (!fullscreen && wst.fs)
         fullscreen = 1;   /* port: as it was left */
     int ww = hd2d_mode ? SCHED_WIDTH * scale * 4 / 3 : SCHED_WIDTH * scale, wh = SCHED_HEIGHT * scale;
@@ -2786,8 +2791,16 @@ static int open_window(const char *title, int scale, int fullscreen)
         }
         if (!glctx) {
             fprintf(stderr, "ct_sdl: no usable OpenGL 3.3 / ES 3.0 context: %s\n", SDL_GetError());
+#ifdef CT_PS5
+            /* port: the PS5 has OpenGL only through an OSMesa library the
+               player adds (docs/PS5.md): without it, the plain picture. */
+            fprintf(stderr, "ct_sdl: PS5: falling back to the original renderer\n");
+            hd2d_mode = 0;
+            return open_window(title, scale, fullscreen);
+#else
             set_exit_reason("HD-2D renderer setup failed");
             return 1;
+#endif
         }
         SDL_GL_SetSwapInterval(0);   /* paced by the frame timer; choose_pacing may change it */
         /* port: the Steam Deck's APU gets the lighter look, unless the
@@ -2989,6 +3002,9 @@ int main(int argc, char **argv)
     static int no_save;
     static const char *import_srm, *export_srm;   /* port: QOL */
     static int recording, scripted;
+#ifdef CT_PS5
+    ps5_init();   /* port: the log file, the splash screen */
+#endif
     register_settings();   /* port: the settings registry (settings.h), before reading them */
     settings_load();   /* port: saved HD-2D settings; options below override */
     for (int k = 1; k < argc; k++) {
@@ -3336,6 +3352,19 @@ int main(int argc, char **argv)
         if (r == FIRSTRUN_INTERP)
             fprintf(stderr, "ct_sdl: no game module: running in the interpreter only\n");
         first_run = 1;
+    }
+#endif
+#ifdef CT_PS5
+    /* port: no command line from an ELF loader: the ROM and module from
+       the fixed folders (ps5.h). A build with the game compiled in
+       (CT_PS5_ENGINE unset) never loads a module. */
+#ifdef CT_PS5_ENGINE
+    if (ps5_find_files(&rom_arg, &module_path, 1)) {
+#else
+    if (ps5_find_files(&rom_arg, NULL, 0)) {
+#endif
+        set_exit_reason("no ROM");
+        return 2;
     }
 #endif
     if (!first_run)

@@ -51,6 +51,22 @@ endif()
 
 set(CT_WARN -Wall -Wextra -Wpedantic)
 
+# port: PlayStation 5 homebrew (docs/PS5.md), with the ps5-payload-sdk
+# toolchain (prospero-cmake), which sets PS5. The programs are ELF payloads
+# for an ELF loader on a jailbroken console. ct_sdl_engine has no first run
+# there (no Python or compiler on the console): it finds the ROM and
+# ct_game.so in fixed folders (frontend/ps5.h).
+if(PS5)
+    set(CT_PS5 ON)
+    add_compile_definitions(CT_PS5)
+    # Our context switch, not the console libc's getcontext (a syscall).
+    set(CT_COMPAT_UCONTEXT ON CACHE BOOL "" FORCE)
+    # The math functions are in libc: an empty target stands in for -lm.
+    add_library(m INTERFACE)
+    set(CMAKE_EXECUTABLE_SUFFIX ".elf")
+    message(STATUS "CT_PS5: PlayStation 5 payloads (ps5-payload-sdk at ${PS5_PAYLOAD_SDK})")
+endif()
+
 enable_testing()
 
 # The translator (recomp/), runtime, frontend, and engine tests are
@@ -201,7 +217,8 @@ if(SDL2_FOUND)
         frontend/rumble_out.c # port: simulated rumble on the controllers
         # port: frontend actions, their bindings, button glyphs in messages
         frontend/actions.c frontend/bindings.c frontend/glyphs.c frontend/osd_text.c
-        frontend/settings.c)   # port: the settings registry (settings.h)
+        frontend/settings.c   # port: the settings registry (settings.h)
+        frontend/ps5.c)   # port: PlayStation 5 (ps5.h); empty elsewhere
     target_include_directories(ct_input PUBLIC frontend)
     target_include_directories(ct_input PRIVATE runtime)   # port: rumble.h (rumble_out.c)
     target_link_libraries(ct_input PUBLIC SDL2::SDL2 m)
@@ -360,14 +377,23 @@ if(SDL2_FOUND)
         get_filename_component(ct_first_game ${ct_first_game} NAME)
         set(CT_GAME_ID ${ct_first_game} CACHE STRING "Default game for ct_sdl_engine (--game)")
     endif()
+    if(CT_PS5)   # port: no first run; the module from a fixed folder (ps5.h)
+        set(ct_sdl_engine_firstrun)
+    else()
+        set(ct_sdl_engine_firstrun ${CMAKE_SOURCE_DIR}/frontend/firstrun.c)
+    endif()
     ct_engine_exe(ct_sdl_engine ${CMAKE_SOURCE_DIR}/frontend/main.c
-        ${CMAKE_SOURCE_DIR}/frontend/firstrun.c ${CMAKE_SOURCE_DIR}/frontend/saves.c
+        ${ct_sdl_engine_firstrun} ${CMAKE_SOURCE_DIR}/frontend/saves.c
         ${CMAKE_SOURCE_DIR}/frontend/qol.c   # port: quality of life (qol.h)
         ${CMAKE_SOURCE_DIR}/frontend/padtest.c   # port: the controller test (padtest.h)
         ${CMAKE_SOURCE_DIR}/frontend/pack_scene.c)   # port: asset packs in the scene
     target_link_libraries(ct_sdl_engine ct_input ct_hd2d ct_packs ct_hdtext ct_menu)
-    target_compile_definitions(ct_sdl_engine PRIVATE CT_FIRSTRUN
-        CT_FIRSTRUN_GAME="${CT_GAME_ID}" CT_FIRSTRUN_DATA_DIR="${CT_ENGINE_DATA_DIR}")
+    if(CT_PS5)
+        target_compile_definitions(ct_sdl_engine PRIVATE CT_PS5_ENGINE CT_GAME_ID="${CT_GAME_ID}")
+    else()
+        target_compile_definitions(ct_sdl_engine PRIVATE CT_FIRSTRUN
+            CT_FIRSTRUN_GAME="${CT_GAME_ID}" CT_FIRSTRUN_DATA_DIR="${CT_ENGINE_DATA_DIR}")
+    endif()
 endif()
 
 # ---- engine tests: no game, no ROM (synthetic image, test/harness.h) ----
