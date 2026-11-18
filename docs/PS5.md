@@ -69,9 +69,9 @@ ROM. Keep it on your own console and don't share it (docs/MODULES.md).
 `packaging/ps5/title/build-title.sh` builds a real PS5 app folder, not a payload:
 
 ```
-PPSA28350/
+PPSA28351/
   eboot.bin            the program (a fake-signed SELF)
-  sce_sys/param.json   title ID PPSA28350, "CT Recomp"
+  sce_sys/param.json   title ID PPSA28351, "CT Recomp"
   sce_sys/icon0.png
   sce_module/libc.prx  the runtime shim the title loads
 ```
@@ -85,10 +85,16 @@ resolved to NULL. Set `CT_ROM` to compile the game in.
 
 On the console you need etaHEN or kstuff (fake-signed SELFs), plus ShadowMountPlus:
 
-1. Copy the `PPSA28350` folder to `/data/homebrew/` over FTP.
+1. Copy the `PPSA28351` folder to `/data/homebrew/` over FTP.
 2. Put your ROM in it as `rom.sfc`. The title sees its folder as `/app0`.
 3. Run the exploit, then kstuff/etaHEN, then ShadowMountPlus. **CT Recomp** appears on the
    home screen. Start it like any game.
+
+Before `main`, the title checks every system function it imports. Any that the console
+didn't bind are listed in a notification and in `/data/ct-recomp/imports.log`; calling one
+of those crashes with a page fault. A title process binds fewer libc functions than a
+payload does: `getcwd` was one, so `getcwd`, the environment, directory streams and a few
+others are implemented in `packaging/ps5/title/title.c` on top of libkernel.
 
 The title writes its log to the first writable folder in its list (see the next section),
 normally `/data/ct-recomp/ct-recomp.log`, because `/app0` is read-only.

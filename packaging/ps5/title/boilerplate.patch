@@ -1,3 +1,15 @@
+diff --git a/tooling/native/app-symbols.map b/tooling/native/app-symbols.map
+index 9f1c896..6e9d855 100644
+--- a/tooling/native/app-symbols.map
++++ b/tooling/native/app-symbols.map
+@@ -8,6 +8,5 @@
+ 
+ {
+     local:
+-        _Zn*;
+-        _Zd*;
++        *;   /* ct-recomp: nothing is exported (libc replacements included) */
+ };
 diff --git a/tooling/native/sce_module_writer.cpp b/tooling/native/sce_module_writer.cpp
 index b41dd9f..eb39354 100644
 --- a/tooling/native/sce_module_writer.cpp
