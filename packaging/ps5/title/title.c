@@ -229,6 +229,255 @@ int link(const char *a, const char *b)
     return errno = ENOSYS, -1;
 }
 
+/* ---- the heap ----
+   In a title, libSceLibcInternal's malloc runs out after a few MB (13.20:
+   "Out of memory" for SDL's 8 MB window surface, after the 4 MB ROM). So
+   malloc and friends are ours, over one large anonymous mapping: segregated
+   free lists of boundary-tagged blocks, 16-byte aligned, coalescing on
+   free, behind a spinlock. strdup too, so nothing we free came from the
+   console's heap. */
+void *mmap(void *addr, size_t len, int prot, int flags, int fd, long off);
+
+typedef struct ct_block {
+    size_t prev_size;            /* size of the block before, if it's free */
+    size_t size;                 /* this block, header included; bit 0: in use */
+    struct ct_block *next, *prev;   /* free blocks only (payload) */
+} ct_block;
+
+#define CT_HDR 16u
+#define CT_MIN 32u
+#define CT_BINS 48
+#define CT_USED ((size_t)1)
+static ct_block *bins[CT_BINS];
+static char *heap_lo, *heap_hi;
+static size_t heap_size;
+static volatile int heap_lock;
+static int heap_ready;
+
+static void lock(void)
+{
+    while (__atomic_exchange_n(&heap_lock, 1, __ATOMIC_ACQUIRE))
+        while (heap_lock)
+            __builtin_ia32_pause();
+}
+
+static void unlock(void)
+{
+    __atomic_store_n(&heap_lock, 0, __ATOMIC_RELEASE);
+}
+
+static int bin_of(size_t n)
+{
+    int b = 0;
+    while (b < CT_BINS - 1 && ((size_t)CT_MIN << (b + 1)) <= n)
+        b++;
+    return b;
+}
+
+static size_t bsize(const ct_block *b) { return b->size & ~CT_USED; }
+static ct_block *after(ct_block *b) { return (ct_block *)((char *)b + bsize(b)); }
+
+static void unlink_free(ct_block *b)
+{
+    if (b->prev)
+        b->prev->next = b->next;
+    else
+        bins[bin_of(bsize(b))] = b->next;
+    if (b->next)
+        b->next->prev = b->prev;
+}
+
+static void insert_free(ct_block *b)
+{
+    int i = bin_of(bsize(b));
+    b->prev = NULL;
+    b->next = bins[i];
+    if (bins[i])
+        bins[i]->prev = b;
+    bins[i] = b;
+    ct_block *n = after(b);
+    if ((char *)n < heap_hi)
+        n->prev_size = bsize(b);
+}
+
+static int heap_init(void)
+{
+    /* 1 GB, else the most the title gets down to 64 MB: the game itself
+       needs well under 256 MB. */
+    for (size_t want = (size_t)1 << 30; want >= ((size_t)64 << 20); want >>= 1) {
+        void *p = mmap(NULL, want, 3 /* PROT_READ|PROT_WRITE */,
+                       0x1000 | 0x2 /* MAP_ANON|MAP_PRIVATE */, -1, 0);
+        if (p && p != (void *)-1) {
+            heap_lo = p;
+            heap_size = want;
+            heap_hi = heap_lo + want - CT_HDR;   /* a used sentinel ends it */
+            ct_block *first = (ct_block *)heap_lo;
+            first->prev_size = 0;
+            first->size = (size_t)(heap_hi - heap_lo);
+            ct_block *end = (ct_block *)heap_hi;
+            end->size = CT_USED;
+            insert_free(first);
+            end->prev_size = bsize(first);
+            heap_ready = 1;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static void *alloc_locked(size_t n)
+{
+    if (!heap_ready && heap_init())
+        return NULL;
+    if (n > heap_size)
+        return NULL;
+    size_t need = (n + CT_HDR + 15) & ~(size_t)15;
+    if (need < CT_MIN)
+        need = CT_MIN;
+    for (int i = bin_of(need); i < CT_BINS; i++)
+        for (ct_block *b = bins[i]; b; b = b->next) {
+            if (bsize(b) < need)
+                continue;
+            unlink_free(b);
+            size_t rest = bsize(b) - need;
+            if (rest >= CT_MIN) {
+                b->size = need;
+                ct_block *r = after(b);
+                r->prev_size = need;
+                r->size = rest;
+                insert_free(r);
+            }
+            b->size |= CT_USED;
+            return (char *)b + CT_HDR;
+        }
+    return NULL;
+}
+
+static void free_locked(void *p)
+{
+    ct_block *b = (ct_block *)((char *)p - CT_HDR);
+    b->size &= ~CT_USED;
+    ct_block *n = after(b);
+    if ((char *)n < heap_hi && !(n->size & CT_USED)) {   /* merge the next one */
+        unlink_free(n);
+        b->size += bsize(n);
+    }
+    if ((char *)b > heap_lo) {   /* merge the previous one, if free */
+        ct_block *pb = (ct_block *)((char *)b - b->prev_size);
+        if (b->prev_size && !(pb->size & CT_USED)) {
+            unlink_free(pb);
+            pb->size += bsize(b);
+            b = pb;
+        }
+    }
+    insert_free(b);
+}
+
+static int ours(const void *p)
+{
+    return (const char *)p >= heap_lo && (const char *)p < heap_hi;
+}
+
+void *malloc(size_t n)
+{
+    lock();
+    void *p = alloc_locked(n ? n : 1);
+    unlock();
+    if (!p)
+        errno = ENOMEM;
+    return p;
+}
+
+void free(void *p)
+{
+    if (!p || !ours(p))   /* not ours: from the console's heap; leave it */
+        return;
+    lock();
+    free_locked(p);
+    unlock();
+}
+
+void *calloc(size_t a, size_t b)
+{
+    if (b && a > (size_t)-1 / b)
+        return errno = ENOMEM, NULL;
+    void *p = malloc(a * b);
+    if (p)
+        memset(p, 0, a * b);
+    return p;
+}
+
+void *realloc(void *p, size_t n)
+{
+    if (!p)
+        return malloc(n);
+    if (!n) {
+        free(p);
+        return NULL;
+    }
+    size_t have = ours(p) ? bsize((ct_block *)((char *)p - CT_HDR)) - CT_HDR : 0;
+    if (have >= n)
+        return p;
+    void *q = malloc(n);
+    if (q && have)
+        memcpy(q, p, have);
+    if (q)
+        free(p);
+    return q;
+}
+
+int posix_memalign(void **out, size_t align, size_t n)
+{
+    if (align < 16)
+        align = 16;
+    if (align & (align - 1))
+        return 22;   /* EINVAL */
+    lock();
+    char *raw = alloc_locked(n + align + CT_MIN);
+    if (!raw) {
+        unlock();
+        return 12;   /* ENOMEM */
+    }
+    uintptr_t at = ((uintptr_t)raw + CT_MIN + align - 1) & ~(uintptr_t)(align - 1);
+    if (((uintptr_t)raw & (align - 1)) == 0)
+        at = (uintptr_t)raw;
+    if (at != (uintptr_t)raw) {   /* give the front back as its own free block */
+        ct_block *b = (ct_block *)(raw - CT_HDR);
+        size_t front = (at - CT_HDR) - (uintptr_t)b, total = bsize(b);
+        ct_block *a = (ct_block *)(at - CT_HDR);
+        a->prev_size = front;
+        a->size = (total - front) | CT_USED;
+        b->size = front | CT_USED;
+        ct_block *n2 = after(a);
+        if ((char *)n2 < heap_hi)
+            n2->prev_size = bsize(a);
+        free_locked(raw);   /* sets a->prev_size, merged or not */
+    }
+    unlock();
+    *out = (void *)at;
+    return 0;
+}
+
+void *aligned_alloc(size_t align, size_t n)
+{
+    void *p;
+    return posix_memalign(&p, align, n) ? NULL : p;
+}
+
+void *memalign(size_t align, size_t n)
+{
+    return aligned_alloc(align, n);
+}
+
+char *strdup(const char *s)
+{
+    size_t n = k_strlen(s) + 1;
+    char *p = malloc(n);
+    if (p)
+        memcpy(p, s, n);
+    return p;
+}
+
 /* ---- the keyboard and IME dialog: not bound in a title (13.20) ----
    SDL's PS5 video driver calls these at start-up; failing them leaves SDL
    without a keyboard, which a console game doesn't need. */
