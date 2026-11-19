@@ -2801,6 +2801,12 @@ static void on_frame(long f)
             int n = uipanel_frame(sched_prov(), hd_text_now.lines ? hdtext_removed() : NULL,
                                   pmask, prect);
             hd2d_set_ui_panels(pmask, (const float (*)[4])prect, n, menu_style);
+#ifdef CT_PS5
+            /* port: every 5 s, what it found, for tuning (a small text file) */
+            static unsigned dbg_frames;
+            if (++dbg_frames % 300 == 0)
+                uipanel_debug_write("/data/ct-recomp/menus.txt");
+#endif
         } else {
             hd2d_set_ui_panels(NULL, NULL, 0, 0);
         }

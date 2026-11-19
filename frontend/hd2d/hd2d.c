@@ -581,6 +581,7 @@ static struct {
         /* The world map (CT_SCENE_WORLD, scene3d_world.c): the ground's
            normals, the overlay's tilemap; its own camera; entrance marks. */
         GLuint t_world_nrm, t_overlay;
+        int cloud_pal;   /* port: the overlay's clouds' palette, -1 any */
         /* Console pixels the scene doesn't hold (s3d_box_mask): R8UI, the
            console's size; laid flat over the 3D picture with the UI. */
         GLuint t_box;
@@ -2077,6 +2078,23 @@ static void s3d_update(const ct_scene *sc)
         if (sc->layer[2].present && sc->layer[2].tiles && sc->overlay_h <= 128)
             p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, CT_SCENE_WORLD_STRIDE, sc->overlay_h,
                               GL_RED_INTEGER, GL_UNSIGNED_SHORT, sc->layer[2].tiles);
+        /* port: the clouds' palette, the overlay's commonest one: a caption
+           (a place's name) is drawn into the same layer with another
+           palette, and its box floated over the map as a pale square */
+        g.s3.cloud_pal = -1;
+        if (sc->layer[2].present && sc->layer[2].tiles && sc->overlay_h <= 128) {
+            int cnt[8] = {0};
+            for (int y = 0; y < sc->overlay_h; y++)
+                for (int x = 0; x < sc->overlay_w && x < CT_SCENE_WORLD_STRIDE; x++) {
+                    uint16_t e = sc->layer[2].tiles[y * CT_SCENE_WORLD_STRIDE + x];
+                    if (e & 0x3FF)
+                        cnt[(e >> 10) & 7]++;
+                }
+            int best = 0;
+            for (int k = 1; k < 8; k++)
+                best = cnt[k] > cnt[best] ? k : best;
+            g.s3.cloud_pal = cnt[best] ? best : -1;
+        }
     } else {
         s3d_build_sprites(sc, &p, &g.s3.spr);
         p_glBindVertexArray(g.s3.vao[1]);
@@ -2586,6 +2604,7 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
         p_glUniform1i(U(P, "uPassKind"), 0);
         p_glUniform1f(U(P, "uTime"), (float)(g.frame % 36000u) / 60.0f);
         p_glUniform1i(U(P, "uOverlayChr"), sc->layer[2].chr_base);
+        p_glUniform1i(U(P, "uCloudPal"), g.s3.cloud_pal);
         p_glUniform4f(U(P, "uOverlay"), (float)sc->overlay_x, (float)sc->overlay_y,
                       8.0f * sc->overlay_w, 8.0f * sc->overlay_h);
         p_glUniform4f(U(P, "uCloud"), S3D_CLOUD_Y, sc->overlay_blend / 16.0f * 0.8f,

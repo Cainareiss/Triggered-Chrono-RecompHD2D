@@ -168,6 +168,7 @@ uniform sampler2D uWorldNrm;
 // scroll (px), size (px); uCloud: height, opacity, shadow amount (0: none).
 uniform usampler2D uOverlayMap;
 uniform int uOverlayChr;
+uniform int uCloudPal;           // port: the clouds' palette (-1: any)
 uniform vec4 uOverlay;
 uniform vec4 uCloud;
 uniform vec2 uCloudClear;        // where it thins out (over the player)
@@ -179,6 +180,8 @@ vec4 overlayTexel(vec2 p)
     vec2 q = mod(p + uOverlay.xy, uOverlay.zw);
     ivec2 t = ivec2(floor(q / 8.0));
     uint e = texelFetch(uOverlayMap, t, 0).r;
+    if (uCloudPal >= 0 && int((e >> 10u) & 7u) != uCloudPal)
+        return vec4(0.0);   // not a cloud: a caption's box (port)
     uint tile = ((uint(uOverlayChr) + (e & 0x3FFu) * 8u) & 0x7FFFu) | ((e >> 10u) & 7u) << 15u |
                 (1u << 18u);
     vec2 uv = q - vec2(t) * 8.0;

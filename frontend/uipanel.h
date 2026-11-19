@@ -24,4 +24,8 @@
 int uipanel_frame(const sched_prov_px *prov, const uint8_t *text_mask, uint8_t *mask,
                   float rects[UIPANEL_MAX][4]);
 
+/* port: the last frame's cell grid and what it made of each group, as
+   text (for tuning on a game's real windows). Returns 0 or -1. */
+int uipanel_debug_write(const char *path);
+
 #endif

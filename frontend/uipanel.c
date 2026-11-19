@@ -23,6 +23,8 @@
  * taken. */
 #include "uipanel.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 enum { W = SCHED_WIDTH, H = SCHED_HEIGHT, CW = W / 8 + 2, CH = H / 8 + 2 };
@@ -30,6 +32,14 @@ enum { W = SCHED_WIDTH, H = SCHED_HEIGHT, CW = W / 8 + 2, CH = H / 8 + 2 };
 static uint32_t cell_key[3][CH][CW];   /* 0: none; else key + 1 */
 static uint8_t cell_on[3][CH][CW];
 static int16_t comp[CH][CW];
+/* port: what the last frame found, for uipanel_debug_write */
+static char dbg[4096];
+static int dbg_len;
+#define DBG(...)                                                                         \
+    do {                                                                                 \
+        if (dbg_len < (int)sizeof dbg - 160)                                             \
+            dbg_len += snprintf(dbg + dbg_len, sizeof dbg - (size_t)dbg_len, __VA_ARGS__); \
+    } while (0)
 
 static uint32_t key_of(const sched_prov_px *p)
 {
@@ -37,24 +47,53 @@ static uint32_t key_of(const sched_prov_px *p)
             (uint32_t)(p->flags & 0x0C) << 22) + 1u;
 }
 
-/* The commonest key among n, and how often (0: none). */
+static int cmp_u32(const void *a, const void *b)
+{
+    uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
+    return x < y ? -1 : x > y;
+}
+
+/* The commonest key among n, and how often (0: none); sorted is left
+   holding them in order (for count_of). */
+static uint32_t sorted[CW * CH + CW + CH];
+static int n_sorted;
+
 static uint32_t mode_of(const uint32_t *k, int n, int *count)
 {
+    memcpy(sorted, k, sizeof *k * (size_t)n);
+    qsort(sorted, (size_t)n, sizeof *sorted, cmp_u32);
+    n_sorted = n;
     uint32_t best = 0;
     int bc = 0;
-    for (int i = 0; i < n; i++) {
-        if (!k[i])
-            continue;
-        int c = 0;
-        for (int j = 0; j < n; j++)
-            c += k[j] == k[i];
-        if (c > bc) {
-            bc = c;
-            best = k[i];
+    for (int i = 0; i < n;) {
+        int j = i;
+        while (j < n && sorted[j] == sorted[i])
+            j++;
+        if (sorted[i] && j - i > bc) {
+            bc = j - i;
+            best = sorted[i];
         }
+        i = j;
     }
     *count = bc;
     return best;
+}
+
+/* How often key is in the last mode_of's list. */
+static int count_of(uint32_t key)
+{
+    int lo = 0, hi = n_sorted;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (sorted[mid] < key)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    int c = 0;
+    while (lo + c < n_sorted && sorted[lo + c] == key)
+        c++;
+    return c;
 }
 
 static int edge_ok(const uint32_t *k, int n, uint32_t *key)
@@ -68,6 +107,8 @@ int uipanel_frame(const sched_prov_px *prov, const uint8_t *text_mask, uint8_t *
                   float rects[UIPANEL_MAX][4])
 {
     memset(mask, 0, (size_t)W * H);
+    dbg_len = 0;
+    dbg[0] = 0;
     if (!prov)
         return 0;
     memset(cell_key, 0, sizeof cell_key);
@@ -128,8 +169,11 @@ int uipanel_frame(const sched_prov_px *prov, const uint8_t *text_mask, uint8_t *
                 }
                 int id = nc++;
                 int bw = x1 - x0 + 1, bh = y1 - y0 + 1;
-                if (bw < 3 || bh < 2 || cells * 100 < bw * bh * 85 || bw * bh > 26 * 24)
+                if (bw < 3 || bh < 2 || cells * 100 < bw * bh * 85 || bw * bh > 26 * 24) {
+                    if (bw * bh >= 6)
+                        DBG("L%d %d,%d %dx%d: shape (cells %d)\n", l, x0, y0, bw, bh, cells);
                     continue;
+                }
                 /* the frame: each edge (corners aside) mostly one key */
                 uint32_t e[4][CW + CH], ek[4];
                 int en[4] = {0, 0, 0, 0};
@@ -144,8 +188,10 @@ int uipanel_frame(const sched_prov_px *prov, const uint8_t *text_mask, uint8_t *
                 int framed = 1;
                 for (int k = 0; k < 4; k++)
                     framed &= edge_ok(e[k], en[k], &ek[k]);
-                if (!framed)
+                if (!framed) {
+                    DBG("L%d %d,%d %dx%d: no frame\n", l, x0, y0, bw, bh);
                     continue;
+                }
                 /* the background: keys inside that repeat */
                 static uint32_t in[CW * CH];
                 int ni = 0;
@@ -156,11 +202,12 @@ int uipanel_frame(const sched_prov_px *prov, const uint8_t *text_mask, uint8_t *
                 int top_count;
                 mode_of(in, ni, &top_count);
                 int edge_inside = 0;
-                for (int i = 0; i < ni; i++)
-                    for (int k = 0; k < 4; k++)
-                        edge_inside += in[i] == ek[k] && en[k] > 0;
-                if (edge_inside * 4 > ni)   /* the "frame" is inside too: a map pattern */
+                for (int k = 0; k < 4; k++)
+                    edge_inside += en[k] > 0 && ek[k] ? count_of(ek[k]) : 0;
+                if (edge_inside * 4 > ni) {   /* the "frame" is inside too: a map pattern */
+                    DBG("L%d %d,%d %dx%d: frame inside\n", l, x0, y0, bw, bh);
                     continue;
+                }
                 static uint8_t bg[CH][CW];
                 memset(bg, 0, sizeof bg);
                 int marked = 0;
@@ -169,17 +216,17 @@ int uipanel_frame(const sched_prov_px *prov, const uint8_t *text_mask, uint8_t *
                         if (comp[cy][cx] != id)
                             continue;
                         int ring = cy == y0 || cy == y1 || cx == x0 || cx == x1;
-                        int c = 0;
-                        if (!ring)
-                            for (int i = 0; i < ni; i++)
-                                c += in[i] == cell_key[l][cy][cx];
+                        int c = ring ? 0 : count_of(cell_key[l][cy][cx]);
                         if (ring || (c >= 2 && c * 5 >= top_count)) {
                             bg[cy][cx] = 1;
                             marked++;
                         }
                     }
-                if (marked * 10 < bw * bh * 3)
+                if (marked * 10 < bw * bh * 3) {
+                    DBG("L%d %d,%d %dx%d: little background (%d)\n", l, x0, y0, bw, bh, marked);
                     continue;
+                }
+                DBG("L%d %d,%d %dx%d: window\n", l, x0, y0, bw, bh);
                 /* its pixels: this layer's, in a marked cell */
                 int px0 = x0 * 8 + ox[l] - 8, py0 = y0 * 8 + oy[l] - 8;
                 for (int y = py0 < 0 ? 0 : py0; y < py0 + bh * 8 && y < H; y++)
@@ -199,4 +246,39 @@ int uipanel_frame(const sched_prov_px *prov, const uint8_t *text_mask, uint8_t *
             }
     }
     return n;
+}
+
+int uipanel_debug_write(const char *path)
+{
+    FILE *f = fopen(path, "w");
+    if (!f)
+        return -1;
+    fprintf(f, "uipanel: one frame's cells per BG layer (same letter: same tile)\n%s\n", dbg);
+    for (int l = 0; l < 3; l++) {
+        uint32_t ids[62];
+        int n = 0;
+        fprintf(f, "layer %d\n", l);
+        for (int y = 0; y < CH; y++) {
+            char line[CW + 2];
+            for (int x = 0; x < CW; x++) {
+                uint32_t k = cell_on[l][y][x] ? cell_key[l][y][x] : 0;
+                int i = 0;
+                if (!k) {
+                    line[x] = '.';
+                    continue;
+                }
+                while (i < n && ids[i] != k)
+                    i++;
+                if (i == n && n < 62)
+                    ids[n++] = k;
+                static const char al[] =
+                    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+                line[x] = i < 62 ? al[i] : '#';
+            }
+            line[CW] = 0;
+            fprintf(f, "%s\n", line);
+        }
+    }
+    fclose(f);
+    return 0;
 }
