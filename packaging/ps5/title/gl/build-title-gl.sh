@@ -48,7 +48,7 @@ cp "$GL_SRC/native-app/ps5-pie.ld" "$GL_SRC/native-app/app-symbols.map" "$app/to
 cp "$GL_PREFIX/lib/libSceAgc.so" "$GL_PREFIX/lib/libSceAgcDriver.so" "$asdk/target/lib/"
 rm -f "$app/sce_sys/pic0.dds" "$app/sce_sys/pic1.dds" "$app/sce_sys/snd0.at9" \
     "$app/sce_sys/background-source.png" "$app/sce_sys/launch-background-source.png"
-cp "$src/packaging/icons/512x512/ct-recomp.png" "$app/sce_sys/icon0.png"
+cp "$src/packaging/ps5/icon0-hd2d.png" "$app/sce_sys/icon0.png"
 mkdir -p "$app/src" "$app/vendor/lib"
 cp "$here/title.c" "$app/src/title.c"
 cp "$GL_SRC/native-app/runtime_shims.c" "$app/src/runtime_shims.c"
@@ -74,7 +74,7 @@ rm -f "$app/vendor/ct_all.tmp.o"
 } > "$app/vendor/libct_group.a"
 
 cd "$app"
-make USE_CCACHE=0 init TITLE_ID="$TITLE_ID" APP_NAME="CT Recomp HD-2D"
+make USE_CCACHE=0 init TITLE_ID="$TITLE_ID" APP_NAME="CT5 HD-2D"
 python3 "$GL_SRC/tools/native-display-metadata.py" sce_sys/param.json --fps 120
 printf '#define CT_IMPORTS(X)\n' > src/imports.gen.h
 for pass in 1 2 3 4; do

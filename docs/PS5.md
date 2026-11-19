@@ -66,7 +66,7 @@ ROM. Keep it on your own console and don't share it (docs/MODULES.md).
 
 ## GPU build: HD-2D, the 3D diorama, up to 4K (experimental)
 
-`packaging/ps5/title/gl/build-title-gl.sh` builds title **PPSA28361, "CT Recomp HD-2D"**, a
+`packaging/ps5/title/gl/build-title-gl.sh` builds title **PPSA28361, "CT5 HD-2D"**, a
 separate app that draws on the PS5's GPU through
 [ps5-opengl](https://github.com/blackbearreloaded/ps5-opengl), an OpenGL 4.6 driver built on
 Mesa/Gallium, and its SDL2 bridge. The HD-2D renderer is on by default, and
@@ -87,7 +87,7 @@ Building it takes, in order (the script's header has the details):
 
 ## Mods (asset packs) on the PS5
 
-The GPU build (CT Recomp HD-2D) loads [asset packs](ASSET-PACKS.md) from
+The GPU build (CT5 HD-2D) loads [asset packs](ASSET-PACKS.md) from
 `/data/ct-recomp/packs/NAME/`, with one folder per pack, copied over FTP or from a USB drive.
 Fonts for HD text go in `/data/ct-recomp/fonts/`. The menu's **Packs** page lists every pack
 in that folder: turn each one on, choose its order, reload them, or switch on **Dump new

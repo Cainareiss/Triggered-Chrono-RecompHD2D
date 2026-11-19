@@ -55,8 +55,8 @@ cd "$kit"
 rm -rf src assets sce_sys/pic0.dds sce_sys/pic1.dds sce_sys/snd0.at9 \
     sce_sys/background-source.png sce_sys/launch-background-source.png
 mkdir -p src && cp "$here/title.c" src/title.c
-cp "$src/packaging/icons/512x512/ct-recomp.png" sce_sys/icon0.png
-make init TITLE_ID="$TITLE_ID" APP_NAME="CT Recomp"
+cp "$src/packaging/ps5/icon0.png" sce_sys/icon0.png
+make init TITLE_ID="$TITLE_ID" APP_NAME="CT5"
 # Until the import list stops changing: the check lists what the previous
 # build imported, and the check itself imports a few functions once it has
 # a non-empty list.
