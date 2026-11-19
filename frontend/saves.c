@@ -133,8 +133,10 @@ static int write_atomic_to(const char *target, const uint8_t *data, int keep_bak
     snprintf(tmp, sizeof tmp, "%s.tmp", target);
     snprintf(bak, sizeof bak, "%s.bak", target);
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0)
+    if (fd < 0) {
+        fprintf(stderr, "ct_sdl: save: cannot create %s (%s)\n", tmp, strerror(errno));
         return -1;
+    }
     size_t done = 0;
     while (done < CT_SRAM_SIZE) {
         ssize_t w = write(fd, data + done, CT_SRAM_SIZE - done);
@@ -144,7 +146,22 @@ static int write_atomic_to(const char *target, const uint8_t *data, int keep_bak
             break;
         done += (size_t)w;
     }
-    if (done != CT_SRAM_SIZE || fsync(fd)) {
+    /* port: a file system that has no fsync for us (the PS5's, for an
+       installed title, seen as saves lost there) is not a failed write:
+       only a real I/O error is. */
+    int synced = done == CT_SRAM_SIZE ? fsync(fd) : -1;
+    if (synced && done == CT_SRAM_SIZE &&
+        (errno == EINVAL || errno == ENOTSUP || errno == ENOSYS || errno == EPERM ||
+         errno == EACCES || errno == EBADF)) {
+        static int said;
+        if (!said++)
+            fprintf(stderr, "ct_sdl: save: fsync not available here (%s): writing without it\n",
+                    strerror(errno));
+        synced = 0;
+    }
+    if (done != CT_SRAM_SIZE || synced) {
+        fprintf(stderr, "ct_sdl: save: writing %s failed (%s)\n", tmp,
+                done != CT_SRAM_SIZE ? "short write" : strerror(errno));
         close(fd);
         remove(tmp);
         return -1;
@@ -169,6 +186,13 @@ static int write_atomic_to(const char *target, const uint8_t *data, int keep_bak
         }
     }
     if (rename(tmp, target)) {
+        int e = errno;
+        /* port: some file systems won't rename over a file: move it aside first */
+        if (!access(target, F_OK) && !remove(target) && !rename(tmp, target)) {
+            fsync_dir(target);
+            return 0;
+        }
+        fprintf(stderr, "ct_sdl: save: cannot rename %s to %s (%s)\n", tmp, target, strerror(e));
         remove(tmp);
         return -1;
     }
