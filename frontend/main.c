@@ -1616,32 +1616,48 @@ static void packs_refresh(void)
 #endif
     }
 #if defined(__unix__) || defined(__APPLE__) || defined(CT_PS5)
+    /* port: a folder is a pack if NAME/pack.toml opens (or NAME/NAME/pack.toml,
+       unzipped a level too deep); no stat(), whose struct differs on the PS5 */
     DIR *d = opendir(packs_folder);
-    struct dirent *e;
-    while (d && (e = readdir(d)))
-        if (e->d_name[0] != '.' && strcmp(e->d_name, "dump")) {
-            char p[1024];
-            struct stat st;
-            snprintf(p, sizeof p, "%s/%s", packs_folder, e->d_name);
-            if (!stat(p, &st) && S_ISDIR(st.st_mode)) {
-                /* port: an unzipped folder one level too deep
-                   (packs/NAME/NAME/pack.toml) is found too */
-                char t[1100], n[600];
-                snprintf(t, sizeof t, "%s/pack.toml", p);
-                if (stat(t, &st)) {
-                    snprintf(t, sizeof t, "%s/%s/pack.toml", p, e->d_name);
-                    if (!stat(t, &st)) {
-                        snprintf(n, sizeof n, "%s/%s", e->d_name, e->d_name);
-                        pack_list_add(n);
-                        continue;
-                    }
-                }
-                pack_list_add(e->d_name);
-            }
 #ifdef CT_PS5
-            fprintf(stderr, "ct_sdl: packs folder entry \"%s\"\n", e->d_name);
+    char scan_path[600];
+    snprintf(scan_path, sizeof scan_path, "%s/scan.txt", packs_folder);
+    FILE *scan = fopen(scan_path, "w");
+    if (scan)
+        fprintf(scan, "packs folder %s: %s\n", packs_folder, d ? "opened" : "cannot open");
 #endif
+    struct dirent *e;
+    while (d && (e = readdir(d))) {
+        if (e->d_name[0] == '.' || !strcmp(e->d_name, "dump"))
+            continue;
+        char t[1100], n[600];
+        snprintf(t, sizeof t, "%s/%s/pack.toml", packs_folder, e->d_name);
+        FILE *f = fopen(t, "r");
+        const char *how = "no pack.toml";
+        if (f) {
+            fclose(f);
+            pack_list_add(e->d_name);
+            how = "pack";
+        } else {
+            snprintf(t, sizeof t, "%s/%s/%s/pack.toml", packs_folder, e->d_name, e->d_name);
+            if ((f = fopen(t, "r"))) {
+                fclose(f);
+                snprintf(n, sizeof n, "%s/%s", e->d_name, e->d_name);
+                pack_list_add(n);
+                how = "pack (one level deeper)";
+            }
         }
+#ifdef CT_PS5
+        if (scan)
+            fprintf(scan, "  \"%s\" (type %d): %s\n", e->d_name, e->d_type, how);
+#else
+        (void)how;
+#endif
+    }
+#ifdef CT_PS5
+    if (scan)
+        fclose(scan);
+#endif
     if (d)
         closedir(d);
 #endif
