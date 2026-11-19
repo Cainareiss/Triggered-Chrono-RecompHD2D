@@ -1602,7 +1602,7 @@ static const char *packs_count_text(void *u, char *buf, size_t n)
 
 /* The pack rows, rebuilt each time the menu opens (the folder may change). */
 #ifdef CT_PS5
-static char packs_scan_text[160] = "build 32: not checked";
+static char packs_scan_text[160] = "not checked";
 static const char *packs_scan_get(void *u, char *buf, size_t n)
 {
     (void)u;
@@ -1631,7 +1631,8 @@ static void packs_refresh(void)
 #ifdef CT_PS5
     /* the report beside the saves (that folder is known to be writable),
        with what the data folder itself holds, and a notification */
-    FILE *scan = fopen("/data/ct-recomp/packs-scan.txt", "w");
+    static int scan_logged;
+    FILE *scan = scan_logged++ ? NULL : stderr;   /* once a session, into ct-recomp.log */
     int scan_entries = 0, scan_packs0 = n_packs_listed;
     if (scan) {
         int ds[3];
@@ -1688,16 +1689,12 @@ static void packs_refresh(void)
     }
 #ifdef CT_PS5
     /* port: names tried without the listing: the lines of packs.txt (in the
-       packs folder, or one level down where an unzip put it), and the
-       names of the packs this project ships, each as NAME, NAME/NAME and
+       packs folder), each as NAME, NAME/NAME and
        NAME-pack/NAME (an unzip into a folder named after the zip) */
     {
-        static const char *const known[] = {"crono-remaster", NULL};
         char names[24][200];
         int nn = 0;
-        for (int k = 0; known[k]; k++)
-            snprintf(names[nn++], sizeof names[0], "%s", known[k]);
-        const char *txts[] = {"packs.txt", "crono-remaster-pack/packs.txt", NULL};
+        const char *txts[] = {"packs.txt", NULL};
         for (int k = 0; txts[k]; k++) {
             char t[700], line[200];
             snprintf(t, sizeof t, "%s/%s", packs_folder, txts[k]);
@@ -1732,20 +1729,9 @@ static void packs_refresh(void)
     {
         int ds2[3];
         ps5_dir_status(ds2);
-        snprintf(packs_scan_text, sizeof packs_scan_text, "build 32: %s, %d seen, %d packs (%x %x %x)",
+        snprintf(packs_scan_text, sizeof packs_scan_text, "%s, %d seen, %d packs (%x %x %x)",
                  d ? "opened" : "not readable", scan_entries, n_packs_listed - scan_packs0,
                  (unsigned)ds2[0], (unsigned)ds2[1], (unsigned)ds2[2]);
-    }
-    if (scan)
-        fclose(scan);
-    {
-        static int told;
-        int ds[3];
-        ps5_dir_status(ds);
-        if (!told++)
-            ps5_notify("Packs folder: %s, %d entries, %d packs (%x %x %x)",
-                       d ? "found" : "not readable", scan_entries, n_packs_listed - scan_packs0,
-                       (unsigned)ds[0], (unsigned)ds[1], (unsigned)ds[2]);
     }
 #endif
     if (d)
@@ -1760,7 +1746,7 @@ static void packs_refresh(void)
                 "turned off), to make a character pack from."});
 #endif
 #ifdef CT_PS5
-    settings_register(&(setting){.label = "Folder check", .category = "Packs",
+    settings_register(&(setting){.label = "Packs folder check", .category = "Packs",
                                  .type = SETTING_INFO, .text = packs_scan_get,
                                  .help = "What CT5 found in the packs folder (for a photo if a "
                                          "pack is missing)."});
