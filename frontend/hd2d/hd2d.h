@@ -68,6 +68,9 @@ int hd2d_dof(void);
    height), 0 the block diorama. */
 void hd2d_set_3d_style(int cards);
 int hd2d_3d_style(void);
+/* port: the 3D view's shadows (on by default). */
+void hd2d_set_3d_shadows(int on);
+int hd2d_3d_shadows(void);
 void hd2d_set_smooth(int on);
 int hd2d_smooth(void);
 int hd2d_aspect(void);

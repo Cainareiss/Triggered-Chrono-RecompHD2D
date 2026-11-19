@@ -366,14 +366,17 @@ static void prof_flush(int s)
                     top[r] = k;
             }
         char msg[160];
-        int len = snprintf(msg, sizeof msg, "3D RES %d%% GPU %.1f CPU %.1f MS:",
+        int len = snprintf(msg, sizeof msg, "3D %d%% GPU %.1f CPU %.1f:",
                            (int)lroundf(dyn_scale * 100.0f),
                            (double)(t[prof.n[s] - 1] - t[0]) / 1e6,
                            prof.submit_ms[s]);   /* from the start: it holds the other two */
         for (int r = 0; r < 3 && top[r] && len < (int)sizeof msg; r++) {
             char nm[24];
             int j = 0;
-            for (const char *c = prof.name[s][top[r]]; *c && j < 23; c++)
+            const char *pn = prof.name[s][top[r]];
+            if (!strncmp(pn, "s3d_", 4))
+                pn += 4;   /* short: the line must fit the screen */
+            for (const char *c = pn; *c && j < 23; c++)
                 nm[j++] = *c == '_' ? ' ' : (char)toupper((unsigned char)*c);
             nm[j] = 0;
             len += snprintf(msg + len, sizeof msg - (size_t)len, " %s %.1f", nm,
@@ -845,6 +848,9 @@ void hd2d_set_scene(const ct_scene *scene) { g.s3.scene = scene; }
    hd2d_init clears; s3d_params_init starts from it. */
 static float user_tilt = 40.0f, user_zoom = 0.75f;
 static int user_cards = 1;   /* port: hd2d_set_3d_style */
+static int shadows_3d = 1;   /* port: hd2d_set_3d_shadows */
+void hd2d_set_3d_shadows(int on) { shadows_3d = on != 0; }
+int hd2d_3d_shadows(void) { return shadows_3d; }
 void hd2d_set_3d_style(int cards) { user_cards = cards != 0; }
 int hd2d_3d_style(void) { return user_cards; }
 
@@ -2354,8 +2360,10 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     p_glDepthFunc(world ? GL_LEQUAL : GL_LESS);   /* the world map's front layer: on the same corners */
     p_glDepthMask(1);
 
-    /* Shadow map: what stands up (walls, roofs, sprites). */
+    /* Shadow map: what stands up (walls, roofs, sprites). (port: none
+       with the 3D shadows setting off: the scene's shader skips the map.) */
     int PS = world ? P3_WSHADOW : P3_SHADOW;
+    if (shadows_3d) {
     p_glUseProgram(g.prog[PS]);
     p_glUniformMatrix4fv(U(PS, "uMVP"), 1, GL_FALSE, lmvp);
     p_glUniformMatrix4fv(U(PS, "uLightMVP"), 1, GL_FALSE, lmvp);
@@ -2377,6 +2385,7 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
         models_draw(P3_MSHADOW, (const float (*)[2])copies, n_copies);
     }
     p_glDisable(GL_POLYGON_OFFSET_FILL);
+    }
     prof_mark("s3d_shadow");
 
     /* The surfaces. */
@@ -2388,6 +2397,7 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     p_glClearColor(void_[0] * bright, void_[1] * bright, void_[2] * bright, 1.0f);
     p_glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     p_glClearColor(0, 0, 0, 0);
+    prof_mark("s3d_clear");   /* port: the scene pass in parts, for the readout */
     /* port: the models' program gets the same (asset packs) */
     for (int pass = g.m_ni ? 1 : 0; pass >= 0; pass--) {
     int P = pass ? P3_MSCENE : world ? P3_WSCENE : P3_SCENE;
@@ -2417,7 +2427,8 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     p_glUniform3f(U(P, "uEye"), eye[0], eye[1], eye[2]);
     p_glUniform2f(U(P, "uCam"), (float)sc->camera_x, (float)sc->camera_y);
     p_glUniform4f(U(P, "uFog"), fog[0], fog[1], fog[2], 0.6f * s->haze / 0.5f);
-    p_glUniform4f(U(P, "uDepth"), dist, dist * 1.6f, bright, 0.55f * s->shadow * a);
+    p_glUniform4f(U(P, "uDepth"), dist, dist * 1.6f, bright,
+                  shadows_3d ? 0.55f * s->shadow * a : 0.0f);
     if (!pass)
         p_glUniform1i(U(P, "uSmooth"), smooth_3d);
     p_glUniform4f(U(P, "uMisc"), s->point_light * a * (0.25f + 0.75f * dark_amt), dist * 1.25f,
@@ -2442,6 +2453,7 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
         p_glUniform2f(U(P, "uCloudClear"), eye[0] + (at[0] - eye[0]) * t,
                       eye[2] + (at[2] - eye[2]) * t);
     }
+    prof_mark("s3d_setup");
     s3d_draw(0, P);
     }
     int P = world ? P3_WSCENE : P3_SCENE;

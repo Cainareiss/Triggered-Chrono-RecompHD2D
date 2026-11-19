@@ -1180,6 +1180,8 @@ static const char *const style3d_labels[2] = {"Diorama blocks", "Layered cards"}
                          *const style3d_values[2] = {"blocks", "cards"};
 static int get_style3d(void *u) { (void)u; return hd2d_3d_style(); }
 static void set_style3d(void *u, int v) { (void)u; hd2d_set_3d_style(v); }
+static int get_shadows3d(void *u) { (void)u; return hd2d_3d_shadows(); }
+static void set_shadows3d(void *u, int v) { (void)u; hd2d_set_3d_shadows(v); }
 static int get_smooth(void *u) { (void)u; return hd2d_smooth(); }
 static void set_smooth(void *u, int v) { (void)u; hd2d_set_smooth(v); }
 static int get_aspect(void *u) { (void)u; return hd2d_aspect(); }
@@ -1710,6 +1712,11 @@ static void register_settings(void)
                 "at its own depth, with treetops and roofs floating above the ground, so "
                 "the art keeps its shapes. Diorama blocks: walls and blocks stood up from "
                 "the map."});
+    settings_register(&(setting){
+        .key = "shadows_3d", .label = "3D shadows", .category = "Look", .type = SETTING_BOOL,
+        .get = get_shadows3d, .set = set_shadows3d, .enabled = on_hd2d,
+        .help = "Shadows cast by treetops, roofs and characters in the 3D diorama. Off is "
+                "faster."});
     settings_register(&(setting){
         .key = "smooth_3d", .label = "3D texture smoothing", .category = "Look",
         .type = SETTING_BOOL, .get = get_smooth, .set = set_smooth, .enabled = on_hd2d,

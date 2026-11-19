@@ -230,6 +230,8 @@ const vec3 NORMALS[6] = vec3[6](vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(1
 
 float shadowAt(vec3 n, vec3 L)
 {
+    if (uDepth.w <= 0.0)   // shadows off (port): the map isn't drawn
+        return 1.0;
     vec3 s = vShadow.xyz / vShadow.w * 0.5 + 0.5;
     if (any(lessThan(s.xy, vec2(0.0))) || any(greaterThan(s.xy, vec2(1.0))))
         return 1.0;
