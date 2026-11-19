@@ -636,11 +636,91 @@ static void take_menu_shot(int w, int h)
     menu_shot_path = NULL;
 }
 
+#ifdef CT_PS5
+/* port: the PS5's plain picture, scaled straight into the window's
+   1920x1080 surface. SDL's software renderer stretching a texture to the
+   whole screen cost more than a frame (build 7: 30 fps with Aspect
+   Stretch, 60 at 4x integer scale); this is nearest-neighbour with one
+   row built per source row and memcpy for its repeats. The surface is the
+   software renderer's own target, so the renderer still draws the
+   overlays on top before the present. 0: not done (another format, a
+   locked surface): the caller draws it the usual way. */
+static int ps5_fast_picture(const uint8_t *bgrx, int w, int h)
+{
+    SDL_Surface *ws = win ? SDL_GetWindowSurface(win) : NULL;
+    if (!ws || ws->w != w || ws->h != h || ws->format->BytesPerPixel != 4 || SDL_MUSTLOCK(ws))
+        return 0;
+    int rgba = ws->format->format == SDL_PIXELFORMAT_ABGR8888;   /* R in the low byte */
+    if (!rgba && ws->format->format != SDL_PIXELFORMAT_ARGB8888)
+        return 0;
+    int px, py, pw, ph;
+    qol_picture_rect(w, h, &px, &py, &pw, &ph);
+    if (px < 0 || py < 0 || pw <= 0 || ph <= 0 || px + pw > w || py + ph > h)
+        return 0;
+    static int xmap[8192], map_w = -1;
+    if (pw > 8192)
+        return 0;
+    if (map_w != pw) {
+        for (int x = 0; x < pw; x++)
+            xmap[x] = (int)((long)x * SCHED_WIDTH / pw);
+        map_w = pw;
+    }
+    static uint32_t src[SCHED_WIDTH * SCHED_HEIGHT];   /* in the surface's order */
+    const uint32_t *in = (const uint32_t *)bgrx;
+    for (int k = 0; k < SCHED_WIDTH * SCHED_HEIGHT; k++) {
+        uint32_t v = in[k];   /* 0xXXRRGGBB */
+        src[k] = rgba ? 0xFF000000u | (v & 0x00FF00u) | ((v >> 16) & 0xFFu) | ((v & 0xFFu) << 16)
+                      : 0xFF000000u | v;
+    }
+    uint8_t *base = ws->pixels;
+    int pitch = ws->pitch, last_sy = -1;
+    for (int y = 0; y < h; y++) {
+        uint32_t *row = (uint32_t *)(base + (size_t)y * pitch);
+        if (y < py || y >= py + ph) {   /* bars above and below */
+            memset(row, 0, (size_t)w * 4);
+            continue;
+        }
+        int sy = (int)((long)(y - py) * SCHED_HEIGHT / ph);
+        if (sy == last_sy) {   /* the same source row: copy the row above */
+            memcpy(row, base + (size_t)(y - 1) * pitch, (size_t)w * 4);
+            continue;
+        }
+        last_sy = sy;
+        if (px > 0) {   /* bars at the sides */
+            memset(row, 0, (size_t)px * 4);
+            memset(row + px + pw, 0, (size_t)(w - px - pw) * 4);
+        }
+        const uint32_t *s = src + (size_t)sy * SCHED_WIDTH;
+        uint32_t *d = row + px;
+        for (int x = 0; x < pw; x++)
+            d[x] = s[xmap[x]];
+    }
+    return 1;
+}
+#endif
+
 static void present_plain(const uint8_t *bgrx)
 {
     int w, h;
     SDL_GetRendererOutputSize(ren, &w, &h);
     SDL_UpdateTexture(tex, NULL, bgrx, SCHED_WIDTH * 4);
+#ifdef CT_PS5
+    /* port: the fast path for the picture alone: not with the CRT look,
+       split screen or the menu, which go through the renderer as before */
+    if (!split_on && !qol_crt_on() && !menu_is_open()) {
+        SDL_RenderFlush(ren);   /* nothing queued may land on top of the picture later */
+        if (ps5_fast_picture(bgrx, w, h)) {
+            touch_draw_sdl(ren);
+            int px, py, pw, ph;
+            qol_picture_rect(w, h, &px, &py, &pw, &ph);
+            int s = ph / 180 > 2 ? ph / 180 : 2;
+            osd_sdl_draw(ren, px + s * 4, py + s * 4, s, 1);
+            padtest_draw(w, h);
+            SDL_RenderPresent(ren);
+            return;
+        }
+    }
+#endif
     SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
     SDL_RenderClear(ren);
     if (split_on && tex2) {

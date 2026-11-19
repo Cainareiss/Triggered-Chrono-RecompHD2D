@@ -1254,6 +1254,11 @@ static SDL_Texture *crt_mask(SDL_Renderer *ren, int pw, int ph)
     return mask;
 }
 
+int qol_crt_on(void)
+{
+    return set.crt;
+}
+
 void qol_plain_draw(SDL_Renderer *ren, SDL_Texture *frame, int w, int h)
 {
     SDL_Rect r;

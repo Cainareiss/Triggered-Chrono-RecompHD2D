@@ -117,6 +117,7 @@ void qol_screenshot(void);
 void qol_pause_toggle(void);
 void qol_always_run_toggle(void);
 void qol_crt_toggle(void);
+int qol_crt_on(void);   /* port: the CRT look is on (the plain picture) */
 
 /* Pure helpers, for tests. */
 /* /sys/class/power_supply (or dir): 1 on battery, 0 on AC or no battery. */
