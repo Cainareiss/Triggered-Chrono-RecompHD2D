@@ -62,10 +62,13 @@ typedef struct {
     int cards;       /* port: layered cards (the 3DS ports' trick): no walls or
                         boxes; each layer lies flat at its own height, the
                         tiles drawn over sprites highest (S3D_CARD_*) */
+    float card_shift;  /* port: cards: how far south a card moves per px it is lifted,
+                          so it sits where the original drew it from the camera's
+                          tilt (tan of the tilt from straight down; 0: 1) */
 } s3d_params;
 
 #define S3D_CARD_FRONT 3    /* the front layer over the back one, px */
-#define S3D_CARD_OVER  32   /* tiles drawn over sprites (canopies, roofs), px */
+#define S3D_CARD_OVER  16   /* tiles drawn over sprites (canopies, roofs), px */
 
 void s3d_mesh_free(s3d_mesh *m);
 

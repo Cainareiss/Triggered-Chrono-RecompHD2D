@@ -554,6 +554,7 @@ static struct {
         int map_ni, map_ni_floor, spr_ni;
         uint32_t map_gen;           /* scene generation the map mesh is from */
         int map_cards;              /* port: the style it was built in */
+        float map_tilt;             /* port: and the tilt (the cards' shift) */
         int map_mode;               /* and its mode (field, world) */
         uint32_t empty_hash;        /* and which BG tiles were empty then */
         int have_map;
@@ -1947,7 +1948,11 @@ static void s3d_upload(GLuint vbo, GLuint ebo, const s3d_mesh *m, GLenum usage)
 /* Geometry and the console's state for this frame. */
 static void s3d_update(const ct_scene *sc)
 {
-    s3d_params p = {g.s3.hmax, 1.0f, user_cards};
+    s3d_params p = {g.s3.hmax, 1.0f, user_cards, 0.0f};
+    {   /* port: the cards' south shift for this tilt (rebuilt when it changes) */
+        float t = g.s3.tilt * 3.14159265f / 180.0f;
+        p.card_shift = t > 0.05f ? tanf(t) : 0.05f;
+    }
     float tilt = g.s3.tilt * 3.14159265f / 180.0f;
     /* Upright things are foreshortened by sin(tilt), floors by cos(tilt):
        sprites taller by their ratio keep the proportions they were drawn
@@ -1971,7 +1976,8 @@ static void s3d_update(const ct_scene *sc)
 
     uint32_t eh = s3d_empty_hash(sc);
     if (!g.s3.have_map || sc->map_generation != g.s3.map_gen || eh != g.s3.empty_hash ||
-        sc->mode != g.s3.map_mode || g.model_built != g.model_gen || g.s3.map_cards != user_cards) {
+        sc->mode != g.s3.map_mode || g.model_built != g.model_gen || g.s3.map_cards != user_cards ||
+        g.s3.map_tilt != g.s3.tilt) {
         /* port: asset packs' models: their cell hook first, then (below,
            once the map's heights are known) their triangles */
         if (g.model_fn)
@@ -1999,6 +2005,7 @@ static void s3d_update(const ct_scene *sc)
         g.s3.map_gen = sc->map_generation;
         g.s3.map_mode = sc->mode;
         g.s3.map_cards = user_cards;
+        g.s3.map_tilt = g.s3.tilt;
         g.s3.empty_hash = eh;
         g.s3.have_map = 1;
     }

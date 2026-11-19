@@ -145,6 +145,7 @@ typedef struct {
     uint8_t solid[MAXC][MAXC];
     uint8_t boxed[MAXC][MAXC];      /* its floor is inside a box */
     uint8_t hooked[MAXC][MAXC];     /* the cell hook drew it (or nothing) */
+    float card_shift;               /* port: s3d_params.card_shift (cards) */
 } build_ctx;
 
 static build_ctx ctx;   /* the last build's, also for placing sprites */
@@ -448,13 +449,33 @@ static void emit_card_cell(build_ctx *c, int x, int y)
                 continue;
             int over = (e & 0x2000) != 0;
             float h = over ? S3D_CARD_OVER : li == 1 ? S3D_CARD_FRONT : 0.0f;
-            place p = {{(float)x * 16, h, (float)y * 16 + h}, {1, 0, 0}, {0, 0, 1}, S3D_N_UP,
-                       over ? S3D_RAISED : 0};
+            place p = {{(float)x * 16, h, (float)y * 16 + h * c->card_shift}, {1, 0, 0},
+                       {0, 0, 1}, S3D_N_UP, over ? S3D_RAISED : 0};
             emit_quarter(c, L, e, &p, q, li, !over && li == 0 ? S3D_OPAQUE : 0);
-            if (over && li == 0) {   /* the ground it lifted off: the same tile stays */
-                place f;
-                floor_place(&f, x, y);
-                emit_quarter(c, L, e & ~0x2000u, &f, q, li, S3D_OPAQUE);
+            if (over && li == 0) {
+                /* The ground it lifted off: the nearest back-layer tile of
+                   the same quarter that stays down (not the same tile again,
+                   which showed as a second copy beside the card). */
+                uint16_t g = 0;
+                int found = 0;
+                for (int d = 1; d <= 4 && !found; d++) {
+                    static const int dir[4][2] = {{0, -1}, {0, 1}, {-1, 0}, {1, 0}};
+                    for (int k = 0; k < 4 && !found; k++) {
+                        int nx = x + dir[k][0] * d, ny = y + dir[k][1] * d;
+                        if (nx < 0 || ny < 0 || nx >= s->map_w || ny >= s->map_h)
+                            continue;
+                        uint16_t ne = entry_at(L, nx, ny, q);
+                        if (!(ne & 0x2000) && !tile_empty(s, L, ne)) {
+                            g = ne;
+                            found = 1;
+                        }
+                    }
+                }
+                if (found) {
+                    place f;
+                    floor_place(&f, x, y);
+                    emit_quarter(c, L, g, &f, q, li, S3D_OPAQUE);
+                }
             }
         }
     }
@@ -514,6 +535,7 @@ int s3d_build_map(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
         return 0;
     int hmax = p->hmax < 1 ? 1 : p->hmax > HMAX_CAP ? HMAX_CAP : p->hmax;
     find_runs(c);
+    c->card_shift = p->card_shift > 0.0f ? p->card_shift : 1.0f;
     if (p->cards) {
         memset(box_h, 0, sizeof box_h);
         memset(box_b, -1, sizeof box_b);
@@ -632,16 +654,20 @@ int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
         }
         if (bottom == -100000)
             continue;
-        float lift = bottom > foot_sy ? (float)(bottom - foot_sy) : 0.0f;
-        lift -= (float)o->z;
-        if (lift < 0)
-            lift = 0;
+        /* port: the foot from the sprite's own entries (the same frame's
+           OAM), not the object's position: the game's copy of that can be
+           a frame apart from what the console drew, and the difference
+           made walkers bob up and down and split head from body. Only a
+           jump's height (z) lifts it off the ground. */
+        int zj = o->z > 0 && o->z < 64 ? o->z : 0;
+        foot_sy = bottom + zj;
+        float lift = 0.0f;
         /* Standing in a raised cell: the console drew it over the wall
            there if its priority beats the wall's tiles (always for
            priority 3; for less, unless they are overhead tiles). Then it
            stands in front of the wall, or on top of it, raised so its
            screen row stays where the console had it. */
-        float foot_z = (float)o->y, base_y = 0.0f;
+        float foot_z = (float)(s->camera_y + foot_sy), base_y = 0.0f;
         int cx = o->x / 16, cy = o->y / 16, prio = 0;
         for (int j = 0; j < o->n_pieces; j++) {
             int pr = (s->oam[2 * (o->piece[j] & 127) + 1] >> 12) & 3;

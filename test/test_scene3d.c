@@ -174,8 +174,8 @@ static void test_sprites(void)
     s.camera_y = 200;
     for (int e = 0; e < 128; e++)
         oam[2 * e] = 0xF0 << 8;   /* hidden */
-    /* Entry 3: 16x16 at screen (40, 60); its object's foot is at screen
-       (48, 74): 2 px above the sprite's bottom, so it is lifted 2 px. */
+    /* Entry 3: 16x16 at screen (40, 60); its object's position says
+       (48, 74), but the foot is the entries' own bottom row (76). */
     oam[2 * 3] = (uint16_t)(60 << 8 | 40);
     oam[2 * 3 + 1] = 0x0002;
     oam[0x100 + 0] = 2 << 6;      /* entry 3: large */
@@ -187,9 +187,9 @@ static void test_sprites(void)
     s3d_params p = {3, 1.0f};
     int quads = s3d_build_sprites(&s, &p, &m);
     CHECK(quads == 4 + 1, "sprite quads %d", quads);
-    /* Its top-left tile: x = camera + 40, top at 74 + 2 - 60 = 16 px up, at the foot's z. */
-    CHECK(has_vertex(&m, 140, 16, 274.0f + 124 * 0.004f), "billboard top-left");
-    CHECK(has_vertex(&m, 156, 0, 274.0f + 124 * 0.004f), "billboard foot");
+    /* Its top-left tile: x = camera + 40, top at 76 - 60 = 16 px up, at z = camera + 76. */
+    CHECK(has_vertex(&m, 140, 16, 276.0f + 124 * 0.004f), "billboard top-left");
+    CHECK(has_vertex(&m, 156, 0, 276.0f + 124 * 0.004f), "billboard foot");
     /* Unowned: stands at its own bottom (screen row 28 -> z = 228). */
     CHECK(has_vertex(&m, 110, 8, 228.0f + 118 * 0.004f), "unowned piece");
     CHECK((m.v[0].tile & S3D_OBJ) && ((m.v[0].tile >> S3D_NORMAL_SHIFT) & 7) == S3D_N_SPRITE,
