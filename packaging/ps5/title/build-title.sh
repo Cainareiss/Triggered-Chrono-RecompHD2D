@@ -7,11 +7,11 @@
 # Built with drakmor/ps5-native-app-boilerplate (pinned below, patched by
 # boilerplate.patch) over its pinned ps5-payload-sdk and PacBrew's SDL2.
 #
-#   packaging/ps5/title/build-title.sh [WORKDIR]   -> WORKDIR/kit/dist/PPSA28355/
+#   packaging/ps5/title/build-title.sh [WORKDIR]   -> WORKDIR/kit/dist/PPSA28356/
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd); src=$(cd "$here/../../.." && pwd)
 work=${1:-$src/build-ps5-title}; kit=$work/kit; objs=$work/objs
-TITLE_ID=${TITLE_ID:-PPSA28355}
+TITLE_ID=${TITLE_ID:-PPSA28356}
 BOILERPLATE_REV=470695e0c557f99ff2df0e36e4df713c5e636526
 mkdir -p "$work"
 if [ ! -d "$kit/.git" ]; then

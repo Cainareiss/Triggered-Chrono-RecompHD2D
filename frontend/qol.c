@@ -41,8 +41,13 @@ typedef struct {
     int crt;              /* plain picture */
     int integer;          /* plain picture: whole multiples */
     int always_run;
+    int fill;             /* plain picture: the whole screen, stretched */
 } qol_settings;
-static qol_settings set = {3, 0, AUTO, ON, ON, BATT_OFF, 0, 1, 0};
+#ifdef CT_PS5   /* port: a TV across the room: the whole screen by default */
+static qol_settings set = {3, 0, AUTO, ON, ON, BATT_OFF, 0, 1, 0, 1};
+#else
+static qol_settings set = {3, 0, AUTO, ON, ON, BATT_OFF, 0, 1, 0, 0};
+#endif
 /* --qol-set changes set for this run only: settings.ini gets saved, the
    settings as they were before, plus what is toggled during the run. */
 static qol_settings saved;
@@ -83,6 +88,8 @@ int qol_setting(const char *key, const char *v)
         set.crt = on_off(v);
     } else if (!strcmp(key, "integer_scale")) {
         set.integer = on_off(v);
+    } else if (!strcmp(key, "fill_screen")) {
+        set.fill = on_off(v);
     } else if (!strcmp(key, "always_run")) {
         set.always_run = on_off(v);
         sched_set_pref(SCHED_PREF_ALWAYS_RUN, set.always_run);
@@ -105,9 +112,10 @@ void qol_settings_write(FILE *f)
             sep = ",";
         }
     fprintf(f, "\npause_on_focus_loss=%s\npause_on_disconnect=%s\nresume=%s\n"
-               "battery_mode=%s\ncrt=%s\ninteger_scale=%s\nalways_run=%s\n",
+               "battery_mode=%s\ncrt=%s\ninteger_scale=%s\nfill_screen=%s\nalways_run=%s\n",
             tri[v->pause_focus], tri[v->pause_pad], tri[v->resume], batt[v->battery],
-            v->crt ? "on" : "off", v->integer ? "on" : "off", v->always_run ? "on" : "off");
+            v->crt ? "on" : "off", v->integer ? "on" : "off", v->fill ? "on" : "off",
+            v->always_run ? "on" : "off");
 }
 
 /* ---- state ---- */
@@ -1180,6 +1188,12 @@ void qol_idle(void)
 
 void qol_picture_rect(int w, int h, int *x, int *y, int *pw, int *ph)
 {
+    if (set.fill) {   /* the whole window, whatever its shape */
+        *x = *y = 0;
+        *pw = w;
+        *ph = h;
+        return;
+    }
     if (set.integer) {
         int s = w / SCHED_WIDTH < h / SCHED_HEIGHT ? w / SCHED_WIDTH : h / SCHED_HEIGHT;
         if (s < 1)
@@ -1384,6 +1398,8 @@ static const char *q_pictures(void *u, char *buf, size_t n)
 /* Display */
 static int q_get_integer(void *u) { (void)u; return set.integer; }
 static void q_set_integer(void *u, int v) { (void)u; BOTH(integer, v); }
+static int q_get_fill(void *u) { (void)u; return set.fill; }
+static void q_set_fill(void *u, int v) { (void)u; BOTH(fill, v); }
 static int q_get_crt(void *u) { (void)u; return set.crt; }
 static void q_set_crt(void *u, int v) { (void)u; BOTH(crt, v); }
 static const char *const batt_labels[3] = {"Off", "Light", "Saver"};
@@ -1468,6 +1484,11 @@ void qol_register_settings(void)
     settings_register(&(setting){.label = "Screenshots folder", .category = "Save states",
                                  .type = SETTING_INFO, .text = q_pictures});
 
+    settings_register(&(setting){
+        .label = "Fill the screen", .category = "Display", .type = SETTING_BOOL,
+        .get = q_get_fill, .set = q_set_fill, .enabled = q_plain,
+        .help = "The original picture stretched to the whole screen; off: its own shape, "
+                "with borders."});
     settings_register(&(setting){
         .label = "Integer scale", .category = "Display", .type = SETTING_BOOL,
         .get = q_get_integer, .set = q_set_integer, .enabled = q_plain,
