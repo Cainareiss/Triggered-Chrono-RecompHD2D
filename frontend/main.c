@@ -1629,6 +1629,14 @@ static void packs_refresh(void)
     if (d)
         closedir(d);
 #endif
+#ifdef CT_PS5
+    settings_register(&(setting){
+        .label = "Export character poses", .category = "Packs", .key = "pose_export", .type = SETTING_BOOL,
+        .get = get_pose_export, .set = set_pose_export, .flags = SETTING_NO_SAVE,
+        .help = "Save every character frame drawn on the field into "
+                "/data/ct-recomp/sheets/ct5 (one picture per frame, and sheets when "
+                "turned off), to make a character pack from."});
+#endif
     settings_register(&(setting){.label = "Asset packs", .category = "Packs", .type = SETTING_INFO,
                                  .flags = SETTING_HEADING});
     settings_register(&(setting){
@@ -1652,14 +1660,6 @@ static void packs_refresh(void)
         .label = "Dump new art", .category = "Packs", .type = SETTING_BOOL, .get = get_dump,
         .set = set_dump, .enabled = can_dump, .flags = SETTING_NO_SAVE,
         .help = "Save each new tile and sprite drawn into the \"dump\" pack, to draw over."});
-#ifdef CT_PS5
-    settings_register(&(setting){
-        .label = "Export character poses", .category = "Packs", .type = SETTING_BOOL,
-        .get = get_pose_export, .set = set_pose_export, .flags = SETTING_NO_SAVE,
-        .help = "Save every character frame drawn on the field into "
-                "/data/ct-recomp/sheets/ct5 (one picture per frame, and sheets when "
-                "turned off), to make a character pack from."});
-#endif
     settings_register(&(setting){.label = "Folder", .category = "Packs", .type = SETTING_INFO,
                                  .text = folder_text, .help = packs_folder});
 }
