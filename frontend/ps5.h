@@ -37,6 +37,8 @@ int ps5_find_files(const char **rom, const char **module, int want_module);
 /* SDL_GetPrefPath's replacement (/data/<org>/<app>/; CMake maps it). */
 char *ps5_pref_path(const char *org, const char *app);
 
+/* The title's last opendir/readdir kernel results (title.c; zeros elsewhere). */
+void ps5_dir_status(int out[3]);
 /* A system notification (the toast in the top right corner). */
 void ps5_notify(const char *fmt, ...)
 #ifdef __GNUC__

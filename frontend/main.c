@@ -1625,7 +1625,10 @@ static void packs_refresh(void)
     FILE *scan = fopen("/data/ct-recomp/packs-scan.txt", "w");
     int scan_entries = 0, scan_packs0 = n_packs_listed;
     if (scan) {
-        fprintf(scan, "packs folder %s: %s\n", packs_folder, d ? "opened" : "cannot open");
+        int ds[3];
+        ps5_dir_status(ds);
+        fprintf(scan, "packs folder %s: %s (open %#x / %#x)\n", packs_folder,
+                d ? "opened" : "cannot open", (unsigned)ds[0], (unsigned)ds[1]);
         DIR *r = opendir("/data/ct-recomp");
         struct dirent *re;
         fprintf(scan, "/data/ct-recomp holds:%s\n", r ? "" : " (cannot open)");
@@ -1666,13 +1669,39 @@ static void packs_refresh(void)
 #endif
     }
 #ifdef CT_PS5
+    /* port: if the console lists nothing, packs.txt in the packs folder
+       (one folder name a line) names them */
+    if (n_packs_listed == scan_packs0) {
+        char t[700], line[300];
+        snprintf(t, sizeof t, "%s/packs.txt", packs_folder);
+        FILE *lf = fopen(t, "r");
+        while (lf && fgets(line, sizeof line, lf)) {
+            line[strcspn(line, "\r\n")] = 0;
+            if (!line[0] || line[0] == '#')
+                continue;
+            char pt[1100];
+            snprintf(pt, sizeof pt, "%s/%s/pack.toml", packs_folder, line);
+            FILE *f = fopen(pt, "r");
+            if (scan)
+                fprintf(scan, "  packs.txt: \"%s\": %s\n", line, f ? "pack" : "no pack.toml");
+            if (f) {
+                fclose(f);
+                pack_list_add(line);
+            }
+        }
+        if (lf)
+            fclose(lf);
+    }
     if (scan)
         fclose(scan);
     {
         static int told;
+        int ds[3];
+        ps5_dir_status(ds);
         if (!told++)
-            ps5_notify("Packs folder: %s, %d entries, %d packs", d ? "found" : "not readable",
-                       scan_entries, n_packs_listed - scan_packs0);
+            ps5_notify("Packs folder: %s, %d entries, %d packs (%x %x %x)",
+                       d ? "found" : "not readable", scan_entries, n_packs_listed - scan_packs0,
+                       (unsigned)ds[0], (unsigned)ds[1], (unsigned)ds[2]);
     }
 #endif
     if (d)

@@ -148,6 +148,15 @@ struct _dirdesc {
 };
 static struct _dirdesc dir_pool[4];
 static int dir_used[4];
+/* port: the last opendir's and readdir's kernel results, for the packs
+   report (ps5_dir_status) */
+static int dir_err[3];
+void ps5_dir_status(int out[3])
+{
+    out[0] = dir_err[0];
+    out[1] = dir_err[1];
+    out[2] = dir_err[2];
+}
 
 DIR *opendir(const char *path)
 {
@@ -159,7 +168,13 @@ DIR *opendir(const char *path)
         }
     if (slot < 0)
         return errno = EMFILE, NULL;
-    int fd = sceKernelOpen(path, 0 /* O_RDONLY */, 0);
+    /* FreeBSD's O_DIRECTORY (0x20000) first, then a plain read-only open */
+    int fd = sceKernelOpen(path, 0x20000, 0);
+    dir_err[0] = fd;
+    if (fd < 0) {
+        fd = sceKernelOpen(path, 0, 0);
+        dir_err[1] = fd;
+    }
     if (fd < 0)
         return errno = ENOENT, NULL;
     dir_used[slot] = 1;
@@ -173,6 +188,7 @@ struct dirent *readdir(DIR *d)
     for (;;) {
         if (d->pos + 8 > d->len) {
             int n = sceKernelGetdents(d->fd, d->buf, sizeof d->buf);
+            dir_err[2] = n;
             if (n <= 0)
                 return NULL;
             d->len = n;
