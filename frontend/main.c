@@ -1799,7 +1799,7 @@ static void register_settings(void)
         .options = ps5_display_labels, .values = ps5_display_values, .count = 3,
         .get = get_ps5_display, .set = set_ps5_display, .flags = SETTING_RESTART,
         .help = "The picture the PS5 draws; the console scales it to the TV. 4K is the "
-                "sharpest (the 3D diorama is drawn at 1080 lines and upscaled), 1080p the "
+                "sharpest (the 3D diorama is drawn at 720 lines and upscaled), 1080p the "
                 "lightest. Takes effect on the next start."});
 #endif
     settings_register(&(setting){
@@ -3099,6 +3099,9 @@ int main(int argc, char **argv)
     settings_load();   /* port: saved HD-2D settings; options below override */
 #ifdef CT_PS5_GL
     setenv("CT_PS5_DISPLAY_HEIGHT", ps5_display_values[ps5_display], 1);   /* before SDL_Init */
+    /* port: the renderer's per-pass timings, every 30th frame, while the
+       3D diorama's speed on the console is being tuned (docs/HD2D.md) */
+    setenv("CT_HD2D_PROFILE", "/data/ct-recomp/hd2d-profile.txt", 0);
     fprintf(stderr, "ct_ps5: display %s\n", ps5_display_labels[ps5_display]);
 #endif
     for (int k = 1; k < argc; k++) {

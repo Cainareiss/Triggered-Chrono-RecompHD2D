@@ -312,6 +312,12 @@ static void prof_flush(int s)
 {
     if (!prof.f || prof.n[s] < 2)
         return;
+#ifdef CT_PS5   /* port: every 30th frame on the console: a small file, few writes */
+    if (prof.frame[s] % 30) {
+        prof.n[s] = 0;
+        return;
+    }
+#endif
     GLuint64 t[PROF_MARKS];
     for (int k = 0; k < prof.n[s]; k++)
         prof.get(prof.q[s][k], GL_QUERY_RESULT, &t[k]);
@@ -2162,10 +2168,11 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     float a = s->effects ? scene_amt : 0.0f;
     float rs = user_render_scale > 0.0f ? user_render_scale : s->render_scale;
 #ifdef CT_PS5
-    /* port: the PS5's Auto: the diorama drawn at no more than 1080 lines
-       and upscaled with FSR (30 fps at 4K, full size, seen on a TV) */
-    if (user_render_scale <= 0.0f && ph > 1080) {
-        float cap = 1080.0f / (float)ph;
+    /* port: the PS5's Auto: the diorama drawn at no more than 720 lines
+       and upscaled with FSR (30 fps at 4K full size, and still short of
+       60 at 1080, seen on a TV) */
+    if (user_render_scale <= 0.0f && ph > 720) {
+        float cap = 720.0f / (float)ph;
         rs = rs > 0.0f && rs < cap ? rs : cap;
     }
 #endif
