@@ -1314,7 +1314,7 @@ static const char *const pacing_labels[3] = {"Auto", "Timer", "Vsync"},
 #ifdef CT_PS5_GL
 /* port: the PS5 GPU build's output size (the SDL bridge reads
    CT_PS5_DISPLAY_HEIGHT when the video starts: the next start). */
-static int ps5_display = 2;   /* 4K */
+static int ps5_display = 0;   /* 1080p: the 3D diorama ran at 30 fps at 4K */
 static const char *const ps5_display_labels[3] = {"1080p", "1440p", "4K"},
                          *const ps5_display_values[3] = {"1080", "1440", "2160"};
 static int get_ps5_display(void *u) { (void)u; return ps5_display; }
@@ -1795,11 +1795,12 @@ static void register_settings(void)
 #endif
 #ifdef CT_PS5_GL
     settings_register(&(setting){
-        .key = "ps5_display", .label = "Resolution", .category = "Display", .type = SETTING_ENUM,
+        .key = "ps5_resolution", .label = "Resolution", .category = "Display", .type = SETTING_ENUM,
         .options = ps5_display_labels, .values = ps5_display_values, .count = 3,
         .get = get_ps5_display, .set = set_ps5_display, .flags = SETTING_RESTART,
         .help = "The picture the PS5 draws; the console scales it to the TV. 4K is the "
-                "sharpest, 1080p the lightest. Takes effect on the next start."});
+                "sharpest (the 3D diorama is drawn at 1080 lines and upscaled), 1080p the "
+                "lightest. Takes effect on the next start."});
 #endif
     settings_register(&(setting){
         .key = "pacing", .label = "Frame pacing", .category = "Display", .type = SETTING_ENUM,

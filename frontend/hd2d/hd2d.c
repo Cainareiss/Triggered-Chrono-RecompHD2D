@@ -2161,6 +2161,14 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
 {
     float a = s->effects ? scene_amt : 0.0f;
     float rs = user_render_scale > 0.0f ? user_render_scale : s->render_scale;
+#ifdef CT_PS5
+    /* port: the PS5's Auto: the diorama drawn at no more than 1080 lines
+       and upscaled with FSR (30 fps at 4K, full size, seen on a TV) */
+    if (user_render_scale <= 0.0f && ph > 1080) {
+        float cap = 1080.0f / (float)ph;
+        rs = rs > 0.0f && rs < cap ? rs : cap;
+    }
+#endif
     int rw = pw, rh = ph;
     if (rs > 0.0f && rs < 0.995f) {
         rw = (int)lroundf(pw * rs);
@@ -2170,6 +2178,10 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     }
     /* (its targets kept while menus ease it off: no remaking them each time) */
     float ao_base = user_ao >= 0.0f ? user_ao : s->ao3d, ao_amt = ao_base * a;
+#ifdef CT_PS5
+    if (user_ao < 0.0f)   /* port: Auto is off on the PS5 (the costliest pass) */
+        ao_base = ao_amt = 0.0f;
+#endif
     if (g.float_type != GL_HALF_FLOAT)   /* its depths need half floats */
         ao_base = ao_amt = 0.0f;
     int div = user_ao_div ? user_ao_div : s->ao_div > 0 ? s->ao_div : 2;
