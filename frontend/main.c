@@ -925,7 +925,9 @@ static int hd2d_key(SDL_Scancode sc)
     }
     if (sc == SDL_SCANCODE_F11) {
         int fs = SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP;
+#ifndef CT_PS5   /* port: always fullscreen (see the Fullscreen setting) */
         SDL_SetWindowFullscreen(win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+#endif
         wst.fs = !fs;
         settings_save();
         return 1;
@@ -1277,7 +1279,9 @@ static void set_fullscreen(void *u, int v)
 {
     (void)u;
     if (win && !game_mode) {
+#ifndef CT_PS5   /* port: always fullscreen (see the Fullscreen setting) */
         SDL_SetWindowFullscreen(win, v ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+#endif
         wst_track();
     }
     wst.fs = v;
@@ -1286,6 +1290,15 @@ static int not_game_mode(void *u) { (void)u; return !game_mode; }
 static const char *const fs_values[2] = {"0", "1"};
 static const char *const pacing_labels[3] = {"Auto", "Timer", "Vsync"},
                          *const pacing_values[3] = {"auto", "timer", "vsync"};
+#ifdef CT_PS5_GL
+/* port: the PS5 GPU build's output size (the SDL bridge reads
+   CT_PS5_DISPLAY_HEIGHT when the video starts: the next start). */
+static int ps5_display = 2;   /* 4K */
+static const char *const ps5_display_labels[3] = {"1080p", "1440p", "4K"},
+                         *const ps5_display_values[3] = {"1080", "1440", "2160"};
+static int get_ps5_display(void *u) { (void)u; return ps5_display; }
+static void set_ps5_display(void *u, int v) { (void)u; ps5_display = v < 0 || v > 2 ? 2 : v; }
+#endif
 static int get_pacing(void *u) { (void)u; return pace_opt; }
 static void set_pacing(void *u, int v)
 {
@@ -1741,10 +1754,21 @@ static void register_settings(void)
                                          "saved. (F2)"});
 
     /* Display */
+#ifndef CT_PS5   /* port: the PS5 has one screen, always used whole; switching
+                    re-opened its video output (a flicker, the menu stuck) */
     settings_register(&(setting){.key = "fullscreen", .label = "Fullscreen", .category = "Display",
                                  .type = SETTING_BOOL, .values = fs_values, .get = get_fullscreen,
                                  .set = set_fullscreen, .enabled = not_game_mode,
                                  .help = "Always on in Steam's Game Mode. (F11)"});
+#endif
+#ifdef CT_PS5_GL
+    settings_register(&(setting){
+        .key = "ps5_display", .label = "Resolution", .category = "Display", .type = SETTING_ENUM,
+        .options = ps5_display_labels, .values = ps5_display_values, .count = 3,
+        .get = get_ps5_display, .set = set_ps5_display, .flags = SETTING_RESTART,
+        .help = "The picture the PS5 draws; the console scales it to the TV. 4K is the "
+                "sharpest, 1080p the lightest. Takes effect on the next start."});
+#endif
     settings_register(&(setting){
         .key = "pacing", .label = "Frame pacing", .category = "Display", .type = SETTING_ENUM,
         .options = pacing_labels, .values = pacing_values, .count = 3, .get = get_pacing,
@@ -3035,6 +3059,10 @@ int main(int argc, char **argv)
 #endif
     register_settings();   /* port: the settings registry (settings.h), before reading them */
     settings_load();   /* port: saved HD-2D settings; options below override */
+#ifdef CT_PS5_GL
+    setenv("CT_PS5_DISPLAY_HEIGHT", ps5_display_values[ps5_display], 1);   /* before SDL_Init */
+    fprintf(stderr, "ct_ps5: display %s\n", ps5_display_labels[ps5_display]);
+#endif
     for (int k = 1; k < argc; k++) {
         if (!strcmp(argv[k], "--scale") && k + 1 < argc)
             scale = atoi(argv[++k]), wst.scale_given = 1;
@@ -3288,6 +3316,10 @@ int main(int argc, char **argv)
                     hd2d_mode >= 0 ? ", HD-2D" : "");
         if (!hd2d_mode && renderer_saved >= 0)   /* port: the menu's choice (settings.ini renderer=) */
             hd2d_mode = renderer_saved ? 1 : -1;
+#ifdef CT_PS5_GL
+        if (!hd2d_mode)   /* port: the PS5's GPU build: HD-2D unless chosen otherwise */
+            hd2d_mode = 1;
+#endif
         if (game_mode && !hd2d_mode)
             hd2d_mode = 1;
         int no_hd2d = hd2d_mode < 0;

@@ -218,6 +218,31 @@ char *strcasestr(const char *s, const char *find)
     return n ? NULL : (char *)s;
 }
 
+/* isatty and mkstemp: libScePosixForWebKit's, which a game process may
+   not get: ours, on libkernel. */
+int isatty(int fd)
+{
+    (void)fd;
+    return errno = ENOTTY, 0;
+}
+
+int mkstemp(char *tmpl)
+{
+    size_t n = k_strlen(tmpl);
+    if (n < 6)
+        return errno = EINVAL, -1;
+    static unsigned seed = 0x9e3779b9u;
+    for (int tries = 0; tries < 100; tries++) {
+        unsigned v = seed = seed * 1664525u + 1013904223u + (unsigned)tries;
+        for (size_t k = n - 6; k < n; k++, v /= 36)
+            tmpl[k] = "0123456789abcdefghijklmnopqrstuvwxyz"[v % 36];
+        int fd = sceKernelOpen(tmpl, O_RDWR | O_CREAT | O_EXCL, 0600);
+        if (fd >= 0)
+            return fd;
+    }
+    return errno = EEXIST, -1;
+}
+
 pid_t fork(void)
 {
     return errno = ENOSYS, -1;
@@ -456,6 +481,13 @@ int posix_memalign(void **out, size_t align, size_t n)
     unlock();
     *out = (void *)at;
     return 0;
+}
+
+size_t malloc_usable_size(void *p)   /* Mesa asks */
+{
+    if (!p || !ours(p))
+        return 0;
+    return bsize((ct_block *)((char *)p - CT_HDR)) - CT_HDR;
 }
 
 void *aligned_alloc(size_t align, size_t n)

@@ -64,6 +64,15 @@ if(PS5)
     if(CT_PS5_TITLE)
         add_compile_definitions(CT_PS5_TITLE)
     endif()
+    # GPU OpenGL in a title (packaging/ps5/title, docs/PS5.md): the
+    # ps5-opengl SDK and its SDL2 bridge; the HD-2D renderer and the menu
+    # then draw on the GPU.
+    set(CT_PS5_GL_PREFIX "" CACHE PATH "Installed ps5-opengl SDK (build/sdk/ps5-opengl-gl46)")
+    if(CT_PS5_GL_PREFIX)
+        set(CT_PS5_GL ON)
+        add_compile_definitions(CT_PS5_GL)
+        message(STATUS "CT_PS5_GL: OpenGL from ${CT_PS5_GL_PREFIX}")
+    endif()
     # Our context switch, not the console libc's getcontext (a syscall).
     set(CT_COMPAT_UCONTEXT ON CACHE BOOL "" FORCE)
     # The math functions are in libc: an empty target stands in for -lm.
@@ -297,6 +306,12 @@ if(SDL2_FOUND)
     if(CT_ANDROID)
         target_compile_definitions(ct_imgui PUBLIC IMGUI_IMPL_OPENGL_ES3)
         target_link_libraries(ct_imgui PUBLIC GLESv3)
+    endif()
+    if(CT_PS5_GL)   # port: the SDK's GL, linked statically: no loader
+        target_compile_definitions(ct_imgui PRIVATE IMGUI_IMPL_OPENGL_LOADER_CUSTOM)
+        target_include_directories(ct_imgui PRIVATE ${CT_PS5_GL_PREFIX}/include)
+        set_source_files_properties(${CT_IMGUI}/backends/imgui_impl_opengl3.cpp
+            PROPERTIES COMPILE_OPTIONS "-include;GL/gl.h")
     endif()
     # The menu's font (Roboto Medium, Apache-2.0) as a byte array.
     set(CT_MENU_FONT_GEN ${CMAKE_BINARY_DIR}/menu_gen/menu_font.h)

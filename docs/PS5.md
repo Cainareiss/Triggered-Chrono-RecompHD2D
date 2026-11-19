@@ -64,6 +64,27 @@ but the PS5's Zen 2 CPU should keep up.
 As with every build of this port, a file built with `CT_ROM` set holds code made from your
 ROM. Keep it on your own console and don't share it (docs/MODULES.md).
 
+## GPU build: HD-2D, the 3D diorama, up to 4K (experimental)
+
+`packaging/ps5/title/gl/build-title-gl.sh` builds title **PPSA28361, "CT Recomp HD-2D"**, a
+separate app that draws on the PS5's GPU through
+[ps5-opengl](https://github.com/blackbearreloaded/ps5-opengl), an OpenGL 4.6 driver built on
+Mesa/Gallium, and its SDL2 bridge. The HD-2D renderer is on by default, and
+Display > Resolution picks 1080p, 1440p or 4K (the default) for the next start.
+
+Building it takes, in order (the script's header has the details):
+
+1. ps5-opengl: `make source-fetch` and `make sdk-gl46`, then
+   `PS5_DYNAMIC_SCANOUT=1 PS5_SCANOUT_HEIGHT=2160 PS5_SCANOUT_FPS=120
+   toolchain/install-ps5-opengl-gl46.sh build/sdk/ps5-opengl-gl46` for runtime display modes.
+   Its host compiler test needs clang-18's UBSan runtime; without it, run the install and
+   link-surface steps by hand.
+2. `packaging/ps5/title/gl/sdl-bridge.patch` applied to that checkout, then
+   `integration/SDL2/build.py native`. The patch adds runtime display modes and the PS5
+   audio driver to the bridge's SDL.
+3. The script, with `GL_PREFIX`, `SDL_PREFIX`, `GL_SRC` and `KIT` (the boilerplate at
+   4f531c4b) set.
+
 ## Install as a title (eboot.bin, recommended)
 
 `packaging/ps5/title/build-title.sh` builds a real PS5 app folder, not a payload:

@@ -1,0 +1,79 @@
+--- a/integration/SDL2/SDL_ps5g19.c	2026-11-19 01:20:03.918894146 +0000
++++ b/integration/SDL2/SDL_ps5g19.c	2026-11-19 01:20:03.932691379 +0000
+@@ -9,6 +9,14 @@
+ #include <EGL/egl.h>
+ #include <EGL/eglext.h>
+ #include "ps5g19_display.h"
++#if __has_include(<ps5_opengl_display_modes.h>)
++#include <ps5_opengl_display_modes.h>
++#endif
++
++/* ct-recomp: the display size is chosen at start-up (CT_PS5_DISPLAY_HEIGHT:
++   1080, 1440 or 2160, from the game's settings) when the SDK has runtime
++   display modes; the window is always made that size, whatever was asked. */
++static int g_w = PS5_OPENGL_NATIVE_WIDTH, g_h = PS5_OPENGL_NATIVE_HEIGHT;
+ 
+ /* ponytail: one fixed-profile window/context on the video thread; extend only with a
+  * separately validated EGL ownership contract. No private presentation API. */
+@@ -42,6 +50,19 @@
+     g->thread = SDL_ThreadID();
+     g->display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+     if (g->display == EGL_NO_DISPLAY) return egl_error("eglGetDisplay");
++#ifdef PS5_OPENGL_DYNAMIC_DISPLAY
++    {
++        const char *want = SDL_getenv("CT_PS5_DISPLAY_HEIGHT");
++        int h = want ? SDL_atoi(want) : 1080;
++        int w = h == 2160 ? 3840 : h == 1440 ? 2560 : 1920;
++        if (w != 1920 && eglSetDisplayModePS5(g->display, w, w == 3840 ? 2160 : 1440)) {
++            g_w = w;
++            g_h = w == 3840 ? 2160 : 1440;
++        }
++        mode.w = g_w;
++        mode.h = g_h;
++    }
++#endif
+     if (!eglInitialize(g->display, NULL, NULL)) {
+         g->display = EGL_NO_DISPLAY;
+         return egl_error("eglInitialize");
+@@ -84,11 +105,12 @@
+         EGL_STENCIL_SIZE, _this->gl_config.stencil_size, EGL_NONE
+     };
+     if (on_thread(g) < 0) return -1;
+-    if (g->window || g->surface || window->w != PS5_OPENGL_NATIVE_WIDTH ||
+-        window->h != PS5_OPENGL_NATIVE_HEIGHT ||
+-        !(window->flags & SDL_WINDOW_OPENGL) || (window->flags & SDL_WINDOW_RESIZABLE))
+-        return SDL_SetError("G19 requires one fixed %dx%d OpenGL window",
+-                            PS5_OPENGL_NATIVE_WIDTH, PS5_OPENGL_NATIVE_HEIGHT);
++    if (g->window || g->surface || !(window->flags & SDL_WINDOW_OPENGL))
++        return SDL_SetError("G19 requires one OpenGL window");
++    /* ct-recomp: the screen's size, whatever size or flags were asked */
++    window->w = window->windowed.w = g_w;
++    window->h = window->windowed.h = g_h;
++    window->x = window->y = 0;
+     if (_this->gl_config.stereo || _this->gl_config.multisamplebuffers ||
+         _this->gl_config.multisamplesamples || _this->gl_config.floatbuffers ||
+         _this->gl_config.framebuffer_srgb_capable || _this->gl_config.accum_red_size ||
+@@ -225,8 +247,8 @@
+ static void set_window_size(_THIS, SDL_Window *window)
+ {
+     (void)_this;
+-    window->w = window->windowed.w = PS5_OPENGL_NATIVE_WIDTH;
+-    window->h = window->windowed.h = PS5_OPENGL_NATIVE_HEIGHT;
++    window->w = window->windowed.w = g_w;
++    window->h = window->windowed.h = g_h;
+     SDL_SetError("G19 SDL does not support resizing");
+ }
+ 
+--- a/integration/SDL2/CMakeLists.txt	2026-11-19 01:21:46.147726846 +0000
++++ b/integration/SDL2/CMakeLists.txt	2026-11-19 01:21:46.160406070 +0000
+@@ -18,7 +18,9 @@
+ set(SDL_PTHREADS ON CACHE BOOL "" FORCE)
+ set(SDL_SOURCE_VERSION "2.30.12-g8c56053f13ca-g26")
+ set(SDL2_DISABLE_SDL2MAIN ON CACHE BOOL "" FORCE)
+-foreach(feature AUDIO RENDER HAPTIC SENSOR OPENGL OPENGLES VULKAN X11
++# ct-recomp: the PS5 audio driver too (a game needs sound)
++set(SDL_AUDIO ON CACHE BOOL "" FORCE)
++foreach(feature RENDER HAPTIC SENSOR OPENGL OPENGLES VULKAN X11
+                 WAYLAND KMSDRM OFFSCREEN JACK PULSEAUDIO DBUS IBUS FCITX LIBUDEV)
+     set(SDL_${feature} OFF CACHE BOOL "" FORCE)
+ endforeach()
