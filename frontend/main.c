@@ -1620,11 +1620,21 @@ static void packs_refresh(void)
        unzipped a level too deep); no stat(), whose struct differs on the PS5 */
     DIR *d = opendir(packs_folder);
 #ifdef CT_PS5
-    char scan_path[600];
-    snprintf(scan_path, sizeof scan_path, "%s/scan.txt", packs_folder);
-    FILE *scan = fopen(scan_path, "w");
-    if (scan)
+    /* the report beside the saves (that folder is known to be writable),
+       with what the data folder itself holds, and a notification */
+    FILE *scan = fopen("/data/ct-recomp/packs-scan.txt", "w");
+    int scan_entries = 0, scan_packs0 = n_packs_listed;
+    if (scan) {
         fprintf(scan, "packs folder %s: %s\n", packs_folder, d ? "opened" : "cannot open");
+        DIR *r = opendir("/data/ct-recomp");
+        struct dirent *re;
+        fprintf(scan, "/data/ct-recomp holds:%s\n", r ? "" : " (cannot open)");
+        while (r && (re = readdir(r)))
+            fprintf(scan, "  \"%s\" (type %d)\n", re->d_name, re->d_type);
+        if (r)
+            closedir(r);
+        fprintf(scan, "%s holds:\n", packs_folder);
+    }
 #endif
     struct dirent *e;
     while (d && (e = readdir(d))) {
@@ -1648,6 +1658,7 @@ static void packs_refresh(void)
             }
         }
 #ifdef CT_PS5
+        scan_entries++;
         if (scan)
             fprintf(scan, "  \"%s\" (type %d): %s\n", e->d_name, e->d_type, how);
 #else
@@ -1657,6 +1668,12 @@ static void packs_refresh(void)
 #ifdef CT_PS5
     if (scan)
         fclose(scan);
+    {
+        static int told;
+        if (!told++)
+            ps5_notify("Packs folder: %s, %d entries, %d packs", d ? "found" : "not readable",
+                       scan_entries, n_packs_listed - scan_packs0);
+    }
 #endif
     if (d)
         closedir(d);
