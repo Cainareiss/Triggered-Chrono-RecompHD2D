@@ -2815,9 +2815,35 @@ static int open_window(const char *title, int scale, int fullscreen)
         }
     } else {
         win = SDL_CreateWindow(title, wx, wy, ww, wh, wflags);
+#ifdef CT_PS5
+        /* port: the PS5's one display (SDL's PS5 driver, 1920x1080), each
+           step logged: an installed title can refuse what a payload gets. */
+        if (!win) {
+            fprintf(stderr, "ct_sdl: PS5: window (flags 0x%x): %s\n", (unsigned)wflags,
+                    SDL_GetError());
+            win = SDL_CreateWindow(title, 0, 0, 1920, 1080, SDL_WINDOW_SHOWN);
+            if (!win)
+                fprintf(stderr, "ct_sdl: PS5: window 1920x1080: %s\n", SDL_GetError());
+        }
+#endif
         ren = win ? SDL_CreateRenderer(win, -1, 0) : NULL;
+#ifdef CT_PS5
+        if (win && !ren)
+            fprintf(stderr, "ct_sdl: PS5: renderer: %s\n", SDL_GetError());
+#endif
         if (win && !ren)
             ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
+#ifdef CT_PS5
+        if (win && !ren) {   /* the window's own surface, SDL's software renderer on it */
+            fprintf(stderr, "ct_sdl: PS5: software renderer: %s\n", SDL_GetError());
+            SDL_Surface *ws = SDL_GetWindowSurface(win);
+            if (!ws)
+                fprintf(stderr, "ct_sdl: PS5: window surface: %s\n", SDL_GetError());
+            ren = ws ? SDL_CreateSoftwareRenderer(ws) : NULL;
+            if (!ren && ws)
+                fprintf(stderr, "ct_sdl: PS5: renderer on the surface: %s\n", SDL_GetError());
+        }
+#endif
         tex = ren ? SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888,
                                                    SDL_TEXTUREACCESS_STREAMING, SCHED_WIDTH,
                                                    SCHED_HEIGHT) : NULL;
@@ -2825,7 +2851,8 @@ static int open_window(const char *title, int scale, int fullscreen)
                                        SDL_TEXTUREACCESS_STREAMING, SCHED_WIDTH, SCHED_HEIGHT)
                    : NULL;
         if (!tex) {
-            fprintf(stderr, "ct_sdl: window: %s\n", SDL_GetError());
+            fprintf(stderr, "ct_sdl: window: %s (window %s, renderer %s)\n", SDL_GetError(),
+                    win ? "ok" : "none", ren ? "ok" : "none");
             set_exit_reason("window or renderer creation failed");
             return 1;
         }

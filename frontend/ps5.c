@@ -72,17 +72,27 @@ static void why_stopped(char *out, size_t n)
     FILE *f = log_path[0] ? fopen(log_path, "rb") : NULL;
     if (!f)
         return;
-    char line[512], last_ct[512] = "", last[512] = "";
+    /* The last three lines that name a failure, oldest first: the cause
+       is usually just before the "exit:" line. */
+    char line[512], hit[3][512] = {"", "", ""}, last[512] = "";
     while (fgets(line, sizeof line, f)) {
         line[strcspn(line, "\r\n")] = 0;
         if (!line[0])
             continue;
         snprintf(last, sizeof last, "%s", line);
-        if (!strncmp(line, "ct: ", 4) || strstr(line, "exit: ") || strstr(line, "failed"))
-            snprintf(last_ct, sizeof last_ct, "%s", line);
+        if (!strncmp(line, "ct: ", 4) || strstr(line, "exit: ") || strstr(line, "failed") ||
+            strstr(line, "PS5: ") || strstr(line, ": window") || strstr(line, "SDL_Init")) {
+            memmove(hit[0], hit[1], sizeof hit[0] * 2);
+            snprintf(hit[2], sizeof hit[2], "%s", line);
+        }
     }
     fclose(f);
-    snprintf(out, n, "%s", last_ct[0] ? last_ct : last);
+    if (!hit[2][0]) {
+        snprintf(out, n, "%s", last);
+        return;
+    }
+    snprintf(out, n, "%s%s%s%s%s", hit[0], hit[0][0] ? " | " : "", hit[1],
+             hit[1][0] ? " | " : "", hit[2]);
 }
 
 /* Runs last at exit (registered first): tell the player why, then leave
@@ -92,7 +102,7 @@ static void ps5_at_exit(void)
 {
     fflush(stdout);
     fflush(stderr);
-    char why[400];
+    char why[1200];
     why_stopped(why, sizeof why);
     ps5_notify("CT Recomp stopped: %s", why[0] ? why : "(no log)");
 #ifdef CT_PS5_TITLE
