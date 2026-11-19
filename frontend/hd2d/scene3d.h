@@ -81,6 +81,10 @@ int s3d_build_map(const ct_scene *s, const s3d_params *p, s3d_mesh *m);
    standing at its object's foot point (entries no object owns stand at
    their own bottom edge). Returns the number of quads. */
 int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m);
+/* port: how many quads at the end of that mesh are contact shadows (flat
+   under each character's feet, S3D_OBJ | S3D_N_WATER; the shader draws
+   them as a soft dark ellipse, to be blended by multiplying). */
+int s3d_sprite_blobs(void);
 
 /* One textured quad: corner tl, then a step of 8 px along u (the tile's
    +x) and along v (its +y, downward in the image); tile is the packed

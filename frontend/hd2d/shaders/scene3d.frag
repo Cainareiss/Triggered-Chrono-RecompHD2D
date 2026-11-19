@@ -284,6 +284,17 @@ void main()
     // the nearest of the fixed normals, for the ambient occlusion
     int ni = n.y > 0.7 ? 0 : abs(n.x) > abs(n.z) ? (n.x > 0.0 ? 2 : 3) : (n.z > 0.0 ? 1 : 4);
 #else
+#ifndef WORLD_MAP
+    if (((vTile >> 20u) & 7u) == 7u && (vTile & (1u << 19)) != 0u) {   // a contact shadow (port)
+        float r = length((vUV - 4.0) / 4.0);
+        if (r > 1.0)
+            discard;
+        float k = 1.0 - 0.45 * smoothstep(1.0, 0.25, r) * uDepth.z;
+        oLit = vec4(k, k, k, 1.0);   // multiplied in: the depth (a) stays
+        oMat = vec4(1.0);
+        return;
+    }
+#endif
     vec4 tex = tileTexelAA(vTile, vUV);
     if (tex.a < 0.5)
         discard;

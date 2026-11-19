@@ -101,6 +101,7 @@ typedef char GLchar;
 #define GL_FALSE                    0
 #define GL_LESS                     0x0201
 #define GL_LEQUAL                   0x0203
+#define GL_ALWAYS                   0x0207
 #define GL_DEPTH_BUFFER_BIT         0x00000100
 #define GL_UNSIGNED_SHORT           0x1403
 #define GL_UNSIGNED_INT             0x1405
@@ -131,6 +132,7 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_ZERO                     0
 #define GL_ONE                      1
 #define GL_SRC_ALPHA                0x0302
+#define GL_DST_COLOR                0x0306
 #define GL_ONE_MINUS_SRC_ALPHA      0x0303
 
 #define GL_FUNCS(X)                                                                           \
@@ -551,7 +553,7 @@ static struct {
         float amt;                  /* 0: the 2D path, 1: 3D; eased between (crossfade) */
         GLuint t_vram, t_cgram;     /* the console's VRAM (R16UI 256x128) and CGRAM */
         GLuint vao[2], vbo[2], ebo[2];   /* 0: the map, 1: this frame's sprites */
-        int map_ni, map_ni_floor, spr_ni;
+        int map_ni, map_ni_floor, spr_ni, spr_ni_low, blob_ni;   /* port: low: under OAM priority 3 */
         uint32_t map_gen;           /* scene generation the map mesh is from */
         int map_cards;              /* port: the style it was built in */
         float map_tilt;             /* port: and the tilt (the cards' shift) */
@@ -2018,7 +2020,9 @@ static void s3d_update(const ct_scene *sc)
         s3d_build_sprites(sc, &p, &g.s3.spr);
         p_glBindVertexArray(g.s3.vao[1]);
         s3d_upload(g.s3.vbo[1], g.s3.ebo[1], &g.s3.spr, GL_STREAM_DRAW);
-        g.s3.spr_ni = g.s3.spr.ni;
+        g.s3.blob_ni = s3d_sprite_blobs() * 6;
+        g.s3.spr_ni = g.s3.spr.ni - g.s3.blob_ni;   /* the blobs after: drawn on their own */
+        g.s3.spr_ni_low = g.s3.spr.ni_floor;
     }
     /* port: asset packs: which of the map's tiles have replacements */
     g.pack3d_on = g.pack_entries > 0 && g.pack_lookup != NULL;
@@ -2040,6 +2044,41 @@ static int cloud_first, cloud_ni;   /* the overlay plane, in the sprite mesh */
 
 static void s3d_draw(int raised_only, int prog)
 {
+    if (!raised_only && prog == P3_SCENE && user_cards) {
+        /* port: layered cards, drawn in the console's order: the ground
+           and front layer, the sprites under priority 3 (depth tested
+           against those), then the overhead cards over them, then the
+           sprites over everything. A card and a sprite standing up through
+           it no longer cut each other in two (a sitter in a bench, a
+           walker under eaves): whichever the console drew in front is. */
+        p_glBindVertexArray(g.s3.vao[0]);
+        if (g.s3.map_ni_floor)
+            p_glDrawElements(GL_TRIANGLES, g.s3.map_ni_floor, GL_UNSIGNED_INT, NULL);
+        p_glBindVertexArray(g.s3.vao[1]);
+        if (g.s3.blob_ni) {   /* contact shadows: multiplied in, no depth writes */
+            p_glDepthMask(0);
+            p_glEnable(GL_BLEND);
+            p_glBlendFunc(GL_DST_COLOR, GL_ZERO);
+            p_glDrawElements(GL_TRIANGLES, g.s3.blob_ni, GL_UNSIGNED_INT,
+                             (const void *)(sizeof(uint32_t) * (size_t)g.s3.spr_ni));
+            p_glDisable(GL_BLEND);
+            p_glDepthMask(1);
+        }
+        if (g.s3.spr_ni_low)
+            p_glDrawElements(GL_TRIANGLES, g.s3.spr_ni_low, GL_UNSIGNED_INT, NULL);
+        p_glDepthFunc(GL_ALWAYS);
+        p_glBindVertexArray(g.s3.vao[0]);
+        if (g.s3.map_ni > g.s3.map_ni_floor)
+            p_glDrawElements(GL_TRIANGLES, g.s3.map_ni - g.s3.map_ni_floor, GL_UNSIGNED_INT,
+                             (const void *)(sizeof(uint32_t) * (size_t)g.s3.map_ni_floor));
+        p_glBindVertexArray(g.s3.vao[1]);
+        if (g.s3.spr_ni > g.s3.spr_ni_low)
+            p_glDrawElements(GL_TRIANGLES, g.s3.spr_ni - g.s3.spr_ni_low, GL_UNSIGNED_INT,
+                             (const void *)(sizeof(uint32_t) * (size_t)g.s3.spr_ni_low));
+        p_glDepthFunc(GL_LESS);
+        p_glBindVertexArray(g.vao);
+        return;
+    }
     p_glBindVertexArray(g.s3.vao[0]);
     int first = raised_only ? g.s3.map_ni_floor : 0;
     int world = prog == P3_WSCENE || prog == P3_WSHADOW;

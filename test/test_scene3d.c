@@ -186,7 +186,8 @@ static void test_sprites(void)
     s3d_mesh m = {0};
     s3d_params p = {3, 1.0f};
     int quads = s3d_build_sprites(&s, &p, &m);
-    CHECK(quads == 4 + 1, "sprite quads %d", quads);
+    /* 4 pieces, the unowned one, and the object's contact shadow (last). */
+    CHECK(quads == 4 + 1 + 1 && s3d_sprite_blobs() == 1, "sprite quads %d", quads);
     /* Its top-left tile: x = camera + 40, top at 76 - 60 = 16 px up, at z = camera + 76. */
     CHECK(has_vertex(&m, 140, 16, 276.0f + 124 * 0.004f), "billboard top-left");
     CHECK(has_vertex(&m, 156, 0, 276.0f + 124 * 0.004f), "billboard foot");

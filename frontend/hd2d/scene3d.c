@@ -453,24 +453,33 @@ static void emit_card_cell(build_ctx *c, int x, int y)
                        {0, 0, 1}, S3D_N_UP, over ? S3D_RAISED : 0};
             emit_quarter(c, L, e, &p, q, li, !over && li == 0 ? S3D_OPAQUE : 0);
             if (over && li == 0) {
-                /* The ground it lifted off: the nearest back-layer tile of
-                   the same quarter that stays down (not the same tile again,
-                   which showed as a second copy beside the card). */
-                uint16_t g = 0;
-                int found = 0;
-                for (int d = 1; d <= 4 && !found; d++) {
-                    static const int dir[4][2] = {{0, -1}, {0, 1}, {-1, 0}, {1, 0}};
-                    for (int k = 0; k < 4 && !found; k++) {
-                        int nx = x + dir[k][0] * d, ny = y + dir[k][1] * d;
+                /* The ground it lifted off: the back layer's commonest tile
+                   (of this quarter) that stays down in the cells around it,
+                   the paving or grass that repeats; a one-off neighbour
+                   (another part of the same tent) showed as a ghost copy. */
+                uint16_t g = 0, cand[81];
+                int cnt[81], nc = 0, found = 0, best = 1;
+                for (int dy = -4; dy <= 4; dy++)
+                    for (int dx = -4; dx <= 4; dx++) {
+                        int nx = x + dx, ny = y + dy;
                         if (nx < 0 || ny < 0 || nx >= s->map_w || ny >= s->map_h)
                             continue;
                         uint16_t ne = entry_at(L, nx, ny, q);
-                        if (!(ne & 0x2000) && !tile_empty(s, L, ne)) {
+                        if ((ne & 0x2000) || tile_empty(s, L, ne))
+                            continue;
+                        int k = 0;
+                        while (k < nc && cand[k] != ne)
+                            k++;
+                        if (k == nc) {
+                            cand[nc] = ne;
+                            cnt[nc++] = 0;
+                        }
+                        if (++cnt[k] > best) {
+                            best = cnt[k];
                             g = ne;
                             found = 1;
                         }
                     }
-                }
                 if (found) {
                     place f;
                     floor_place(&f, x, y);
@@ -606,10 +615,21 @@ static int oam_visible(const ct_scene *s, int e, int *x, int *y, int *size)
 /* One OAM entry as 8x8 quads standing upright at world z = foot_z: a
    screen row r is at height base_y + (foot_sy - r + lift) * stretch,
    foot_sy being the foot's screen row. */
+/* port: s3d_build_sprites runs twice: the entries under OAM priority 3
+   (pass 0), then those over everything (pass 1); emit_piece skips the
+   others. */
+static int spr_pass = -1;
+static int n_blobs;   /* port: contact shadows at the end of the last sprite mesh */
+int s3d_sprite_blobs(void) { return n_blobs; }
+
+static int prio3(const ct_scene *s, int e) { return ((s->oam[2 * (e & 127) + 1] >> 12) & 3) == 3; }
+
 static void emit_piece(const ct_scene *s, s3d_mesh *m, int e, float foot_z, float base_y,
                        int foot_sy, float lift, float stretch)
 {
     int x, y, size;
+    if (spr_pass >= 0 && prio3(s, e) != spr_pass)
+        return;
     if (!oam_visible(s, e, &x, &y, &size))
         return;
     uint16_t w1 = s->oam[2 * e + 1];
@@ -633,10 +653,8 @@ static void emit_piece(const ct_scene *s, s3d_mesh *m, int e, float foot_z, floa
         }
 }
 
-int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
+static int build_sprites_pass(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
 {
-    m->nv = m->ni = m->ni_floor = 0;
-    oom = 0;
     if (s->mode != CT_SCENE_FIELD || !s->oam || !s->vram)
         return 0;
     uint8_t owned[128] = {0};
@@ -682,7 +700,7 @@ int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
             base_y = up;
         }
         s3d_sprite_image im;
-        if (sprite_hook && sprite_hook(sprite_hook_user, s, k, &im)) {
+        if (sprite_hook && (prio == 3) == spr_pass && sprite_hook(sprite_hook_user, s, k, &im)) {
             /* one quad for the whole picture, where its entries would be */
             float st = p->stretch, h = (float)(foot_sy - im.y) + lift;
             float tl[3] = {(float)(s->camera_x + im.x), base_y + h * st,
@@ -707,6 +725,49 @@ int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
         if (owned[e] || !oam_visible(s, e, &x, &y, &size))
             continue;
         emit_piece(s, m, e, (float)(s->camera_y + y + size), 0.0f, y + size, 0.0f, p->stretch);
+    }
+    return 0;
+}
+
+/* The sprites, those under OAM priority 3 first: m->ni_floor indices are
+   theirs (the renderer draws the map's overhead tiles between the two,
+   as the console's priorities do). */
+int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
+{
+    m->nv = m->ni = m->ni_floor = 0;
+    oom = 0;
+    if (s->mode != CT_SCENE_FIELD || !s->oam || !s->vram)
+        return 0;
+    for (spr_pass = 0; spr_pass < 2; spr_pass++) {
+        build_sprites_pass(s, p, m);
+        if (spr_pass == 0)
+            m->ni_floor = m->ni;
+    }
+    spr_pass = -1;
+    /* port: a soft contact shadow under each character's feet (the
+       renderer blends these in before the sprites, without depth writes),
+       so walkers sit on the ground instead of floating over it. */
+    n_blobs = 0;
+    for (int k = 0; k < s->n_objects && k < CT_SCENE_MAX_OBJECTS; k++) {
+        const ct_scene_object *o = &s->object[k];
+        int x0 = 100000, x1 = -100000, bottom = -100000;
+        for (int j = 0; j < o->n_pieces; j++) {
+            int x, y, size;
+            if (!oam_visible(s, o->piece[j], &x, &y, &size))
+                continue;
+            x0 = x < x0 ? x : x0;
+            x1 = x + size > x1 ? x + size : x1;
+            bottom = y + size > bottom ? y + size : bottom;
+        }
+        if (bottom == -100000 || x1 - x0 > 64)
+            continue;
+        int zj = o->z > 0 && o->z < 64 ? o->z : 0;
+        float w = (float)(x1 - x0) * 0.8f, d = w * 0.45f;
+        float cx = (float)(s->camera_x + (x0 + x1) / 2), cz = (float)(s->camera_y + bottom + zj);
+        float tl[3] = {cx - w * 0.5f, 0.05f, cz - d * 0.65f};
+        const float U[3] = {w / 8.0f, 0, 0}, V[3] = {0, 0, d / 8.0f};
+        s3d_emit(m, tl, U, V, S3D_OBJ | (uint32_t)S3D_N_WATER << S3D_NORMAL_SHIFT, 0, 0);
+        n_blobs++;
     }
     return oom ? -1 : m->ni / 6;
 }
