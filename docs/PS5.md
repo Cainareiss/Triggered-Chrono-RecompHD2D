@@ -102,7 +102,7 @@ packs. It still plays their music.
 ```
 PPSA28360/
   eboot.bin            the program (a fake-signed SELF)
-  sce_sys/param.json   title ID PPSA28360, "CT Recomp"
+  sce_sys/param.json   title ID PPSA28360, "CT5"
   sce_sys/icon0.png
   sce_module/libc.prx  the runtime shim the title loads
 ```
@@ -118,7 +118,7 @@ On the console you need etaHEN or kstuff (fake-signed SELFs), plus ShadowMountPl
 
 1. Copy the `PPSA28360` folder to `/data/homebrew/` over FTP.
 2. Put your ROM in it as `rom.sfc`. The title sees its folder as `/app0`.
-3. Run the exploit, then kstuff/etaHEN, then ShadowMountPlus. **CT Recomp** appears on the
+3. Run the exploit, then kstuff/etaHEN, then ShadowMountPlus. **CT5** appears on the
    home screen. Start it like any game.
 
 Before `main`, the title checks every system function it imports. Any that the console
