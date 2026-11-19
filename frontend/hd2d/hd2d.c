@@ -231,6 +231,9 @@ static int load_gl(void)
 }
 
 static int perf_osd;   /* port: hd2d_set_perf_osd */
+#ifdef CT_PS5
+static float dyn_scale = 1.0f;   /* port: the 3D view's dynamic resolution (PS5) */
+#endif
 void hd2d_set_perf_osd(int on) { perf_osd = on != 0; }
 int hd2d_perf_osd(void) { return perf_osd; }
 void hd2d_osd(const char *text);
@@ -335,6 +338,21 @@ static void prof_flush(int s)
     fputc('\n', prof.f);
     fflush(prof.f);
 #ifdef CT_PS5
+    /* port: dynamic resolution for the 3D view. Every 30th frame: over
+       15 ms of GPU work (60 fps needs 16.7, with some to spare) draws the
+       3D scene 5% smaller, down to 75%; under 11 ms, 5% bigger again. */
+    {
+        int threeD = 0;
+        for (int k = 1; k < prof.n[s]; k++)
+            threeD |= !strncmp(prof.name[s][k], "s3d_", 4);
+        double gpu = (double)(t[prof.n[s] - 1] - t[0]) / 1e6;
+        if (threeD && gpu > 15.0 && dyn_scale > 0.751f)
+            dyn_scale -= 0.05f;
+        else if (threeD && gpu < 11.0 && dyn_scale < 0.999f)
+            dyn_scale += 0.05f;
+    }
+#endif
+#ifdef CT_PS5
     /* port: the readout (hd2d_set_perf_osd): every 4 s, the frame's GPU
        time and its three slowest passes, so a photo of the screen tells
        what the file would. */
@@ -348,7 +366,8 @@ static void prof_flush(int s)
                     top[r] = k;
             }
         char msg[160];
-        int len = snprintf(msg, sizeof msg, "GPU %.1f CPU %.1f MS:",
+        int len = snprintf(msg, sizeof msg, "3D RES %d%% GPU %.1f CPU %.1f MS:",
+                           (int)lroundf(dyn_scale * 100.0f),
                            (double)(t[prof.n[s] - 1] - t[0]) / 1e6,
                            prof.submit_ms[s]);   /* from the start: it holds the other two */
         for (int r = 0; r < 3 && top[r] && len < (int)sizeof msg; r++) {
@@ -2228,6 +2247,10 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
         float cap = 1080.0f / (float)ph;
         rs = rs > 0.0f && rs < cap ? rs : cap;
     }
+    /* port: and below that, the dynamic resolution (prof_flush): only as
+       far down as needed to keep 60 fps, never under 810 lines' worth. */
+    if (user_render_scale <= 0.0f && dyn_scale < 1.0f)
+        rs = (rs > 0.0f ? rs : 1.0f) * dyn_scale;
 #endif
     int rw = pw, rh = ph;
     if (rs > 0.0f && rs < 0.995f) {
