@@ -63,6 +63,9 @@ void hd2d_set_aspect(int aspect);
 /* port: depth of field: 0 off, 1 low, 2 full (the presets' own). */
 void hd2d_set_dof(int level);
 int hd2d_dof(void);
+/* Pixel-art smoothing of the 3D view's tiles (on by default). */
+void hd2d_set_smooth(int on);
+int hd2d_smooth(void);
 int hd2d_aspect(void);
 
 /* Draw one frame: bgrx and layers are SCHED_WIDTH x SCHED_HEIGHT

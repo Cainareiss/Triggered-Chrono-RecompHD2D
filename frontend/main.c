@@ -1174,6 +1174,8 @@ static const char *const dof_labels[3] = {"Off", "Low", "Full"},
                          *const dof_values[3] = {"off", "low", "full"};
 static int get_dof(void *u) { (void)u; return hd2d_dof(); }
 static void set_dof(void *u, int v) { (void)u; hd2d_set_dof(v); }
+static int get_smooth(void *u) { (void)u; return hd2d_smooth(); }
+static void set_smooth(void *u, int v) { (void)u; hd2d_set_smooth(v); }
 static int get_aspect(void *u) { (void)u; return hd2d_aspect(); }
 static void set_aspect(void *u, int v) { (void)u; hd2d_set_aspect(v); }
 static int get_cam_tilt(void *u)
@@ -1694,6 +1696,11 @@ static void register_settings(void)
         .enabled = on_hd2d,
         .help = "The miniature-model blur towards the top and bottom of the picture: off, a "
                 "little, or the look's full amount."});
+    settings_register(&(setting){
+        .key = "smooth_3d", .label = "3D texture smoothing", .category = "Look",
+        .type = SETTING_BOOL, .get = get_smooth, .set = set_smooth, .enabled = on_hd2d,
+        .help = "Pixel-art anti-aliasing in the 3D diorama: tilted and distant tiles stay even "
+                "instead of crunchy. Turn off for hard pixels or a little more speed."});
     settings_register(&(setting){.key = "aspect", .label = "Aspect", .category = "Look",
                                  .type = SETTING_ENUM, .options = aspect_labels,
                                  .count = HD2D_ASPECTS, .get = get_aspect, .set = set_aspect,

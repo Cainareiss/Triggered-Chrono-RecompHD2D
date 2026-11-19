@@ -422,6 +422,9 @@ static int dof_level = 2;
 #endif
 void hd2d_set_dof(int level) { dof_level = level < 0 ? 0 : level > 2 ? 2 : level; }
 int hd2d_dof(void) { return dof_level; }
+static int smooth_3d = 1;   /* port: pixel-art smoothing in the 3D view */
+void hd2d_set_smooth(int on) { smooth_3d = on != 0; }
+int hd2d_smooth(void) { return smooth_3d; }
 int hd2d_aspect(void) { return aspect_mode; }
 void hd2d_set_timing(int on) { timing = on; }
 int hd2d_wants_scene(void) { return presets[cur_preset].scene3d; }
@@ -1499,6 +1502,11 @@ static void post(const settings *s, int px, int py, int pw, int ph, int ow, int 
     p_glUniform3f(U(pf, "uShadowTint"), 0.92f, 0.98f, 1.08f);
     p_glUniform3f(U(pf, "uHighTint"), 1.06f, 1.0f, 0.9f);
     p_glUniform1f(U(pf, "uSideDim"), side_fill ? s->side_dim : 0.0f);
+#ifdef CT_PS5
+    p_glUniform1i(U(pf, "uFillTB"), 0);   /* port: the mirrored blur there read as a smear */
+#else
+    p_glUniform1i(U(pf, "uFillTB"), 1);
+#endif
     p_glUniform1f(U(pf, "uTime"), (float)(g.frame % 997) / 997.0f);
     p_glUniform1i(U(pf, "uDebug"), debug_view);
     if (threeD) {
@@ -2342,6 +2350,8 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     p_glUniform2f(U(P, "uCam"), (float)sc->camera_x, (float)sc->camera_y);
     p_glUniform4f(U(P, "uFog"), fog[0], fog[1], fog[2], 0.6f * s->haze / 0.5f);
     p_glUniform4f(U(P, "uDepth"), dist, dist * 1.6f, bright, 0.55f * s->shadow * a);
+    if (!pass)
+        p_glUniform1i(U(P, "uSmooth"), smooth_3d);
     p_glUniform4f(U(P, "uMisc"), s->point_light * a * (0.25f + 0.75f * dark_amt), dist * 1.25f,
                   dist * 3.5f, 1.0f / S3D_SHADOW_SIZE);
     if (pass) {

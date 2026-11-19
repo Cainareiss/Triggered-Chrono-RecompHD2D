@@ -190,6 +190,23 @@ vec4 overlayTexel(vec2 p)
 }
 #endif
 
+#ifndef SHADOW_PASS
+uniform int uSmooth;             // pixel-art smoothing in the 3D view
+// Four taps across the pixel's footprint: oblique and distant tiles average out instead of
+// flickering between texels, and a magnified texel edge gets a one-pixel soft step.
+vec4 tileTexelAA(uint tile, vec2 uv)
+{
+    vec2 dx = dFdx(uv) * 0.3, dy = dFdy(uv) * 0.3;
+    if (uSmooth == 0 || (tile & (1u << 26)) != 0u)   // packed pictures are filtered already
+        return tileTexel(tile, uv);
+    vec4 a = tileTexel(tile, uv - dx - dy), b = tileTexel(tile, uv + dx - dy);
+    vec4 c = tileTexel(tile, uv - dx + dy), d = tileTexel(tile, uv + dx + dy);
+    float al = a.a + b.a + c.a + d.a;
+    vec3 rgb = (a.rgb * a.a + b.rgb * b.a + c.rgb * c.a + d.rgb * d.a) / max(al, 1e-4);
+    return vec4(rgb, al * 0.25);
+}
+#endif
+
 uniform sampler2DShadow uShadowMap;
 uniform sampler2D uLightMap;     // point lights, in the console's screen space
 uniform vec3 uLightDir;          // towards the key light
@@ -257,7 +274,7 @@ void main()
     // the nearest of the fixed normals, for the ambient occlusion
     int ni = n.y > 0.7 ? 0 : abs(n.x) > abs(n.z) ? (n.x > 0.0 ? 2 : 3) : (n.z > 0.0 ? 1 : 4);
 #else
-    vec4 tex = tileTexel(vTile, vUV);
+    vec4 tex = tileTexelAA(vTile, vUV);
     if (tex.a < 0.5)
         discard;
     vec3 col = tex.rgb;

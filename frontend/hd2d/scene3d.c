@@ -16,7 +16,9 @@
  *   where the original drew it: a roof, or the top of a hedge.
  * - A run blocked deeper than its wall is a box: where neighboring
  *   columns' boxes differ in height, side walls close it, textured with
- *   the wall's own tiles. Other runs (posts, trunks, canopies, arches)
+ *   the box's top folded down over the edge (else the wall's own tiles).
+ * - Blocked cells drawn only with the surrounding walkable ground's tiles
+ *   stay flat (port: no blocks of grass). Other runs (posts, trunks, canopies, arches)
  *   stay thin cut-outs.
  * - Overhead tiles over walkable cells belong to the blocked run north of
  *   them (a canopy over its trunk, eaves behind a roof), and only those
@@ -244,6 +246,56 @@ static void raised_place(const build_ctx *c, place *p, int x, int y)
                      {1, 0, 0}, {0, 0, 1}, S3D_N_UP, S3D_RAISED};
 }
 
+/* port: a blocked cell drawn with nothing but the tiles of the walkable
+   ground around it (an invisible wall at a path's edge, the grass between
+   trees) is ground: it stays flat instead of rising as a block of grass.
+   Tiles are compared by number, palette and flips; priority aside. */
+static int ground_entry(const build_ctx *c, int li, uint16_t e, int x, int y)
+{
+    const ct_scene *s = c->s;
+    const ct_scene_layer *L = layer_of(s, draw_layers[li]);
+    for (int dy = -1; dy <= 1; dy++)
+        for (int dx = -1; dx <= 1; dx++) {
+            int nx = x + dx, ny = y + dy;
+            if ((!dx && !dy) || nx < 0 || ny < 0 || nx >= s->map_w || ny >= s->map_h ||
+                c->raised[ny][nx] || c->empty[ny][nx] ||
+                (s->cells[ny * CT_SCENE_MAX_CELLS + nx].flags & CT_CELL_OVERHEAD))
+                continue;
+            for (int q = 0; q < 4; q++)
+                if ((entry_at(L, nx, ny, q) & ~0x2000) == (e & ~0x2000))
+                    return 1;
+        }
+    return 0;
+}
+
+static void flatten_ground(build_ctx *c)
+{
+    const ct_scene *s = c->s;
+    static uint8_t flat[MAXC][MAXC];
+    memset(flat, 0, sizeof flat);
+    for (int y = 0; y < s->map_h; y++)
+        for (int x = 0; x < s->map_w; x++) {
+            if (!c->raised[y][x] || (s->cells[y * CT_SCENE_MAX_CELLS + x].flags & CT_CELL_OVERHEAD))
+                continue;
+            int ground = 1, any = 0;
+            for (int li = 0; li < 2 && ground; li++) {
+                const ct_scene_layer *L = layer_of(s, draw_layers[li]);
+                for (int q = 0; L && q < 4 && ground; q++) {
+                    uint16_t e = entry_at(L, x, y, q);
+                    if (tile_empty(s, L, e))
+                        continue;
+                    any = 1;
+                    ground = ground_entry(c, li, e, x, y);
+                }
+            }
+            flat[y][x] = ground && any;
+        }
+    for (int y = 0; y < s->map_h; y++)   /* all at once: decided on the original heights */
+        for (int x = 0; x < s->map_w; x++)
+            if (flat[y][x])
+                c->raised[y][x] = 0;
+}
+
 static void find_runs(build_ctx *c)
 {
     const ct_scene *s = c->s;
@@ -271,6 +323,7 @@ static void find_runs(build_ctx *c)
             c->solid[y][x] = cl->cls == CT_CELL_SOLID || cl->cls == CT_CELL_WALLISH;
             c->raised[y][x] = !empty && (c->solid[y][x] || (cl->flags & CT_CELL_OVERHEAD));
         }
+    flatten_ground(c);
 }
 
 static void mark_runs(build_ctx *c, int hmax)
@@ -385,10 +438,18 @@ static void emit_sides(build_ctx *c)
                 continue;
             int east = h1 > h2;               /* column x's east face, else x+1's west face */
             int src = east ? x : x + 1, lo = (east ? h2 : h1) / 16, hi = (east ? h1 : h2) / 16;
-            int b = box_b[z][src];
+            int b = box_b[z][src], hc = (east ? h1 : h2) / 16, a = c->run_a[b][src];
             float X = (float)(x + 1) * 16;
             for (int k = lo; k < hi; k++) {
-                int sy = b - k;   /* the wall cell at that height */
+                /* port: the box's own top, folded down over its edge: the
+                   top cell lying at this row (y = z - hc), a row further
+                   south for each step down, so the side continues the top's
+                   art instead of repeating the front wall's tiles along the
+                   whole depth of the box (streaks down canopies). Else, or
+                   off the run, the front wall's cell at that height. */
+                int sy = z - hc - (hc - 1 - k);
+                if (sy < a || sy > b - hc || c->empty[sy][src] || c->hooked[sy][src])
+                    sy = b - k;   /* the wall cell at that height */
                 if (sy < 0 || c->empty[sy][src] || c->hooked[sy][src])
                     continue;
                 place p = east ? (place){{X, (float)(k + 1) * 16, (float)(z + 1) * 16},
