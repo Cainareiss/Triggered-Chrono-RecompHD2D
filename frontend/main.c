@@ -1601,6 +1601,15 @@ static const char *packs_count_text(void *u, char *buf, size_t n)
 }
 
 /* The pack rows, rebuilt each time the menu opens (the folder may change). */
+#ifdef CT_PS5
+static char packs_scan_text[160] = "not checked";
+static const char *packs_scan_get(void *u, char *buf, size_t n)
+{
+    (void)u;
+    snprintf(buf, n, "%s", packs_scan_text);
+    return buf;
+}
+#endif
 static void packs_refresh(void)
 {
     settings_unregister_category("Packs");
@@ -1669,28 +1678,54 @@ static void packs_refresh(void)
 #endif
     }
 #ifdef CT_PS5
-    /* port: if the console lists nothing, packs.txt in the packs folder
-       (one folder name a line) names them */
-    if (n_packs_listed == scan_packs0) {
-        char t[700], line[300];
-        snprintf(t, sizeof t, "%s/packs.txt", packs_folder);
-        FILE *lf = fopen(t, "r");
-        while (lf && fgets(line, sizeof line, lf)) {
-            line[strcspn(line, "\r\n")] = 0;
-            if (!line[0] || line[0] == '#')
-                continue;
-            char pt[1100];
-            snprintf(pt, sizeof pt, "%s/%s/pack.toml", packs_folder, line);
-            FILE *f = fopen(pt, "r");
-            if (scan)
-                fprintf(scan, "  packs.txt: \"%s\": %s\n", line, f ? "pack" : "no pack.toml");
-            if (f) {
-                fclose(f);
-                pack_list_add(line);
+    /* port: names tried without the listing: the lines of packs.txt (in the
+       packs folder, or one level down where an unzip put it), and the
+       names of the packs this project ships, each as NAME, NAME/NAME and
+       NAME-pack/NAME (an unzip into a folder named after the zip) */
+    {
+        static const char *const known[] = {"crono-remaster", NULL};
+        char names[24][200];
+        int nn = 0;
+        for (int k = 0; known[k]; k++)
+            snprintf(names[nn++], sizeof names[0], "%s", known[k]);
+        const char *txts[] = {"packs.txt", "crono-remaster-pack/packs.txt", NULL};
+        for (int k = 0; txts[k]; k++) {
+            char t[700], line[200];
+            snprintf(t, sizeof t, "%s/%s", packs_folder, txts[k]);
+            FILE *lf = fopen(t, "r");
+            while (lf && nn < 24 && fgets(line, sizeof line, lf)) {
+                line[strcspn(line, "\r\n")] = 0;
+                if (line[0] && line[0] != '#')
+                    snprintf(names[nn++], sizeof names[0], "%s", line);
+            }
+            if (lf)
+                fclose(lf);
+        }
+        for (int k = 0; k < nn; k++) {
+            char cand[3][420];
+            snprintf(cand[0], sizeof cand[0], "%s", names[k]);
+            snprintf(cand[1], sizeof cand[1], "%s/%s", names[k], names[k]);
+            snprintf(cand[2], sizeof cand[2], "%s-pack/%s", names[k], names[k]);
+            for (int c = 0; c < 3; c++) {
+                char pt[1100];
+                snprintf(pt, sizeof pt, "%s/%s/pack.toml", packs_folder, cand[c]);
+                FILE *f = fopen(pt, "r");
+                if (scan)
+                    fprintf(scan, "  tried \"%s\": %s\n", cand[c], f ? "pack" : "no");
+                if (f) {
+                    fclose(f);
+                    pack_list_add(cand[c]);
+                    break;
+                }
             }
         }
-        if (lf)
-            fclose(lf);
+    }
+    {
+        int ds2[3];
+        ps5_dir_status(ds2);
+        snprintf(packs_scan_text, sizeof packs_scan_text, "%s, %d seen, %d packs (%x %x %x)",
+                 d ? "opened" : "not readable", scan_entries, n_packs_listed - scan_packs0,
+                 (unsigned)ds2[0], (unsigned)ds2[1], (unsigned)ds2[2]);
     }
     if (scan)
         fclose(scan);
@@ -1714,6 +1749,12 @@ static void packs_refresh(void)
         .help = "Save every character frame drawn on the field into "
                 "/data/ct-recomp/sheets/ct5 (one picture per frame, and sheets when "
                 "turned off), to make a character pack from."});
+#endif
+#ifdef CT_PS5
+    settings_register(&(setting){.label = "Folder check", .category = "Packs",
+                                 .type = SETTING_INFO, .text = packs_scan_get,
+                                 .help = "What CT5 found in the packs folder (for a photo if a "
+                                         "pack is missing)."});
 #endif
     settings_register(&(setting){.label = "Asset packs", .category = "Packs", .type = SETTING_INFO,
                                  .flags = SETTING_HEADING});
