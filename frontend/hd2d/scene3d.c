@@ -682,10 +682,50 @@ static int build_sprites_pass(const ct_scene *s, const s3d_params *p, s3d_mesh *
        that object instead of at its own bottom, which split it apart */
     int ob_n = 0, ob_box[CT_SCENE_MAX_OBJECTS][4], ob_foot[CT_SCENE_MAX_OBJECTS];
     float ob_z[CT_SCENE_MAX_OBJECTS], ob_base[CT_SCENE_MAX_OBJECTS];
+    /* port: objects drawn as parts of one bigger one (a boss whose arms
+       are objects of their own) stand at the biggest one's foot: each at
+       its own bottom, the parts came out at other depths and heights, the
+       figure disjointed. A part: its box mostly (60%) inside a bigger
+       object's box, its bottom not below that one's. */
+    int all_box[CT_SCENE_MAX_OBJECTS][4], all_ok[CT_SCENE_MAX_OBJECTS];
+    for (int k = 0; k < s->n_objects && k < CT_SCENE_MAX_OBJECTS; k++) {
+        const ct_scene_object *o = &s->object[k];
+        int bx0 = 100000, by0 = 100000, bx1 = -100000, by1 = -100000;
+        for (int j = 0; j < o->n_pieces; j++) {
+            int x, y, size;
+            if (!oam_visible(s, o->piece[j], &x, &y, &size))
+                continue;
+            bx0 = x < bx0 ? x : bx0;
+            by0 = y < by0 ? y : by0;
+            bx1 = x + size > bx1 ? x + size : bx1;
+            by1 = y + size > by1 ? y + size : by1;
+        }
+        all_ok[k] = bx1 > bx0;
+        all_box[k][0] = bx0;
+        all_box[k][1] = by0;
+        all_box[k][2] = bx1;
+        all_box[k][3] = by1;
+    }
     for (int k = 0; k < s->n_objects && k < CT_SCENE_MAX_OBJECTS; k++) {
         const ct_scene_object *o = &s->object[k];
         if (!o->n_pieces)
             continue;
+        int group_bottom = -100000;
+        if (all_ok[k]) {
+            int *a = all_box[k], area = (a[2] - a[0]) * (a[3] - a[1]), best = 0;
+            for (int j = 0; j < s->n_objects && j < CT_SCENE_MAX_OBJECTS; j++) {
+                if (j == k || !all_ok[j])
+                    continue;
+                int *b = all_box[j], barea = (b[2] - b[0]) * (b[3] - b[1]);
+                int ix = (a[2] < b[2] ? a[2] : b[2]) - (a[0] > b[0] ? a[0] : b[0]);
+                int iy = (a[3] < b[3] ? a[3] : b[3]) - (a[1] > b[1] ? a[1] : b[1]);
+                if (barea > area && barea > best && ix > 0 && iy > 0 && ix * iy * 10 >= area * 6 &&
+                    b[3] >= a[3]) {
+                    best = barea;
+                    group_bottom = b[3];
+                }
+            }
+        }
         int foot_sy = (int)(o->y - s->camera_y);
         /* The sprite's lowest row stands on the floor, never under it. */
         int bottom = -100000;
@@ -705,7 +745,7 @@ static int build_sprites_pass(const ct_scene *s, const s3d_params *p, s3d_mesh *
            flat, so a character on a raised walkway (z > 0) stood above its
            own shadow; its feet stay on the row the console drew them. */
         int zj = 0;
-        foot_sy = bottom + zj;
+        foot_sy = (group_bottom > bottom ? group_bottom : bottom) + zj;
         float lift = 0.0f;
         /* Standing in a raised cell: the console drew it over the wall
            there if its priority beats the wall's tiles (always for
@@ -818,6 +858,34 @@ int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
             bottom = y + size > bottom ? y + size : bottom;
         }
         if (bottom == -100000 || x1 - x0 > 64)
+            continue;
+        /* a part of a bigger object (see build_sprites_pass): no shadow of its own */
+        int part = 0, top = 100000;
+        for (int j = 0; j < o->n_pieces; j++) {
+            int x, y, size;
+            if (oam_visible(s, o->piece[j], &x, &y, &size) && y < top)
+                top = y;
+        }
+        for (int k2 = 0; k2 < s->n_objects && k2 < CT_SCENE_MAX_OBJECTS && !part; k2++) {
+            const ct_scene_object *b = &s->object[k2];
+            if (k2 == k)
+                continue;
+            int bx0 = 100000, by0 = 100000, bx1 = -100000, by1 = -100000;
+            for (int j = 0; j < b->n_pieces; j++) {
+                int x, y, size;
+                if (!oam_visible(s, b->piece[j], &x, &y, &size))
+                    continue;
+                bx0 = x < bx0 ? x : bx0;
+                by0 = y < by0 ? y : by0;
+                bx1 = x + size > bx1 ? x + size : bx1;
+                by1 = y + size > by1 ? y + size : by1;
+            }
+            int area = (x1 - x0) * (bottom - top), barea = (bx1 - bx0) * (by1 - by0);
+            int ix = (x1 < bx1 ? x1 : bx1) - (x0 > bx0 ? x0 : bx0);
+            int iy = (bottom < by1 ? bottom : by1) - (top > by0 ? top : by0);
+            part = barea > area && ix > 0 && iy > 0 && ix * iy * 10 >= area * 6 && by1 >= bottom;
+        }
+        if (part)
             continue;
         int zj = 0;   /* (as above) */
         float w = (float)(x1 - x0) * 0.8f, d = w * 0.45f;
