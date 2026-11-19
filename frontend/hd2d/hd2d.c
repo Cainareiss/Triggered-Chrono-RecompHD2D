@@ -406,6 +406,16 @@ const char *hd2d_preset_name(int p) { return p >= 0 && p < HD2D_PRESETS ? preset
 void hd2d_set_debug(int v) { debug_view = v < 0 || v >= HD2D_DEBUGS ? 0 : v; }
 int hd2d_debug(void) { return debug_view; }
 void hd2d_set_aspect(int a) { aspect_mode = a < 0 || a >= HD2D_ASPECTS ? 0 : a; }
+/* port: the depth of field's strength, a setting: off, low, full. The PS5
+   starts with it off (the blur at the top and bottom read as a fault on a
+   TV, menus included). */
+#ifdef CT_PS5
+static int dof_level;
+#else
+static int dof_level = 2;
+#endif
+void hd2d_set_dof(int level) { dof_level = level < 0 ? 0 : level > 2 ? 2 : level; }
+int hd2d_dof(void) { return dof_level; }
 int hd2d_aspect(void) { return aspect_mode; }
 void hd2d_set_timing(int on) { timing = on; }
 int hd2d_wants_scene(void) { return presets[cur_preset].scene3d; }
@@ -1372,6 +1382,9 @@ static void post(const settings *s, int px, int py, int pw, int ph, int ow, int 
     int pc = threeD ? P3_COC : P_COC, pb = threeD ? P3_BRIGHT : P_BRIGHT,
         pf = threeD ? P3_FINAL : P_FINAL;
     pic3d = threeD;
+    static const float dof_scale[3] = {0.0f, 0.4f, 1.0f};   /* port: hd2d_set_dof */
+    dof_tilt *= dof_scale[dof_level];
+    dof_depth *= dof_scale[dof_level];
     const float fore_depth = 0.22f;   /* light.frag's depthOf(C_FORE) */
     if (s->effects) {
         /* 3: blur amount, then the variable blur, H and V, both planes. */

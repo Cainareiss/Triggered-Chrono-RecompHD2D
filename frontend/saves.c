@@ -3,6 +3,7 @@
  *
  * Save RAM on disk: see saves.h. */
 #include "saves.h"
+#include "ps5.h"   /* port: ps5_notify */
 
 #include <errno.h>
 #include <fcntl.h>
@@ -209,6 +210,12 @@ static int save_now(const uint8_t *sram)
 {
     if (write_atomic(sram)) {
         fprintf(stderr, "ct_sdl: save: cannot write %s (%s)\n", path, strerror(errno));
+#ifdef CT_PS5
+        static int told;   /* port: no terminal on a console: say it once on screen */
+        if (!told++)
+            ps5_notify("CT5: your save could not be written (%s). See ct-recomp.log.",
+                       strerror(errno));
+#endif
         return 1;   /* on_disk unchanged: retried after the interval */
     }
     memcpy(on_disk, sram, CT_SRAM_SIZE);

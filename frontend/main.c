@@ -1170,6 +1170,10 @@ static void set_preset(void *u, int v)
         sched_set_behind(hd2d_wants_behind());
 }
 static const char *const aspect_labels[HD2D_ASPECTS] = {"4:3", "Pixel 8:7", "Stretch"};
+static const char *const dof_labels[3] = {"Off", "Low", "Full"},
+                         *const dof_values[3] = {"off", "low", "full"};
+static int get_dof(void *u) { (void)u; return hd2d_dof(); }
+static void set_dof(void *u, int v) { (void)u; hd2d_set_dof(v); }
 static int get_aspect(void *u) { (void)u; return hd2d_aspect(); }
 static void set_aspect(void *u, int v) { (void)u; hd2d_set_aspect(v); }
 static int get_cam_tilt(void *u)
@@ -1684,6 +1688,12 @@ static void register_settings(void)
         .set = set_preset,
         .help = "Original pixels, or the HD-2D renderer: light, depth of field, bloom; the 3D "
                 "diorama rebuilds maps in 3D. Used by the HD-2D renderer. (F1, R3)"});
+    settings_register(&(setting){
+        .key = "dof", .label = "Depth of field", .category = "Look", .type = SETTING_ENUM,
+        .options = dof_labels, .values = dof_values, .count = 3, .get = get_dof, .set = set_dof,
+        .enabled = on_hd2d,
+        .help = "The miniature-model blur towards the top and bottom of the picture: off, a "
+                "little, or the look's full amount."});
     settings_register(&(setting){.key = "aspect", .label = "Aspect", .category = "Look",
                                  .type = SETTING_ENUM, .options = aspect_labels,
                                  .count = HD2D_ASPECTS, .get = get_aspect, .set = set_aspect,
@@ -2350,6 +2360,11 @@ static void choose_pacing(void)
        check in on_frame, and it is not yet measured on a real Game Mode
        display. */
     int want = !fast && pace_opt == PACE_VSYNC;
+#ifdef CT_PS5_GL
+    /* port: the PS5's GPU build tears without vsync (seen on a TV); its
+       output is a steady 60 Hz, so auto means vsync there */
+    want |= !fast && pace_opt == PACE_AUTO;
+#endif
     int ok = 0;
     if (want)
         ok = hd2d_mode ? !SDL_GL_SetSwapInterval(1) : ren && !SDL_RenderSetVSync(ren, 1);
@@ -3464,8 +3479,11 @@ int main(int argc, char **argv)
         }
         fprintf(stderr, "ct_sdl: game module %s: %u functions\n", module_path, ct_func_count);
     }
-    if (!no_save)   /* port: the save RAM from disk (saves.h) */
-        saves_open(save_path, game_id);
+    if (!no_save && saves_open(save_path, game_id)) {   /* port: the save RAM from disk (saves.h) */
+#ifdef CT_PS5
+        ps5_notify("CT5: saving is off this time (see ct-recomp.log)");
+#endif
+    }
     char title[22];   /* ROM header title, $FFC0, 21 bytes, space padded */
     memcpy(title, bus_rom() + 0xFFC0, 21);
     title[21] = 0;
