@@ -2307,7 +2307,12 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     float zoom = world ? g.s3.wzoom : g.s3.zoom;
     float tilt_deg = (world ? g.s3.wtilt : g.s3.tilt) + g.s3.dtilt;   /* port: + the gyro's offset */
     tilt_deg = tilt_deg < 0 ? 0 : tilt_deg > 80 ? 80 : tilt_deg;
-    float tilt = tilt_deg * 3.14159265f / 180.0f, fovy = g.s3.fov * 3.14159265f / 180.0f;
+    /* port: the field's layered cards with a long lens (14 degrees, from
+       further off: the same view): with the wide one, cards and sprites
+       drifted apart as the camera moved, and upright sprites leaned at the
+       sides of the screen. */
+    float fov_deg = !world && user_cards && g.s3.fov > 14.0f ? 14.0f : g.s3.fov;
+    float tilt = tilt_deg * 3.14159265f / 180.0f, fovy = fov_deg * 3.14159265f / 180.0f;
     float aspect = (float)pw / (float)ph;   /* the picture's, at any render scale */
     float dist = 128.0f / zoom / (tanf(fovy * 0.5f) * aspect);
     float at[3] = {(float)sc->camera_x + 128.0f, 0.0f, (float)sc->camera_y + 120.0f};
