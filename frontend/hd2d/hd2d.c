@@ -512,7 +512,9 @@ enum { P_EMIT, P_LIGHT, P_COC, P_DOFBLUR, P_BRIGHT, P_GAUSS, P_FINAL, P_COUNT,
        /* the world map's surfaces and shadow map (WORLD_MAP) */
        P3_WSCENE, P3_WSHADOW,
        /* port: asset packs' models (MODEL) */
-       P3_MSCENE, P3_MSHADOW, P_ALL };
+       P3_MSCENE, P3_MSHADOW,
+       /* port: the 3D target's clear, drawn (see s3d_render) */
+       P3_CLEAR, P_ALL };
 
 typedef struct {
     GLuint tex, fbo;
@@ -1654,6 +1656,16 @@ static void s3d_params_init(void)
 
 /* Programs and the fixed-size resources. Failure only turns the 3D path
    off: the 2D presets don't need it. */
+/* port: the 3D target's clear as a draw: on the PS5's GL a glClear of
+   its color targets cost about as long as a frame (36 ms at 1080 lines,
+   in proportion to the pixels), a full-screen triangle almost nothing. */
+static const char clear3d_frag[] =
+    "in vec2 vUV;\n"
+    "uniform vec4 uC;\n"
+    "layout(location = 0) out vec4 o0;\n"
+    "layout(location = 1) out vec4 o1;\n"
+    "void main() { o0 = uC; o1 = uC; }\n";
+
 static int s3d_init(void)
 {
     s3d_params_init();
@@ -1684,6 +1696,7 @@ static int s3d_init(void)
         {P3_MSCENE, NULL, "#define MODEL\n", hd2d_src_scene3d_frag, "scene3d.frag (model)"},
         {P3_MSHADOW, NULL, "#define MODEL\n#define SHADOW_PASS\n", hd2d_src_scene3d_frag,
          "scene3d.frag (model shadow)"},
+        {P3_CLEAR, NULL, NULL, clear3d_frag, "clear3d.frag"},
     };
     /* The world map's vertex shader: scene3d.vert with WORLD_MAP; the
        models' with MODEL. */
@@ -2394,9 +2407,20 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     p_glBindFramebuffer(GL_FRAMEBUFFER, g.s3.fbo);
     p_glViewport(0, 0, rw, rh);
     float bright = sc->brightness / 15.0f;
+#ifdef CT_PS5
+    p_glDisable(GL_DEPTH_TEST);
+    p_glUseProgram(g.prog[P3_CLEAR]);
+    p_glUniform4f(U(P3_CLEAR, "uC"), void_[0] * bright, void_[1] * bright, void_[2] * bright,
+                  1.0f);
+    p_glBindVertexArray(g.vao);
+    draw_to(g.s3.fbo, rw, rh);
+    p_glClear(GL_DEPTH_BUFFER_BIT);   /* (a depth clear is quick there) */
+    p_glEnable(GL_DEPTH_TEST);
+#else
     p_glClearColor(void_[0] * bright, void_[1] * bright, void_[2] * bright, 1.0f);
     p_glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     p_glClearColor(0, 0, 0, 0);
+#endif
     prof_mark("s3d_clear");   /* port: the scene pass in parts, for the readout */
     /* port: the models' program gets the same (asset packs) */
     for (int pass = g.m_ni ? 1 : 0; pass >= 0; pass--) {
