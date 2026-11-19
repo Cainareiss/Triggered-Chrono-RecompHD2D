@@ -197,7 +197,11 @@ uniform int uSmooth;             // pixel-art smoothing in the 3D view
 vec4 tileTexelAA(uint tile, vec2 uv)
 {
     vec2 dx = dFdx(uv) * 0.3, dy = dFdy(uv) * 0.3;
-    if (uSmooth == 0 || (tile & (1u << 26)) != 0u)   // packed pictures are filtered already
+    // Only where a screen pixel spans over half a texel (far, or seen at a
+    // slant): close up one texel covers several pixels and a single read is
+    // already even, and the four reads cost most of the frame.
+    float span = max(dot(dx, dx), dot(dy, dy));   // (0.3 * texels per pixel)^2
+    if (uSmooth == 0 || (tile & (1u << 26)) != 0u || span < 0.0225)   // packed: filtered
         return tileTexel(tile, uv);
     vec4 a = tileTexel(tile, uv - dx - dy), b = tileTexel(tile, uv + dx - dy);
     vec4 c = tileTexel(tile, uv - dx + dy), d = tileTexel(tile, uv + dx + dy);
@@ -230,6 +234,10 @@ float shadowAt(vec3 n, vec3 L)
     if (any(lessThan(s.xy, vec2(0.0))) || any(greaterThan(s.xy, vec2(1.0))))
         return 1.0;
     float bias = 0.0015 + 0.003 * (1.0 - max(dot(n, L), 0.0));
+#ifdef CT_FAST
+    // One lookup: the map's linear filter already compares four texels.
+    return texture(uShadowMap, vec3(s.xy, s.z - bias));
+#endif
     float t = uMisc.w, v = 0.0;
     for (int k = 0; k < 4; k++) {
         vec2 o = vec2(float(k & 1) - 0.5, float(k >> 1) - 0.5) * 1.5 * t;

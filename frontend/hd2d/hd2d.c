@@ -350,7 +350,7 @@ static void prof_flush(int s)
         char msg[160];
         int len = snprintf(msg, sizeof msg, "GPU %.1f CPU %.1f MS:",
                            (double)(t[prof.n[s] - 1] - t[0]) / 1e6,
-                           prof.analyze_ms[s] + prof.upload_ms[s] + prof.submit_ms[s]);
+                           prof.submit_ms[s]);   /* from the start: it holds the other two */
         for (int r = 0; r < 3 && top[r] && len < (int)sizeof msg; r++) {
             char nm[24];
             int j = 0;
@@ -938,7 +938,11 @@ static GLuint compile(GLenum type, const char *lib, const char *body, const char
 {
     const char *prefix = g.gles ? "#version 300 es\nprecision highp float;\nprecision highp int;\n"
                                   "precision highp usampler2D;\n"
+#ifdef CT_PS5   /* port: the console's cheaper paths in the shaders */
+                                : "#version 330 core\n#define CT_FAST 1\n";
+#else
                                 : "#version 330 core\n";
+#endif
     const char *src[3] = {prefix, lib ? lib : "", body};
     GLuint s = p_glCreateShader(type);
     p_glShaderSource(s, 3, src, NULL);
