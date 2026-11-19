@@ -236,6 +236,72 @@ int stick_dir(int v, int cur)
     return 0;
 }
 
+#ifdef CT_PS5
+/* port: the help lines name keyboard keys in parentheses, "(F1, R3)",
+   "(Ctrl+R)": on the PS5 only the controller's buttons are kept, and a
+   group left empty goes, with the space before it. */
+static int is_key_hint(const char *t, size_t n)
+{
+    if (n >= 2 && t[0] == 'F' && t[1] >= '0' && t[1] <= '9')
+        return 1;   /* F1 .. F12 */
+    static const char *const words[] = {"Ctrl+", "Shift+", "Alt+", "Esc", "Tab", "Enter",
+                                        "Backspace", "Caps Lock", "Space"};
+    for (size_t k = 0; k < sizeof words / sizeof *words; k++)
+        if (!strncmp(t, words[k], strlen(words[k])))
+            return 1;
+    return 0;
+}
+
+static void strip_key_hints(char *s)
+{
+    char out[512];
+    size_t o = 0;
+    for (const char *p = s; *p && o + 1 < sizeof out;) {
+        const char *close = *p == '(' ? strchr(p, ')') : NULL;
+        if (!close) {
+            out[o++] = *p++;
+            continue;
+        }
+        /* a group: keep its non-key tokens, or the group as it was if none is a key */
+        char keep[256];
+        size_t kn = 0;
+        int any_key = 0;
+        for (const char *t = p + 1; t < close;) {
+            size_t n = strcspn(t, ",)");
+            if (t + n > close)
+                n = (size_t)(close - t);
+            if (is_key_hint(t, n))
+                any_key = 1;
+            else if (kn + n + 2 < sizeof keep) {
+                if (kn)
+                    keep[kn++] = ',', keep[kn++] = ' ';
+                memcpy(keep + kn, t, n);
+                kn += n;
+            }
+            t += n;
+            while (t < close && (*t == ',' || *t == ' '))
+                t++;
+        }
+        if (!any_key) {   /* not a key list: as written */
+            size_t n = (size_t)(close - p) + 1;
+            if (o + n < sizeof out)
+                memcpy(out + o, p, n), o += n;
+        } else if (kn && o + kn + 2 < sizeof out) {
+            out[o++] = '(';
+            memcpy(out + o, keep, kn);
+            o += kn;
+            out[o++] = ')';
+        } else {
+            while (o && out[o - 1] == ' ')
+                o--;
+        }
+        p = close + 1;
+    }
+    out[o] = 0;
+    memcpy(s, out, o + 1);
+}
+#endif
+
 /* ---- textures: glyphs and the preview ---- */
 
 ImTextureData *make_texture(int w, int h)
@@ -758,6 +824,9 @@ void build_ui(float W, float H)
                  cur->flags & SETTING_RESTART ? "(Takes effect on the next start.)" : "");
         if (M.capture >= 0)
             snprintf(help, sizeof help, "Press the key to use. Escape: cancel. Backspace: no key.");
+#ifdef CT_PS5
+        strip_key_hints(help);   /* port: the console's buttons only */
+#endif
         float fs = px * 0.8f;
         dl->AddText(M.font, fs, ImVec2(x0, hy + px * 0.45f), C_DIM, help, NULL, text_x1 - x0);
     }

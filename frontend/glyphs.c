@@ -175,12 +175,21 @@ const char *glyphs_family_name(int set)
     return set >= 0 && set < GLYPHS_SETS ? family_names[set] : "?";
 }
 
+#ifdef CT_PS5   /* port: a DualSense, always: no keyboard prompts on the console */
+static int in_use = GLYPHS_PLAYSTATION;
+#else
 static int in_use = GLYPHS_KEYBOARD;
+#endif
 
 void glyphs_use(int set)
 {
+#ifdef CT_PS5   /* port: the PlayStation set, whatever pad SDL reports */
+    (void)set;
+    in_use = GLYPHS_PLAYSTATION;
+#else
     if (set >= 0 && set < GLYPHS_SETS)
         in_use = set;
+#endif
 }
 
 int glyphs_in_use(void)

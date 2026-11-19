@@ -85,6 +85,16 @@ Building it takes, in order (the script's header has the details):
 3. The script, with `GL_PREFIX`, `SDL_PREFIX`, `GL_SRC` and `KIT` (the boilerplate at
    4f531c4b) set.
 
+## Mods (asset packs) on the PS5
+
+The GPU build (CT Recomp HD-2D) loads [asset packs](ASSET-PACKS.md) from
+`/data/ct-recomp/packs/NAME/`, with one folder per pack, copied over FTP or from a USB drive.
+Fonts for HD text go in `/data/ct-recomp/fonts/`. The menu's **Packs** page lists every pack
+in that folder: turn each one on, choose its order, reload them, or switch on **Dump new
+art**. Dumping writes the tiles and sprites you see into `packs/dump/`, so you can copy
+them to a PC, edit them and copy them back. The original renderer (PPSA28360) can't draw
+packs. It still plays their music.
+
 ## Install as a title (eboot.bin, recommended)
 
 `packaging/ps5/title/build-title.sh` builds a real PS5 app folder, not a payload:

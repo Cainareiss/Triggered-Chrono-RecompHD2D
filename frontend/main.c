@@ -407,6 +407,23 @@ static void pack_names_parse(const char *list)
     }
 }
 
+/* port: where packs and fonts live: the game's folder in the user data
+   directory; on the PS5, /data/ct-recomp/ (copied there over FTP or from a
+   USB drive: SDL's PS5 data folder can't be reached that way). PREFIX
+   gets a trailing slash. */
+static void mods_root(const char *game_id, char *out, size_t n)
+{
+#ifdef CT_PS5
+    (void)game_id;
+    mkdir("/data/ct-recomp", 0777);
+    snprintf(out, n, "/data/ct-recomp/");
+#else
+    char *dir = SDL_GetPrefPath("ct-recomp", game_id);
+    snprintf(out, n, "%s", dir ? dir : "./");
+    SDL_free(dir);
+#endif
+}
+
 static char *pack_dir(const char *game_id, const char *name)
 {
     char *p = malloc(4096);
@@ -416,9 +433,9 @@ static char *pack_dir(const char *game_id, const char *name)
         snprintf(p, 4096, "%s", name);
         return p;
     }
-    char *dir = SDL_GetPrefPath("ct-recomp", game_id);
-    snprintf(p, 4096, "%spacks/%s", dir ? dir : "./", name);
-    SDL_free(dir);
+    char root[400];
+    mods_root(game_id, root, sizeof root);
+    snprintf(p, 4096, "%spacks/%s", root, name);
     return p;
 }
 
@@ -437,9 +454,9 @@ static void hd_font_path(const char *game_id, const char *name, char *out, size_
         snprintf(out, n, "%s", name);
         return;
     }
-    char *dir = SDL_GetPrefPath("ct-recomp", game_id);
-    snprintf(out, n, "%sfonts/%s", dir ? dir : "./", name);
-    SDL_free(dir);
+    char root[400];
+    mods_root(game_id, root, sizeof root);
+    snprintf(out, n, "%sfonts/%s", root, name);
 }
 
 static int hd_font_load(const char *game_id)
@@ -1548,10 +1565,15 @@ static void packs_refresh(void)
     n_packs_listed = 0;
     for (int k = 0; k < n_pack_names; k++)
         pack_list_add(pack_names[k]);
-    char *dir = SDL_GetPrefPath("ct-recomp", menu_game_id ? menu_game_id : "game");
-    snprintf(packs_folder, sizeof packs_folder, "%spacks", dir ? dir : "./");
-    SDL_free(dir);
-#if defined(__unix__) || defined(__APPLE__)
+    {
+        char root[400];
+        mods_root(menu_game_id ? menu_game_id : "game", root, sizeof root);
+        snprintf(packs_folder, sizeof packs_folder, "%spacks", root);
+#ifdef CT_PS5
+        mkdir(packs_folder, 0777);   /* there to copy into */
+#endif
+    }
+#if defined(__unix__) || defined(__APPLE__) || defined(CT_PS5)
     DIR *d = opendir(packs_folder);
     struct dirent *e;
     while (d && (e = readdir(d)))
@@ -3476,7 +3498,11 @@ int main(int argc, char **argv)
             static char msg[48];
             int n;
             packs_entries(&n);
+#ifdef CT_PS5   /* port: no F5 on the console: the menu's Packs page reloads */
+            snprintf(msg, sizeof msg, "Packs: %d replacements", n);
+#else
             snprintf(msg, sizeof msg, "Packs: %d replacements - F5 reloads", n);
+#endif
             hd2d_osd(msg);
         }
         if (packs_given)
