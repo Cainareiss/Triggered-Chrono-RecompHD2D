@@ -634,6 +634,29 @@ static int oam_visible(const ct_scene *s, int e, int *x, int *y, int *size)
 /* One OAM entry as 8x8 quads standing upright at world z = foot_z: a
    screen row r is at height base_y + (foot_sy - r + lift) * stretch,
    foot_sy being the foot's screen row. */
+/* port: the screen row under an OAM entry's lowest opaque pixel (its box
+   bottom when it has none): sprites keep empty rows under the feet, and
+   standing the box's bottom on the ground floated the character that far
+   above its shadow. */
+static int opaque_bottom(const ct_scene *s, int e, int y, int size)
+{
+    uint16_t w1 = s->oam[2 * e + 1];
+    int vf = (w1 >> 15) & 1, n = size / 8;
+    uint32_t base = s->obj_chr[(w1 >> 8) & 1];
+    for (int r = size - 1; r >= 0; r--) {   /* screen rows, bottom up */
+        int sr = vf ? size - 1 - r : r;       /* the row in the stored image */
+        int ty = sr / 8, py = sr % 8;
+        for (int tx = 0; tx < n; tx++) {
+            int used = ((((w1 & 0xFF) >> 4) + ty) << 4) | (((w1 & 0xF) + tx) & 0xF);
+            uint32_t a = (base + (uint32_t)used * 16) & S3D_ADDR_MASK;
+            if (s->vram[(a + (uint32_t)py) & S3D_ADDR_MASK] ||
+                s->vram[(a + 8u + (uint32_t)py) & S3D_ADDR_MASK])
+                return y + r + 1;
+        }
+    }
+    return y + size;
+}
+
 /* port: s3d_build_sprites runs twice: the entries under OAM priority 3
    (pass 0), then those over everything (pass 1); emit_piece skips the
    others. */
@@ -698,7 +721,8 @@ static int build_sprites_pass(const ct_scene *s, const s3d_params *p, s3d_mesh *
             bx0 = x < bx0 ? x : bx0;
             by0 = y < by0 ? y : by0;
             bx1 = x + size > bx1 ? x + size : bx1;
-            by1 = y + size > by1 ? y + size : by1;
+            int ob = opaque_bottom(s, o->piece[j] & 127, y, size);
+            by1 = ob > by1 ? ob : by1;
         }
         all_ok[k] = bx1 > bx0;
         all_box[k][0] = bx0;
@@ -731,8 +755,10 @@ static int build_sprites_pass(const ct_scene *s, const s3d_params *p, s3d_mesh *
         int bottom = -100000;
         for (int j = 0; j < o->n_pieces; j++) {
             int x, y, size;
-            if (oam_visible(s, o->piece[j], &x, &y, &size) && y + size > bottom)
-                bottom = y + size;
+            if (oam_visible(s, o->piece[j], &x, &y, &size)) {
+                int ob = opaque_bottom(s, o->piece[j] & 127, y, size);
+                bottom = ob > bottom ? ob : bottom;
+            }
         }
         if (bottom == -100000)
             continue;
@@ -855,7 +881,8 @@ int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
                 continue;
             x0 = x < x0 ? x : x0;
             x1 = x + size > x1 ? x + size : x1;
-            bottom = y + size > bottom ? y + size : bottom;
+            int ob = opaque_bottom(s, o->piece[j] & 127, y, size);
+            bottom = ob > bottom ? ob : bottom;
         }
         if (bottom == -100000 || x1 - x0 > 64)
             continue;
@@ -878,7 +905,8 @@ int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
                 bx0 = x < bx0 ? x : bx0;
                 by0 = y < by0 ? y : by0;
                 bx1 = x + size > bx1 ? x + size : bx1;
-                by1 = y + size > by1 ? y + size : by1;
+                int ob = opaque_bottom(s, b->piece[j] & 127, y, size);
+                by1 = ob > by1 ? ob : by1;
             }
             int area = (x1 - x0) * (bottom - top), barea = (bx1 - bx0) * (by1 - by0);
             int ix = (x1 < bx1 ? x1 : bx1) - (x0 > bx0 ? x0 : bx0);

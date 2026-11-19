@@ -198,7 +198,6 @@
 #include "packs.h"    /* port: asset packs (docs/ASSET-PACKS.md) */
 #include "music.h"    /* port: audio packs: [[music]] in the same packs */
 #include "hdtext.h"
-#include "uipanel.h"   /* port: remastered menus */
 #include "pack_scene.h"   /* port: their models, poses and sheets */
 #include "png.h"
 #include "replay.h"
@@ -225,7 +224,14 @@
 /* Device buffer: 960 samples, exactly 20 ms at 48 kHz. Queue target: two
    device buffers plus one frame (800), ~57 ms. */
 #define AUDIO_BUFFER 960
+#ifdef CT_PS5
+/* port: on the PS5 the queue is kept fuller (~107 ms): a frame that runs
+   long at a higher resolution or in the 3D view emptied the shorter one and
+   the music stuttered. */
+#define AUDIO_TARGET (4 * AUDIO_BUFFER + 1280)
+#else
 #define AUDIO_TARGET (2 * AUDIO_BUFFER + 800)
+#endif
 #define AUDIO_MAX_DEV 0.005
 #define FRAME_NS 16639267ull   /* 1 / 60.0988 Hz */
 
@@ -376,14 +382,9 @@ static int running = 1, fast, log_input, log_audio, log_music;
    the per-game data folder, <pref path>/packs/NAME; a NAME with a slash
    in it is a directory of its own. */
 static const char *pack_dump;   /* --pack-dump NAME */
-static int menu_style;   /* port: remastered menus (uipanel.h): 0 off, 1 glass */
-/* port: the provenance G-buffer costs the PPU CPU time every frame (the
-   music stuttered with the menus on): for the menus alone it is drawn one
-   frame in 6, and the windows found then are kept in between. */
-static int menu_prov_now = 1;
 static int want_prov(void)
 {
-    return packs_active() || pack_dump || hdtext_ready() || (menu_style && menu_prov_now);
+    return packs_active() || pack_dump || hdtext_ready();
 }
 static const char *pack_sheets;   /* --pack-export-sheets NAME */
 static int pack_sheets_scale = 4;   /* --pack-export-scale N */
@@ -532,6 +533,24 @@ static void pack_sheets_report(void)
 {
     pack_scene_export_close();
 }
+
+#ifdef CT_PS5
+/* port: the sheet export from the menu (no command line on the console) */
+static int pose_export_on;
+static int get_pose_export(void *u) { (void)u; return pose_export_on || pack_sheets != NULL; }
+static void set_pose_export(void *u, int v)
+{
+    (void)u;
+    if (v && !pose_export_on && !pack_sheets) {
+        pose_export_on = !pack_scene_export_open("/data/ct-recomp/sheets/ct5", 4);
+        ps5_notify(pose_export_on ? "Exporting character poses" : "Cannot write the poses");
+    } else if (!v && pose_export_on) {
+        pack_scene_export_close();
+        pose_export_on = 0;
+        ps5_notify("Character poses saved");
+    }
+}
+#endif
 
 static void pack_dump_report(void)
 {
@@ -1189,13 +1208,6 @@ static const char *const depth3d_labels[3] = {"Full", "Subtle", "Flat"},
                          *const depth3d_values[3] = {"full", "subtle", "flat"};
 static int get_depth3d(void *u) { (void)u; return hd2d_3d_depth(); }
 static void set_depth3d(void *u, int v) { (void)u; hd2d_set_3d_depth(v); }
-static int get_menu_style(void *u) { (void)u; return menu_style; }
-static void set_menu_style(void *u, int v)
-{
-    (void)u;
-    menu_style = v != 0;
-    sched_set_prov(want_prov());
-}
 static int get_shadows3d(void *u) { (void)u; return hd2d_3d_shadows(); }
 static void set_shadows3d(void *u, int v) { (void)u; hd2d_set_3d_shadows(v); }
 static int get_smooth(void *u) { (void)u; return hd2d_smooth(); }
@@ -1640,6 +1652,14 @@ static void packs_refresh(void)
         .label = "Dump new art", .category = "Packs", .type = SETTING_BOOL, .get = get_dump,
         .set = set_dump, .enabled = can_dump, .flags = SETTING_NO_SAVE,
         .help = "Save each new tile and sprite drawn into the \"dump\" pack, to draw over."});
+#ifdef CT_PS5
+    settings_register(&(setting){
+        .label = "Export character poses", .category = "Packs", .type = SETTING_BOOL,
+        .get = get_pose_export, .set = set_pose_export, .flags = SETTING_NO_SAVE,
+        .help = "Save every character frame drawn on the field into "
+                "/data/ct-recomp/sheets/ct5 (one picture per frame, and sheets when "
+                "turned off), to make a character pack from."});
+#endif
     settings_register(&(setting){.label = "Folder", .category = "Packs", .type = SETTING_INFO,
                                  .text = folder_text, .help = packs_folder});
 }
@@ -1720,12 +1740,6 @@ static void register_settings(void)
         .enabled = on_hd2d,
         .help = "The miniature-model blur towards the top and bottom of the picture: off, a "
                 "little, or the look's full amount."});
-    settings_register(&(setting){
-        .key = "menu_glass", .label = "Remastered menus", .category = "Look",
-        .type = SETTING_BOOL, .get = get_menu_style, .set = set_menu_style, .enabled = on_hd2d,
-        .help = "A modern look for the game's windows (text boxes, menus, battle windows): "
-                "frosted glass panels with rounded corners, drawn at the screen's resolution. "
-                "Text, icons and the cursor stay the game's. Used by the HD-2D renderer."});
     settings_register(&(setting){
         .key = "depth_3d", .label = "3D depth", .category = "Look", .type = SETTING_ENUM,
         .options = depth3d_labels, .values = depth3d_values, .count = 3, .get = get_depth3d,
@@ -2802,34 +2816,9 @@ static void on_frame(long f)
         }
         hd2d_set_text_overlay(hd_text_now.rgba, hd_text_now.w, hd_text_now.h, hd_text_now.x,
                               hd_text_now.y, hd_text_now.cw, hd_text_now.ch, hd_text_now.gen);
-        if (menu_style && !sched_prov()) {
-            /* port: no provenance this frame: the last windows stay */
-        } else if (menu_style) {   /* port: remastered menus */
-            static uint8_t pmask[SCHED_WIDTH * SCHED_HEIGHT];
-            static float prect[UIPANEL_MAX][4];
-            int n = uipanel_frame(sched_prov(), hd_text_now.lines ? hdtext_removed() : NULL,
-                                  pmask, prect);
-            hd2d_set_ui_panels(pmask, (const float (*)[4])prect, n, menu_style);
-#ifdef CT_PS5
-            /* port: every few seconds, what it found, for tuning (a small text file) */
-            static unsigned dbg_frames;
-            if (++dbg_frames % 50 == 0)
-                uipanel_debug_write("/data/ct-recomp/menus.txt");
-#endif
-        } else {
-            hd2d_set_ui_panels(NULL, NULL, 0, 0);
-        }
     }
     if (show)
         present_now();
-    if (menu_style) {   /* port: the menus' provenance, one frame in 6 */
-        static unsigned tick;
-        int now = ++tick % 6 == 0;
-        if (now != menu_prov_now) {
-            menu_prov_now = now;
-            sched_set_prov(want_prov());
-        }
-    }
     if (hd2d_mode)   /* The PPU's behind G-buffer only while the look uses it. */
         sched_set_behind(hd2d_wants_behind());
     if (n_shots)
