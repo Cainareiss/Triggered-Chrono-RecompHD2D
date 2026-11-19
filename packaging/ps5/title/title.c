@@ -244,14 +244,42 @@ int link(const char *a, const char *b)
     return errno = ENOSYS, -1;
 }
 
-/* ---- the import check ---- */
-#include "imports.gen.h"   /* CT_IMPORTS(X): X(index, "name") for every import */
+/* ---- the keyboard and IME dialog: not bound in a title (13.20) ----
+   SDL's PS5 video driver calls these at start-up; failing them leaves SDL
+   without a keyboard, which a console game doesn't need. */
+int sceKeyboardInit(void) { return -1; }
+int sceKeyboardOpen(int user, int type, int index, void *param)
+{
+    (void)user, (void)type, (void)index, (void)param;
+    return -1;
+}
+int sceKeyboardClose(int handle) { (void)handle; return -1; }
+int sceKeyboardReadState(int handle, void *data)
+{
+    (void)handle, (void)data;
+    return -1;
+}
+int sceImeDialogInit(const void *param, void *extended)
+{
+    (void)param, (void)extended;
+    return -1;
+}
+int sceImeDialogGetStatus(void) { return 0; }   /* SCE_IME_DIALOG_STATUS_NONE */
+int sceImeDialogGetResult(void *result) { (void)result; return -1; }
+int sceImeDialogTerm(void) { return -1; }
 
-#define CT_DECL(i, name) extern char ct_import_##i __asm__(name);
+/* ---- the import check ---- */
+#include "imports.gen.h"   /* CT_IMPORTS(X): X(index, "name", "module") per import */
+
+int sceKernelLoadStartModule(const char *path, size_t args, const void *argp, unsigned flags,
+                             void *opt, int *res);
+int sceKernelDlsym(int handle, const char *name, void **addr);
+
+#define CT_DECL(i, name, module) extern char ct_import_##i __asm__(name);
 CT_IMPORTS(CT_DECL)
-#define CT_ENTRY(i, name) {name, &ct_import_##i},
+#define CT_ENTRY(i, name, module) {name, module, &ct_import_##i},
 static const struct {
-    const char *name;
+    const char *name, *module;
     const void *addr;
 } imports[] = {CT_IMPORTS(CT_ENTRY)};
 
@@ -269,42 +297,90 @@ static void khex(char *out, uintptr_t v)
     out[18] = 0;
 }
 
+static int mapped(const void *p)
+{
+    ct_vquery_info info;
+    k_zero(&info, sizeof info);
+    return sceKernelVirtualQuery(p, 0, &info, sizeof info) == 0 &&
+           (const char *)p >= (const char *)info.start && (const char *)p < (const char *)info.end;
+}
+
+/* A module's handle by loading it (a loaded one answers with its handle),
+   trying the usual system folders: the log says which worked. */
+static int module_handle(int fd, const char *module)
+{
+    static const char *const dirs[] = {"/system/common/lib/", "/system/priv/lib/", ""};
+    static char last[64];
+    static int last_handle = -1;
+    if (k_streq(last, module))
+        return last_handle;
+    size_t n = k_strlen(module);
+    if (n > 40)
+        return -1;
+    k_copy(last, module, n + 1);
+    last_handle = -1;
+    for (int d = 0; d < 3 && last_handle < 0; d++) {
+        char path[96];
+        size_t at = k_strlen(dirs[d]);
+        k_copy(path, dirs[d], at);
+        k_copy(path + at, module, n);
+        k_copy(path + at + n, ".sprx", 6);
+        int res = 0;
+        int h = sceKernelLoadStartModule(path, 0, 0, 0, 0, &res);
+        char hx[19];
+        khex(hx, (uintptr_t)(unsigned)h);
+        kwrite(fd, "  load ");
+        kwrite(fd, path);
+        kwrite(fd, " -> ");
+        kwrite(fd, hx);
+        kwrite(fd, "\n");
+        if (h >= 0)
+            last_handle = h;
+    }
+    return last_handle;
+}
+
 __attribute__((constructor)) static void ct_title_check_imports(void)
 {
     sceKernelMkdir("/data/ct-recomp", 0777);
     int fd = sceKernelOpen("/data/ct-recomp/imports.log", O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    static ct_notify_request req;   /* static: zeroed without memset */
-    size_t at = 0, bad = 0;
-    const char *head = "CT Recomp: unbound imports:";
-    k_copy(req.message, head, k_strlen(head));
-    at = k_strlen(head);
-    for (size_t k = 0; k < sizeof imports / sizeof *imports; k++) {
-        ct_vquery_info info;
-        k_zero(&info, sizeof info);
-        int r = sceKernelVirtualQuery(imports[k].addr, 0, &info, sizeof info);
-        int ok = r == 0 && (const char *)imports[k].addr >= (const char *)info.start &&
-                 (const char *)imports[k].addr < (const char *)info.end;
+    size_t bad = 0, found = 0, total = sizeof imports / sizeof *imports;
+    for (size_t k = 0; k < total; k++) {
+        int ok = mapped(imports[k].addr);
+        char h[19];
+        khex(h, (uintptr_t)imports[k].addr);
         if (fd >= 0) {
-            char h[19];
-            khex(h, (uintptr_t)imports[k].addr);
             kwrite(fd, ok ? "ok   " : "BAD  ");
             kwrite(fd, h);
+            kwrite(fd, " ");
+            kwrite(fd, imports[k].module);
             kwrite(fd, " ");
             kwrite(fd, imports[k].name);
             kwrite(fd, "\n");
         }
-        if (!ok) {
-            bad++;
-            size_t n = k_strlen(imports[k].name);
-            if (at + n + 2 < 300) {
-                req.message[at++] = ' ';
-                k_copy(req.message + at, imports[k].name, n);
-                at += n;
-            }
+        if (ok)
+            continue;
+        bad++;
+        /* Can it be looked up by hand? (How a fix would bind it.) */
+        if (fd >= 0) {
+            int hd = module_handle(fd, imports[k].module);
+            void *addr = 0;
+            int r = hd >= 0 ? sceKernelDlsym(hd, imports[k].name, &addr) : -1;
+            khex(h, (uintptr_t)addr);
+            kwrite(fd, r == 0 && addr && mapped(addr) ? "  dlsym ok " : "  dlsym no ");
+            kwrite(fd, h);
+            kwrite(fd, "\n");
+            found += r == 0 && addr && mapped(addr);
         }
     }
     if (fd >= 0)
         sceKernelClose(fd);
-    if (bad)
+    if (bad) {
+        static ct_notify_request req;   /* static: zeroed without memset */
+        static const char msg[] = "CT Recomp: some system functions are missing. "
+                                  "Please send /data/ct-recomp/imports.log";
+        k_copy(req.message, msg, sizeof msg);
         sceKernelSendNotificationRequest(0, &req, sizeof req, 0);
+    }
+    (void)found;
 }

@@ -7,11 +7,11 @@
 # Built with drakmor/ps5-native-app-boilerplate (pinned below, patched by
 # boilerplate.patch) over its pinned ps5-payload-sdk and PacBrew's SDL2.
 #
-#   packaging/ps5/title/build-title.sh [WORKDIR]   -> WORKDIR/kit/dist/PPSA28351/
+#   packaging/ps5/title/build-title.sh [WORKDIR]   -> WORKDIR/kit/dist/PPSA28352/
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd); src=$(cd "$here/../../.." && pwd)
 work=${1:-$src/build-ps5-title}; kit=$work/kit; objs=$work/objs
-TITLE_ID=${TITLE_ID:-PPSA28351}
+TITLE_ID=${TITLE_ID:-PPSA28352}
 BOILERPLATE_REV=470695e0c557f99ff2df0e36e4df713c5e636526
 mkdir -p "$work"
 if [ ! -d "$kit/.git" ]; then
@@ -57,9 +57,15 @@ rm -rf src assets sce_sys/pic0.dds sce_sys/pic1.dds sce_sys/snd0.at9 \
 mkdir -p src && cp "$here/title.c" src/title.c
 cp "$src/packaging/icons/512x512/ct-recomp.png" sce_sys/icon0.png
 make init TITLE_ID="$TITLE_ID" APP_NAME="CT Recomp"
-# Twice: the second build's import check lists what the first one imports.
+# Until the import list stops changing: the check lists what the previous
+# build imported, and the check itself imports a few functions once it has
+# a non-empty list.
 printf '#define CT_IMPORTS(X)\n' > src/imports.gen.h
-make APP_STATIC_ARCHIVES=vendor/lib/libct_title.a PACBREW_PACKAGES=sdl2 build
-python3 "$here/gen_imports.py" build/llvm-pie.elf src/imports.gen.h
-make APP_STATIC_ARCHIVES=vendor/lib/libct_title.a PACBREW_PACKAGES=sdl2 build
+for pass in 1 2 3 4; do
+    make APP_STATIC_ARCHIVES=vendor/lib/libct_title.a PACBREW_PACKAGES=sdl2 build
+    cp src/imports.gen.h build/imports.prev.h
+    python3 "$here/gen_imports.py" build/llvm-pie.elf "$sdk/target/lib" src/imports.gen.h
+    cmp -s src/imports.gen.h build/imports.prev.h && break
+done
+cmp -s src/imports.gen.h build/imports.prev.h || { echo "import list did not settle" >&2; exit 1; }
 echo "title folder: $kit/dist/$TITLE_ID"
