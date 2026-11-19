@@ -32,6 +32,7 @@
 
 #include <math.h>
 #include <stddef.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -229,6 +230,11 @@ static int load_gl(void)
     return missing ? -1 : 0;
 }
 
+static int perf_osd;   /* port: hd2d_set_perf_osd */
+void hd2d_set_perf_osd(int on) { perf_osd = on != 0; }
+int hd2d_perf_osd(void) { return perf_osd; }
+void hd2d_osd(const char *text);
+
 /* ---- optional per-pass GPU timing ----
    CT_HD2D_PROFILE=FILE writes one line per frame: GPU time per pass from
    timestamp queries (GL 3.3 / ARB_timer_query, or ES with
@@ -328,6 +334,35 @@ static void prof_flush(int s)
         fprintf(prof.f, " %s=%.4f", prof.name[s][k], (double)(t[k] - t[k - 1]) / 1e6);
     fputc('\n', prof.f);
     fflush(prof.f);
+#ifdef CT_PS5
+    /* port: the readout (hd2d_set_perf_osd): every 4 s, the frame's GPU
+       time and its three slowest passes, so a photo of the screen tells
+       what the file would. */
+    if (perf_osd && prof.frame[s] % 240 == 0) {
+        int top[3] = {0, 0, 0};
+        for (int r = 0; r < 3; r++)
+            for (int k = 1; k < prof.n[s]; k++) {
+                if (k == top[0] || k == top[1])
+                    continue;
+                if (!top[r] || t[k] - t[k - 1] > t[top[r]] - t[top[r] - 1])
+                    top[r] = k;
+            }
+        char msg[160];
+        int len = snprintf(msg, sizeof msg, "GPU %.1f CPU %.1f MS:",
+                           (double)(t[prof.n[s] - 1] - t[0]) / 1e6,
+                           prof.analyze_ms[s] + prof.upload_ms[s] + prof.submit_ms[s]);
+        for (int r = 0; r < 3 && top[r] && len < (int)sizeof msg; r++) {
+            char nm[24];
+            int j = 0;
+            for (const char *c = prof.name[s][top[r]]; *c && j < 23; c++)
+                nm[j++] = *c == '_' ? ' ' : (char)toupper((unsigned char)*c);
+            nm[j] = 0;
+            len += snprintf(msg + len, sizeof msg - (size_t)len, " %s %.1f", nm,
+                            (double)(t[top[r]] - t[top[r] - 1]) / 1e6);
+        }
+        hd2d_osd(msg);
+    }
+#endif
     prof.n[s] = 0;
 }
 
@@ -1393,6 +1428,7 @@ static void post(const settings *s, int px, int py, int pw, int ph, int ow, int 
     pic3d = threeD;
     static const float dof_scale[3] = {0.0f, 0.4f, 1.0f};   /* port: hd2d_set_dof */
     dof_tilt *= dof_scale[dof_level];
+    tilt *= dof_scale[dof_level];   /* the enlargement too: at Off no see-through gaps */
     dof_depth *= dof_scale[dof_level];
     const float fore_depth = 0.22f;   /* light.frag's depthOf(C_FORE) */
     if (s->effects) {

@@ -1174,6 +1174,8 @@ static const char *const dof_labels[3] = {"Off", "Low", "Full"},
                          *const dof_values[3] = {"off", "low", "full"};
 static int get_dof(void *u) { (void)u; return hd2d_dof(); }
 static void set_dof(void *u, int v) { (void)u; hd2d_set_dof(v); }
+static int get_perf(void *u) { (void)u; return hd2d_perf_osd(); }
+static void set_perf(void *u, int v) { (void)u; hd2d_set_perf_osd(v); }
 static int get_smooth(void *u) { (void)u; return hd2d_smooth(); }
 static void set_smooth(void *u, int v) { (void)u; hd2d_set_smooth(v); }
 static int get_aspect(void *u) { (void)u; return hd2d_aspect(); }
@@ -1701,6 +1703,14 @@ static void register_settings(void)
         .type = SETTING_BOOL, .get = get_smooth, .set = set_smooth, .enabled = on_hd2d,
         .help = "Pixel-art anti-aliasing in the 3D diorama: tilted and distant tiles stay even "
                 "instead of crunchy. Turn off for hard pixels or a little more speed."});
+#ifdef CT_PS5
+    settings_register(&(setting){
+        .key = "perf_readout", .label = "Performance readout", .category = "Look",
+        .type = SETTING_BOOL, .get = get_perf, .set = set_perf, .enabled = on_hd2d,
+        .help = "Every few seconds, the time each frame takes on the GPU and CPU and its "
+                "three slowest steps, at the bottom of the picture. Under 16.7 ms is full "
+                "speed."});
+#endif
     settings_register(&(setting){.key = "aspect", .label = "Aspect", .category = "Look",
                                  .type = SETTING_ENUM, .options = aspect_labels,
                                  .count = HD2D_ASPECTS, .get = get_aspect, .set = set_aspect,
