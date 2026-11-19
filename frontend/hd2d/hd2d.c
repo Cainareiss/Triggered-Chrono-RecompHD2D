@@ -2080,7 +2080,7 @@ static void s3d_update(const ct_scene *sc)
                               GL_RED_INTEGER, GL_UNSIGNED_SHORT, sc->layer[2].tiles);
         /* port: the clouds' palette, the overlay's commonest one: a caption
            (a place's name) is drawn into the same layer with another
-           palette, and its box floated over the map as a pale square */
+           palette, and its box floated over the map as a pale box */
         g.s3.cloud_pal = -1;
         if (sc->layer[2].present && sc->layer[2].tiles && sc->overlay_h <= 128) {
             int cnt[8] = {0};
