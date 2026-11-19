@@ -701,7 +701,10 @@ static int build_sprites_pass(const ct_scene *s, const s3d_params *p, s3d_mesh *
            a frame apart from what the console drew, and the difference
            made walkers bob up and down and split head from body. Only a
            jump's height (z) lifts it off the ground. */
-        int zj = o->z > 0 && o->z < 64 ? o->z : 0;
+        /* port: the object's height (z) isn't used: the cards' world is
+           flat, so a character on a raised walkway (z > 0) stood above its
+           own shadow; its feet stay on the row the console drew them. */
+        int zj = 0;
         foot_sy = bottom + zj;
         float lift = 0.0f;
         /* Standing in a raised cell: the console drew it over the wall
@@ -816,7 +819,7 @@ int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
         }
         if (bottom == -100000 || x1 - x0 > 64)
             continue;
-        int zj = o->z > 0 && o->z < 64 ? o->z : 0;
+        int zj = 0;   /* (as above) */
         float w = (float)(x1 - x0) * 0.8f, d = w * 0.45f;
         float cx = (float)(s->camera_x + (x0 + x1) / 2), cz = (float)(s->camera_y + bottom + zj);
         float tl[3] = {cx - w * 0.5f, 0.05f, cz - d * 0.65f};
