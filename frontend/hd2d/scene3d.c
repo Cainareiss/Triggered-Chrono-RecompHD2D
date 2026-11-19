@@ -658,6 +658,11 @@ static int build_sprites_pass(const ct_scene *s, const s3d_params *p, s3d_mesh *
     if (s->mode != CT_SCENE_FIELD || !s->oam || !s->vram)
         return 0;
     uint8_t owned[128] = {0};
+    /* port: each object's screen box and foot, for the entries no object
+       owns: one inside a box (a big character's separate arms) stands with
+       that object instead of at its own bottom, which split it apart */
+    int ob_n = 0, ob_box[CT_SCENE_MAX_OBJECTS][4], ob_foot[CT_SCENE_MAX_OBJECTS];
+    float ob_z[CT_SCENE_MAX_OBJECTS], ob_base[CT_SCENE_MAX_OBJECTS];
     for (int k = 0; k < s->n_objects && k < CT_SCENE_MAX_OBJECTS; k++) {
         const ct_scene_object *o = &s->object[k];
         if (!o->n_pieces)
@@ -718,12 +723,43 @@ static int build_sprites_pass(const ct_scene *s, const s3d_params *p, s3d_mesh *
             emit_piece(s, m, o->piece[j], foot_z, base_y, foot_sy, lift, p->stretch);
             owned[o->piece[j] & 127] = 1;
         }
+        int bx0 = 100000, by0 = 100000, bx1 = -100000;
+        for (int j = 0; j < o->n_pieces; j++) {
+            int x, y, size;
+            if (!oam_visible(s, o->piece[j], &x, &y, &size))
+                continue;
+            bx0 = x < bx0 ? x : bx0;
+            by0 = y < by0 ? y : by0;
+            bx1 = x + size > bx1 ? x + size : bx1;
+        }
+        ob_box[ob_n][0] = bx0;
+        ob_box[ob_n][1] = by0;
+        ob_box[ob_n][2] = bx1;
+        ob_box[ob_n][3] = bottom;
+        ob_foot[ob_n] = foot_sy;
+        ob_z[ob_n] = foot_z;
+        ob_base[ob_n++] = base_y;
     }
     /* The rest (effects, markers): each stands at its own bottom edge. */
     for (int e = 0; e < 128; e++) {
         int x, y, size;
         if (owned[e] || !oam_visible(s, e, &x, &y, &size))
             continue;
+        int best = -1, best_area = 0;
+        for (int k = 0; k < ob_n; k++) {
+            int ix = (x + size < ob_box[k][2] + 8 ? x + size : ob_box[k][2] + 8) -
+                     (x > ob_box[k][0] - 8 ? x : ob_box[k][0] - 8);
+            int iy = (y + size < ob_box[k][3] ? y + size : ob_box[k][3]) -
+                     (y > ob_box[k][1] - 8 ? y : ob_box[k][1] - 8);
+            if (ix > 0 && iy > 0 && ix * iy > best_area) {
+                best_area = ix * iy;
+                best = k;
+            }
+        }
+        if (best >= 0) {
+            emit_piece(s, m, e, ob_z[best], ob_base[best], ob_foot[best], 0.0f, p->stretch);
+            continue;
+        }
         emit_piece(s, m, e, (float)(s->camera_y + y + size), 0.0f, y + size, 0.0f, p->stretch);
     }
     return 0;
