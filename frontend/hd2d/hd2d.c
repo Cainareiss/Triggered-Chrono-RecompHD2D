@@ -394,7 +394,11 @@ static const settings presets[HD2D_PRESETS] = {
 static const char *const preset_names[HD2D_PRESETS] = {"off",  "subtle", "hd2d",
                                                         "deck", "hd2d3d", "deck3d"};
 
+#ifdef CT_PS5   /* port: a TV: the whole screen */
+static int cur_preset = HD2D_FULL, debug_view, aspect_mode = HD2D_ASPECT_STRETCH, timing;
+#else
 static int cur_preset = HD2D_FULL, debug_view, aspect_mode, timing;
+#endif
 /* Eased across frames by hd2d_render (scene brightness, ground share). */
 static float dark_amt = 0.5f, field_amt = 1.0f;
 

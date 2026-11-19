@@ -1651,9 +1651,9 @@ static void register_settings(void)
     settings_register(&(setting){.key = "aspect", .label = "Aspect", .category = "Look",
                                  .type = SETTING_ENUM, .options = aspect_labels,
                                  .count = HD2D_ASPECTS, .get = get_aspect, .set = set_aspect,
-                                 .enabled = on_hd2d,
                                  .help = "The picture's shape: a 4:3 TV, the console's own pixels (8:7), "
-                                         "or the whole window. (F3, L3)"});
+                                         "or the whole window, in both renderers (the original "
+                                         "one: with Integer scale off). (F3, L3)"});
     settings_register(&(setting){.label = "3D camera", .category = "Look", .type = SETTING_INFO,
                                  .flags = SETTING_HEADING});
     settings_register(&(setting){.key = "cam_tilt", .label = "Camera tilt", .category = "Look",

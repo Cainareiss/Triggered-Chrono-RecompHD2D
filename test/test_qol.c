@@ -14,6 +14,7 @@
 #include "harness.h"
 #include "input.h"
 #include "qol.h"
+#include "hd2d/hd2d.h"
 
 static char tmp[4096];
 
@@ -141,8 +142,16 @@ static void test_rect(void)
     qol_picture_rect(100, 100, &x, &y, &w, &h);    /* smaller than 1x: 1x */
     CHECK(w == 256 && h == 224, "w == 256 && h == 224");
     qol_setting("integer_scale", "off");
+    hd2d_set_aspect(HD2D_ASPECT_PIXEL);   /* port: the Aspect setting decides the fit */
     qol_picture_rect(1280, 800, &x, &y, &w, &h);   /* fit: full height */
     CHECK(h == 800 && w == 914 && x == 183 && y == 0, "h == 800 && w == 914 && x == 183 && y == 0");
+    hd2d_set_aspect(HD2D_ASPECT_4_3);
+    qol_picture_rect(1920, 1080, &x, &y, &w, &h);  /* a TV: 4:3 */
+    CHECK(h == 1080 && w == 1440 && x == 240 && y == 0, "h == 1080 && w == 1440 && x == 240 && y == 0");
+    hd2d_set_aspect(HD2D_ASPECT_STRETCH);
+    qol_picture_rect(1920, 1080, &x, &y, &w, &h);  /* the whole screen */
+    CHECK(w == 1920 && h == 1080 && x == 0 && y == 0, "w == 1920 && h == 1080 && x == 0 && y == 0");
+    hd2d_set_aspect(HD2D_ASPECT_4_3);
 }
 
 int main(void)
