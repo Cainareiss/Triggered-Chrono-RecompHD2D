@@ -151,6 +151,8 @@ static int dir_used[4];
 /* port: the last opendir's and readdir's kernel results, for the packs
    report (ps5_dir_status) */
 static int dir_err[3];
+static unsigned char dir_peek[48];
+const unsigned char *ps5_dir_peek(void) { return dir_peek; }
 void ps5_dir_status(int out[3])
 {
     out[0] = dir_err[0];
@@ -183,33 +185,72 @@ DIR *opendir(const char *path)
     return &dir_pool[slot];
 }
 
+/* One record at r (n bytes left): its name, length and the record's size,
+   for the kernel's two possible layouts; 0 when neither fits. */
+static int dir_layout = -1;   /* 0: FreeBSD 11 (32-bit ino), 1: FreeBSD 12+ (64-bit) */
+static int dir_record(const unsigned char *r, int n, int layout, unsigned *reclen,
+                      unsigned *namlen, int *nameoff, unsigned *type, unsigned long long *ino)
+{
+    if (layout == 0) {
+        if (n < 8)
+            return 0;
+        *ino = r[0] | r[1] << 8 | r[2] << 16 | (unsigned long long)r[3] << 24;
+        *reclen = r[4] | r[5] << 8;
+        *type = r[6];
+        *namlen = r[7];
+        *nameoff = 8;
+    } else {
+        if (n < 24)
+            return 0;
+        *ino = 0;
+        for (int k = 7; k >= 0; k--)
+            *ino = *ino << 8 | r[k];
+        *reclen = r[16] | r[17] << 8;
+        *type = r[18];
+        *namlen = r[20] | r[21] << 8;
+        *nameoff = 24;
+    }
+    return *reclen >= (unsigned)*nameoff + *namlen && *reclen <= (unsigned)n &&
+           (*reclen & 3) == 0 && *namlen < 256;
+}
+
 struct dirent *readdir(DIR *d)
 {
     for (;;) {
-        if (d->pos + 8 > d->len) {
+        if (d->pos >= d->len) {
             int n = sceKernelGetdents(d->fd, d->buf, sizeof d->buf);
             dir_err[2] = n;
+            if (n > 0)
+                memcpy(dir_peek, d->buf, n < 48 ? (size_t)n : 48);
             if (n <= 0)
                 return NULL;
             d->len = n;
             d->pos = 0;
         }
         const unsigned char *r = (const unsigned char *)d->buf + d->pos;
-        unsigned fileno = r[0] | r[1] << 8 | r[2] << 16 | (unsigned)r[3] << 24;
-        unsigned reclen = r[4] | r[5] << 8, type = r[6], namlen = r[7];
-        if (reclen < 8 || d->pos + (int)reclen > d->len)
+        int left = d->len - d->pos;
+        unsigned reclen, namlen, type;
+        int off;
+        unsigned long long ino;
+        if (dir_layout < 0) {   /* the first record says which layout it is */
+            if (dir_record(r, left, 0, &reclen, &namlen, &off, &type, &ino))
+                dir_layout = 0;
+            else if (dir_record(r, left, 1, &reclen, &namlen, &off, &type, &ino))
+                dir_layout = 1;
+            else
+                return NULL;
+        }
+        if (!dir_record(r, left, dir_layout, &reclen, &namlen, &off, &type, &ino))
             return NULL;
         d->pos += (int)reclen;
-        if (!fileno || !namlen)
+        if (!ino || !namlen)
             continue;
-        if (namlen > reclen - 8)
-            namlen = reclen - 8;
         if (namlen >= sizeof d->out.d_name)
             namlen = sizeof d->out.d_name - 1;
         memset(&d->out, 0, sizeof d->out);
-        d->out.d_fileno = fileno;
+        d->out.d_fileno = (__typeof__(d->out.d_fileno))ino;
         d->out.d_type = (uint8_t)type;
-        memcpy(d->out.d_name, r + 8, namlen);
+        memcpy(d->out.d_name, r + off, namlen);
         d->out.d_name[namlen] = 0;
         return &d->out;
     }

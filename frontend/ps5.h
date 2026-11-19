@@ -39,6 +39,8 @@ char *ps5_pref_path(const char *org, const char *app);
 
 /* The title's last opendir/readdir kernel results (title.c; zeros elsewhere). */
 void ps5_dir_status(int out[3]);
+/* The first 48 bytes the last getdents returned (title.c). */
+const unsigned char *ps5_dir_peek(void);
 /* A system notification (the toast in the top right corner). */
 void ps5_notify(const char *fmt, ...)
 #ifdef __GNUC__

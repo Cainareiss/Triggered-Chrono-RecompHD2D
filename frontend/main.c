@@ -1602,7 +1602,7 @@ static const char *packs_count_text(void *u, char *buf, size_t n)
 
 /* The pack rows, rebuilt each time the menu opens (the folder may change). */
 #ifdef CT_PS5
-static char packs_scan_text[160] = "build 31: not checked";
+static char packs_scan_text[160] = "build 32: not checked";
 static const char *packs_scan_get(void *u, char *buf, size_t n)
 {
     (void)u;
@@ -1645,6 +1645,15 @@ static void packs_refresh(void)
             fprintf(scan, "  \"%s\" (type %d)\n", re->d_name, re->d_type);
         if (r)
             closedir(r);
+        {
+            int ds3[3];
+            ps5_dir_status(ds3);
+            const unsigned char *pk = ps5_dir_peek();
+            fprintf(scan, "getdents: %d; first bytes:", ds3[2]);
+            for (int k = 0; k < 48; k++)
+                fprintf(scan, " %02x", pk[k]);
+            fprintf(scan, "\n");
+        }
         fprintf(scan, "%s holds:\n", packs_folder);
     }
 #endif
@@ -1723,7 +1732,7 @@ static void packs_refresh(void)
     {
         int ds2[3];
         ps5_dir_status(ds2);
-        snprintf(packs_scan_text, sizeof packs_scan_text, "build 31: %s, %d seen, %d packs (%x %x %x)",
+        snprintf(packs_scan_text, sizeof packs_scan_text, "build 32: %s, %d seen, %d packs (%x %x %x)",
                  d ? "opened" : "not readable", scan_entries, n_packs_listed - scan_packs0,
                  (unsigned)ds2[0], (unsigned)ds2[1], (unsigned)ds2[2]);
     }
