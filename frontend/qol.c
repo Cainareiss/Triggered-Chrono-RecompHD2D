@@ -42,10 +42,14 @@ typedef struct {
     int integer;          /* plain picture: whole multiples */
     int always_run;
 } qol_settings;
-#ifdef CT_PS5   /* port: a TV: no integer scale, so the Aspect setting decides */
-static qol_settings set = {3, 0, AUTO, ON, ON, BATT_OFF, 0, 0, 0};
-#else
 static qol_settings set = {3, 0, AUTO, ON, ON, BATT_OFF, 0, 1, 0};
+/* port: PS5 builds 8 and 9 saved integer_scale=off by default, and
+   stretching to the whole screen is too slow there for now: its own key,
+   so the default (on) comes back. */
+#ifdef CT_PS5
+#define QOL_INTEGER_KEY "integer_scale_ps5"
+#else
+#define QOL_INTEGER_KEY "integer_scale"
 #endif
 /* --qol-set changes set for this run only: settings.ini gets saved, the
    settings as they were before, plus what is toggled during the run. */
@@ -85,7 +89,7 @@ int qol_setting(const char *key, const char *v)
         set.battery = !strcmp(v, "light") ? BATT_LIGHT : !strcmp(v, "saver") ? BATT_SAVER : BATT_OFF;
     } else if (!strcmp(key, "crt")) {
         set.crt = on_off(v);
-    } else if (!strcmp(key, "integer_scale")) {
+    } else if (!strcmp(key, QOL_INTEGER_KEY)) {
         set.integer = on_off(v);
     } else if (!strcmp(key, "fill_screen")) {
         /* test build 7 only: now the Aspect setting's "Stretch" */
@@ -111,7 +115,7 @@ void qol_settings_write(FILE *f)
             sep = ",";
         }
     fprintf(f, "\npause_on_focus_loss=%s\npause_on_disconnect=%s\nresume=%s\n"
-               "battery_mode=%s\ncrt=%s\ninteger_scale=%s\nalways_run=%s\n",
+               "battery_mode=%s\ncrt=%s\n" QOL_INTEGER_KEY "=%s\nalways_run=%s\n",
             tri[v->pause_focus], tri[v->pause_pad], tri[v->resume], batt[v->battery],
             v->crt ? "on" : "off", v->integer ? "on" : "off", v->always_run ? "on" : "off");
 }

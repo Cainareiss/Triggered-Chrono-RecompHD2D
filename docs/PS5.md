@@ -69,9 +69,9 @@ ROM. Keep it on your own console and don't share it (docs/MODULES.md).
 `packaging/ps5/title/build-title.sh` builds a real PS5 app folder, not a payload:
 
 ```
-PPSA28358/
+PPSA28359/
   eboot.bin            the program (a fake-signed SELF)
-  sce_sys/param.json   title ID PPSA28358, "CT Recomp"
+  sce_sys/param.json   title ID PPSA28359, "CT Recomp"
   sce_sys/icon0.png
   sce_module/libc.prx  the runtime shim the title loads
 ```
@@ -85,7 +85,7 @@ resolved to NULL. Set `CT_ROM` to compile the game in.
 
 On the console you need etaHEN or kstuff (fake-signed SELFs), plus ShadowMountPlus:
 
-1. Copy the `PPSA28358` folder to `/data/homebrew/` over FTP.
+1. Copy the `PPSA28359` folder to `/data/homebrew/` over FTP.
 2. Put your ROM in it as `rom.sfc`. The title sees its folder as `/app0`.
 3. Run the exploit, then kstuff/etaHEN, then ShadowMountPlus. **CT Recomp** appears on the
    home screen. Start it like any game.
