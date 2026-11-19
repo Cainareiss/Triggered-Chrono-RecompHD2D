@@ -1623,8 +1623,24 @@ static void packs_refresh(void)
             char p[1024];
             struct stat st;
             snprintf(p, sizeof p, "%s/%s", packs_folder, e->d_name);
-            if (!stat(p, &st) && S_ISDIR(st.st_mode))
+            if (!stat(p, &st) && S_ISDIR(st.st_mode)) {
+                /* port: an unzipped folder one level too deep
+                   (packs/NAME/NAME/pack.toml) is found too */
+                char t[1100], n[600];
+                snprintf(t, sizeof t, "%s/pack.toml", p);
+                if (stat(t, &st)) {
+                    snprintf(t, sizeof t, "%s/%s/pack.toml", p, e->d_name);
+                    if (!stat(t, &st)) {
+                        snprintf(n, sizeof n, "%s/%s", e->d_name, e->d_name);
+                        pack_list_add(n);
+                        continue;
+                    }
+                }
                 pack_list_add(e->d_name);
+            }
+#ifdef CT_PS5
+            fprintf(stderr, "ct_sdl: packs folder entry \"%s\"\n", e->d_name);
+#endif
         }
     if (d)
         closedir(d);

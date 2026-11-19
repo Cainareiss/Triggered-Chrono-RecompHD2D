@@ -135,10 +135,16 @@ char *getcwd(char *buf, size_t size)
     return buf;
 }
 
-/* ---- directory streams, on getdents ---- */
+/* ---- directory streams, on getdents ----
+   The kernel's getdents records are FreeBSD 11's (32-bit file number,
+   16-bit record length, type, 8-bit name length, the name), whatever the
+   SDK's struct dirent says, so they are parsed by hand and copied into
+   one of our own. No O_DIRECTORY: its value differs between the headers
+   and the kernel, and a plain read-only open of a directory works. */
 struct _dirdesc {
     int fd, len, pos;
-    char buf[4096];
+    char buf[8192];
+    struct dirent out;
 };
 static struct _dirdesc dir_pool[4];
 static int dir_used[4];
@@ -153,7 +159,7 @@ DIR *opendir(const char *path)
         }
     if (slot < 0)
         return errno = EMFILE, NULL;
-    int fd = sceKernelOpen(path, O_RDONLY | O_DIRECTORY, 0);
+    int fd = sceKernelOpen(path, 0 /* O_RDONLY */, 0);
     if (fd < 0)
         return errno = ENOENT, NULL;
     dir_used[slot] = 1;
@@ -165,19 +171,31 @@ DIR *opendir(const char *path)
 struct dirent *readdir(DIR *d)
 {
     for (;;) {
-        if (d->pos >= d->len) {
+        if (d->pos + 8 > d->len) {
             int n = sceKernelGetdents(d->fd, d->buf, sizeof d->buf);
             if (n <= 0)
                 return NULL;
             d->len = n;
             d->pos = 0;
         }
-        struct dirent *e = (struct dirent *)(d->buf + d->pos);
-        if (e->d_reclen == 0)
+        const unsigned char *r = (const unsigned char *)d->buf + d->pos;
+        unsigned fileno = r[0] | r[1] << 8 | r[2] << 16 | (unsigned)r[3] << 24;
+        unsigned reclen = r[4] | r[5] << 8, type = r[6], namlen = r[7];
+        if (reclen < 8 || d->pos + (int)reclen > d->len)
             return NULL;
-        d->pos += e->d_reclen;
-        if (e->d_fileno)
-            return e;
+        d->pos += (int)reclen;
+        if (!fileno || !namlen)
+            continue;
+        if (namlen > reclen - 8)
+            namlen = reclen - 8;
+        if (namlen >= sizeof d->out.d_name)
+            namlen = sizeof d->out.d_name - 1;
+        memset(&d->out, 0, sizeof d->out);
+        d->out.d_fileno = fileno;
+        d->out.d_type = (uint8_t)type;
+        memcpy(d->out.d_name, r + 8, namlen);
+        d->out.d_name[namlen] = 0;
+        return &d->out;
     }
 }
 
