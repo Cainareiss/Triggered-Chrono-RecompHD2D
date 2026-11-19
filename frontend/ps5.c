@@ -10,6 +10,7 @@
 #include <dirent.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
@@ -23,6 +24,7 @@ typedef struct {
 int sceKernelSendNotificationRequest(int device, ps5_notify_request *req, size_t size,
                                      int blocking);
 int sceSystemServiceHideSplashScreen(void);
+int sceSystemServiceLoadExec(const char *path, const char *const *argv);
 
 /* The program's own folder (a homebrew launcher's app folder) first, then
    USB: a drive the player plugged in wins over an older copy in /data. */
@@ -60,8 +62,49 @@ void ps5_notify(const char *fmt, ...)
     sceKernelSendNotificationRequest(0, &req, sizeof req, 0);
 }
 
+static char log_path[256];
+
+/* The line of the log that says why the program stopped: the frontend's
+   "exit:" line, else the last fatal "ct:" one, else the last line. */
+static void why_stopped(char *out, size_t n)
+{
+    out[0] = 0;
+    FILE *f = log_path[0] ? fopen(log_path, "rb") : NULL;
+    if (!f)
+        return;
+    char line[512], last_ct[512] = "", last[512] = "";
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        if (!line[0])
+            continue;
+        snprintf(last, sizeof last, "%s", line);
+        if (!strncmp(line, "ct: ", 4) || strstr(line, "exit: ") || strstr(line, "failed"))
+            snprintf(last_ct, sizeof last_ct, "%s", line);
+    }
+    fclose(f);
+    snprintf(out, n, "%s", last_ct[0] ? last_ct : last);
+}
+
+/* Runs last at exit (registered first): tell the player why, then leave
+   the way a title must. A title's exit() ends in a system call the
+   console refuses (SIGSYS, seen on 13.20). */
+static void ps5_at_exit(void)
+{
+    fflush(stdout);
+    fflush(stderr);
+    char why[400];
+    why_stopped(why, sizeof why);
+    ps5_notify("CT Recomp stopped: %s", why[0] ? why : "(no log)");
+#ifdef CT_PS5_TITLE
+    sceSystemServiceLoadExec("exit", NULL);
+    for (;;)
+        sleep(1);
+#endif
+}
+
 void ps5_init(const char *argv0)
 {
+    atexit(ps5_at_exit);
     const char *slash = argv0 ? strrchr(argv0, '/') : NULL;
     if (slash && argv0[0] == '/' && (size_t)(slash - argv0) < sizeof self_dir)
         snprintf(self_dir, sizeof self_dir, "%.*s", (int)(slash - argv0), argv0);
@@ -82,6 +125,8 @@ void ps5_init(const char *argv0)
         chmod(path, 0666);   /* FTP servers can read it */
         logged = 1;
     }
+    if (logged)
+        snprintf(log_path, sizeof log_path, "%s", path);
     if (logged && freopen(path, "w", stderr))
         setvbuf(stderr, NULL, _IOLBF, 0);   /* line by line: survives a crash */
     if (logged && freopen(path, "a", stdout))

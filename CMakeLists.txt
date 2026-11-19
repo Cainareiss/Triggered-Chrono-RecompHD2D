@@ -59,6 +59,11 @@ set(CT_WARN -Wall -Wextra -Wpedantic)
 if(PS5)
     set(CT_PS5 ON)
     add_compile_definitions(CT_PS5)
+    # An installed title (packaging/ps5/title), not a payload.
+    option(CT_PS5_TITLE "Build for a PS5 title (eboot.bin), not an ELF payload" OFF)
+    if(CT_PS5_TITLE)
+        add_compile_definitions(CT_PS5_TITLE)
+    endif()
     # Our context switch, not the console libc's getcontext (a syscall).
     set(CT_COMPAT_UCONTEXT ON CACHE BOOL "" FORCE)
     # The math functions are in libc: an empty target stands in for -lm.

@@ -12,9 +12,9 @@
  *    libkernel (which titles do get): getcwd, the environment, directory
  *    streams, and a few small ones. A definition here wins over the import.
  *  - checks every remaining import before main (ct_title_check_imports,
- *    a constructor) and writes the unbound ones to
- *    /data/ct-recomp/imports.log, using only libkernel, then shows them in a
- *    notification. The table comes from imports.gen.h (gen_imports.py).
+ *    a constructor), writes them all to /data/ct-recomp/imports.log using
+ *    only libkernel, and names any unbound ones in a notification. The
+ *    table comes from imports.gen.h (gen_imports.py).
  */
 #include <dirent.h>
 #include <errno.h>
@@ -28,14 +28,6 @@
 #include <unistd.h>
 
 /* ---- libkernel ---- */
-typedef struct {
-    void *start, *end;
-    long offset;
-    int protection, memory_type;
-    unsigned flags;
-    char name[32];
-} ct_vquery_info;
-int sceKernelVirtualQuery(const void *addr, int flags, ct_vquery_info *info, size_t size);
 typedef struct {
     char reserved[45];
     char message[3075];
@@ -59,13 +51,6 @@ static size_t k_strlen(const char *s)
 /* Byte loops through volatile pointers: never turned into memset/memcpy
    calls, which are imports themselves (the import check runs before any
    import is known to work). */
-static void k_zero(void *p, size_t n)
-{
-    volatile char *d = p;
-    while (n--)
-        *d++ = 0;
-}
-
 static void k_copy(void *to, const void *from, size_t n)
 {
     volatile char *d = to;
@@ -271,10 +256,6 @@ int sceImeDialogTerm(void) { return -1; }
 /* ---- the import check ---- */
 #include "imports.gen.h"   /* CT_IMPORTS(X): X(index, "name", "module") per import */
 
-int sceKernelLoadStartModule(const char *path, size_t args, const void *argp, unsigned flags,
-                             void *opt, int *res);
-int sceKernelDlsym(int handle, const char *name, void **addr);
-
 #define CT_DECL(i, name, module) extern char ct_import_##i __asm__(name);
 CT_IMPORTS(CT_DECL)
 #define CT_ENTRY(i, name, module) {name, module, &ct_import_##i},
@@ -297,59 +278,30 @@ static void khex(char *out, uintptr_t v)
     out[18] = 0;
 }
 
-static int mapped(const void *p)
+/* Bound or not: on 13.20 the system modules a title imports from load at
+   0x8_0000_0000 and up (every bound import in the first log was there),
+   and the title itself at 0x40_0000. An import the loader didn't bind was
+   left at 0 (sceKeyboardInit) or at a stray low value (getcwd,
+   0x1_0026_c946). sceKernelVirtualQuery can't tell: it failed for every
+   import, bound ones included. */
+extern char __ehdr_start[];   /* the start of this program (lld) */
+static int bound(const void *p)
 {
-    ct_vquery_info info;
-    k_zero(&info, sizeof info);
-    return sceKernelVirtualQuery(p, 0, &info, sizeof info) == 0 &&
-           (const char *)p >= (const char *)info.start && (const char *)p < (const char *)info.end;
-}
-
-/* A module's handle by loading it (a loaded one answers with its handle),
-   trying the usual system folders: the log says which worked. */
-static int module_handle(int fd, const char *module)
-{
-    static const char *const dirs[] = {"/system/common/lib/", "/system/priv/lib/", ""};
-    static char last[64];
-    static int last_handle = -1;
-    if (k_streq(last, module))
-        return last_handle;
-    size_t n = k_strlen(module);
-    if (n > 40)
-        return -1;
-    k_copy(last, module, n + 1);
-    last_handle = -1;
-    for (int d = 0; d < 3 && last_handle < 0; d++) {
-        char path[96];
-        size_t at = k_strlen(dirs[d]);
-        k_copy(path, dirs[d], at);
-        k_copy(path + at, module, n);
-        k_copy(path + at + n, ".sprx", 6);
-        int res = 0;
-        int h = sceKernelLoadStartModule(path, 0, 0, 0, 0, &res);
-        char hx[19];
-        khex(hx, (uintptr_t)(unsigned)h);
-        kwrite(fd, "  load ");
-        kwrite(fd, path);
-        kwrite(fd, " -> ");
-        kwrite(fd, hx);
-        kwrite(fd, "\n");
-        if (h >= 0)
-            last_handle = h;
-    }
-    return last_handle;
+    uintptr_t a = (uintptr_t)p, self = (uintptr_t)__ehdr_start;
+    return a >= 0x800000000ull || (a >= self && a < self + 0x40000000ull);
 }
 
 __attribute__((constructor)) static void ct_title_check_imports(void)
 {
     sceKernelMkdir("/data/ct-recomp", 0777);
     int fd = sceKernelOpen("/data/ct-recomp/imports.log", O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    size_t bad = 0, found = 0, total = sizeof imports / sizeof *imports;
+    size_t bad = 0, total = sizeof imports / sizeof *imports;
     for (size_t k = 0; k < total; k++) {
-        int ok = mapped(imports[k].addr);
-        char h[19];
-        khex(h, (uintptr_t)imports[k].addr);
+        int ok = bound(imports[k].addr);
+        bad += !ok;
         if (fd >= 0) {
+            char h[19];
+            khex(h, (uintptr_t)imports[k].addr);
             kwrite(fd, ok ? "ok   " : "BAD  ");
             kwrite(fd, h);
             kwrite(fd, " ");
@@ -358,29 +310,22 @@ __attribute__((constructor)) static void ct_title_check_imports(void)
             kwrite(fd, imports[k].name);
             kwrite(fd, "\n");
         }
-        if (ok)
-            continue;
-        bad++;
-        /* Can it be looked up by hand? (How a fix would bind it.) */
-        if (fd >= 0) {
-            int hd = module_handle(fd, imports[k].module);
-            void *addr = 0;
-            int r = hd >= 0 ? sceKernelDlsym(hd, imports[k].name, &addr) : -1;
-            khex(h, (uintptr_t)addr);
-            kwrite(fd, r == 0 && addr && mapped(addr) ? "  dlsym ok " : "  dlsym no ");
-            kwrite(fd, h);
-            kwrite(fd, "\n");
-            found += r == 0 && addr && mapped(addr);
-        }
     }
     if (fd >= 0)
         sceKernelClose(fd);
     if (bad) {
         static ct_notify_request req;   /* static: zeroed without memset */
-        static const char msg[] = "CT Recomp: some system functions are missing. "
-                                  "Please send /data/ct-recomp/imports.log";
-        k_copy(req.message, msg, sizeof msg);
+        static const char head[] = "CT Recomp: unbound system functions:";
+        size_t at = sizeof head - 1;
+        k_copy(req.message, head, at);
+        for (size_t k = 0; k < total; k++) {
+            size_t n = k_strlen(imports[k].name);
+            if (bound(imports[k].addr) || at + n + 2 >= 400)
+                continue;
+            req.message[at++] = ' ';
+            k_copy(req.message + at, imports[k].name, n);
+            at += n;
+        }
         sceKernelSendNotificationRequest(0, &req, sizeof req, 0);
     }
-    (void)found;
 }

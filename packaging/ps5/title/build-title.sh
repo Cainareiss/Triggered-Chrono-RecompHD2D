@@ -7,11 +7,11 @@
 # Built with drakmor/ps5-native-app-boilerplate (pinned below, patched by
 # boilerplate.patch) over its pinned ps5-payload-sdk and PacBrew's SDL2.
 #
-#   packaging/ps5/title/build-title.sh [WORKDIR]   -> WORKDIR/kit/dist/PPSA28352/
+#   packaging/ps5/title/build-title.sh [WORKDIR]   -> WORKDIR/kit/dist/PPSA28353/
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd); src=$(cd "$here/../../.." && pwd)
 work=${1:-$src/build-ps5-title}; kit=$work/kit; objs=$work/objs
-TITLE_ID=${TITLE_ID:-PPSA28352}
+TITLE_ID=${TITLE_ID:-PPSA28353}
 BOILERPLATE_REV=470695e0c557f99ff2df0e36e4df713c5e636526
 mkdir -p "$work"
 if [ ! -d "$kit/.git" ]; then
@@ -29,7 +29,7 @@ sdk=$kit/.deps/native/ps5-payload-sdk
 pb=$(ls -d "$kit"/.deps/pacbrew/v*/sysroot | head -1)/user/homebrew
 
 # The engine, compiled against the pinned SDK and PacBrew's SDL2.
-args=(-DCMAKE_BUILD_TYPE=Release -DCMAKE_VERBOSE_MAKEFILE=OFF
+args=(-DCMAKE_BUILD_TYPE=Release -DCMAKE_VERBOSE_MAKEFILE=OFF -DCT_PS5_TITLE=ON
       -DSDL2_DIR="$pb/lib/cmake/SDL2" -DCMAKE_FIND_ROOT_PATH="$pb/../..")
 [ -n "${CT_ROM:-}" ] || args+=(-DCT_ENGINE_ONLY=ON)
 PATH=$(dirname "$(command -v cmake)"):$PATH "$sdk/bin/prospero-cmake" -S "$src" -B "$objs" "${args[@]}"
