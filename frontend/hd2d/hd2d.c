@@ -2739,6 +2739,30 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
                    black screen with text), so the 3D view would show a
                    map nobody sees */
                 !(st && !((st->main_enabled | st->sub_enabled) & 3));
+    /* port: a new map (or the field again after a battle) settles first:
+       the game says it is a map view a moment before its tiles are all in
+       video memory, and the 3D view, which reads them from there, showed
+       the battle's graphics scrambled over the map for a second. The 2D
+       picture (the console's own) until it has been the same map for 2/3
+       of a second; then the 3D fades in. */
+    {
+        static uint32_t last_id, last_gen;
+        static int last_mode = -1, stable;
+        if (!want3 || sc->map_id != last_id || (int)sc->mode != last_mode ||
+            (g.s3.amt <= 0.0f && sc->map_generation != last_gen)) {
+            if (want3 && last_mode >= 0 && (sc->map_id != last_id || (int)sc->mode != last_mode))
+                g.s3.amt = 0.0f;   /* a different map: cut to 2D, then settle */
+            stable = 0;
+        } else if (stable < 1000)
+            stable++;
+        if (sc) {
+            last_id = sc->map_id;
+            last_gen = sc->map_generation;
+            last_mode = sc->mode;
+        }
+        if (want3 && g.s3.amt <= 0.0f && stable < 40)
+            want3 = 0;
+    }
     if (!s->scene3d || (!want3 && (g.s3.pic_w != pw || g.s3.pic_h != ph)))
         g.s3.amt = 0.0f;
     else
