@@ -197,7 +197,8 @@
 #include "interp.h"
 #include "packs.h"    /* port: asset packs (docs/ASSET-PACKS.md) */
 #include "music.h"    /* port: audio packs: [[music]] in the same packs */
-#include "hdtext.h"   /* port: HD text: the player's font over the text boxes */
+#include "hdtext.h"
+#include "uipanel.h"   /* port: remastered menus */
 #include "pack_scene.h"   /* port: their models, poses and sheets */
 #include "png.h"
 #include "replay.h"
@@ -375,7 +376,8 @@ static int running = 1, fast, log_input, log_audio, log_music;
    the per-game data folder, <pref path>/packs/NAME; a NAME with a slash
    in it is a directory of its own. */
 static const char *pack_dump;   /* --pack-dump NAME */
-static int want_prov(void) { return packs_active() || pack_dump || hdtext_ready(); }
+static int menu_style;   /* port: remastered menus (uipanel.h): 0 off, 1 glass */
+static int want_prov(void) { return packs_active() || pack_dump || hdtext_ready() || menu_style; }
 static const char *pack_sheets;   /* --pack-export-sheets NAME */
 static int pack_sheets_scale = 4;   /* --pack-export-scale N */
 #define MAX_PACK_NAMES 16
@@ -1180,6 +1182,13 @@ static const char *const depth3d_labels[3] = {"Full", "Subtle", "Flat"},
                          *const depth3d_values[3] = {"full", "subtle", "flat"};
 static int get_depth3d(void *u) { (void)u; return hd2d_3d_depth(); }
 static void set_depth3d(void *u, int v) { (void)u; hd2d_set_3d_depth(v); }
+static int get_menu_style(void *u) { (void)u; return menu_style; }
+static void set_menu_style(void *u, int v)
+{
+    (void)u;
+    menu_style = v != 0;
+    sched_set_prov(want_prov());
+}
 static int get_shadows3d(void *u) { (void)u; return hd2d_3d_shadows(); }
 static void set_shadows3d(void *u, int v) { (void)u; hd2d_set_3d_shadows(v); }
 static int get_smooth(void *u) { (void)u; return hd2d_smooth(); }
@@ -1704,6 +1713,12 @@ static void register_settings(void)
         .enabled = on_hd2d,
         .help = "The miniature-model blur towards the top and bottom of the picture: off, a "
                 "little, or the look's full amount."});
+    settings_register(&(setting){
+        .key = "menu_glass", .label = "Remastered menus", .category = "Look",
+        .type = SETTING_BOOL, .get = get_menu_style, .set = set_menu_style, .enabled = on_hd2d,
+        .help = "A modern look for the game's windows (text boxes, menus, battle windows): "
+                "frosted glass panels with rounded corners, drawn at the screen's resolution. "
+                "Text, icons and the cursor stay the game's. Used by the HD-2D renderer."});
     settings_register(&(setting){
         .key = "depth_3d", .label = "3D depth", .category = "Look", .type = SETTING_ENUM,
         .options = depth3d_labels, .values = depth3d_values, .count = 3, .get = get_depth3d,
@@ -2780,6 +2795,15 @@ static void on_frame(long f)
         }
         hd2d_set_text_overlay(hd_text_now.rgba, hd_text_now.w, hd_text_now.h, hd_text_now.x,
                               hd_text_now.y, hd_text_now.cw, hd_text_now.ch, hd_text_now.gen);
+        if (menu_style && sched_prov()) {   /* port: remastered menus */
+            static uint8_t pmask[SCHED_WIDTH * SCHED_HEIGHT];
+            static float prect[UIPANEL_MAX][4];
+            int n = uipanel_frame(sched_prov(), hd_text_now.lines ? hdtext_removed() : NULL,
+                                  pmask, prect);
+            hd2d_set_ui_panels(pmask, (const float (*)[4])prect, n, menu_style);
+        } else {
+            hd2d_set_ui_panels(NULL, NULL, 0, 0);
+        }
     }
     if (show)
         present_now();

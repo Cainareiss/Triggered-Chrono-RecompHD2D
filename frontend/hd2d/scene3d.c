@@ -146,6 +146,8 @@ typedef struct {
     uint8_t boxed[MAXC][MAXC];      /* its floor is inside a box */
     uint8_t hooked[MAXC][MAXC];     /* the cell hook drew it (or nothing) */
     float card_shift;               /* port: s3d_params.card_shift (cards) */
+    uint8_t ground_ok[MAXC][MAXC];  /* port: per quarter (bit q): the back layer's tile there
+                                       has pixels and stays down (cards' ground fill) */
 } build_ctx;
 
 static build_ctx ctx;   /* the last build's, also for placing sprites */
@@ -226,7 +228,17 @@ static void emit_quarter(build_ctx *c, const ct_scene_layer *L, uint16_t e, cons
     for (int k = 0; k < 3; k++)
         tl[k] = p->o[k] + 8 * (float)(q & 1) * p->u[k] + 8 * (float)(q >> 1) * p->v[k] +
                 lift * nrm[p->normal][k];
-    s3d_emit(c->m, tl, p->u, p->v, pack(L, e, p->normal, p->flags | extra), e & 0x4000,
+    /* port: a hair larger on every side (0.02 px), so neighbouring tiles
+       overlap instead of leaving hairline cracks the background shows
+       through */
+    const float eps = 0.02f;
+    float u2[3], v2[3];
+    for (int k = 0; k < 3; k++) {
+        tl[k] -= eps * (p->u[k] + p->v[k]);
+        u2[k] = p->u[k] * (1.0f + eps / 4.0f);
+        v2[k] = p->v[k] * (1.0f + eps / 4.0f);
+    }
+    s3d_emit(c->m, tl, u2, v2, pack(L, e, p->normal, p->flags | extra), e & 0x4000,
              e & 0x8000);
 }
 
@@ -457,16 +469,15 @@ static void emit_card_cell(build_ctx *c, int x, int y)
                    (of this quarter) that stays down in the cells around it,
                    the paving or grass that repeats; a one-off neighbour
                    (another part of the same tent) showed as a ghost copy. */
-                uint16_t g = 0, cand[81];
-                int cnt[81], nc = 0, found = 0, best = 1;
-                for (int dy = -4; dy <= 4; dy++)
-                    for (int dx = -4; dx <= 4; dx++) {
+                uint16_t g = 0, cand[49];
+                int cnt[49], nc = 0, found = 0, best = 1;
+                for (int dy = -3; dy <= 3; dy++)
+                    for (int dx = -3; dx <= 3; dx++) {
                         int nx = x + dx, ny = y + dy;
-                        if (nx < 0 || ny < 0 || nx >= s->map_w || ny >= s->map_h)
+                        if (nx < 0 || ny < 0 || nx >= s->map_w || ny >= s->map_h ||
+                            !(c->ground_ok[ny][nx] & (1u << q)))
                             continue;
                         uint16_t ne = entry_at(L, nx, ny, q);
-                        if ((ne & 0x2000) || tile_empty(s, L, ne))
-                            continue;
                         int k = 0;
                         while (k < nc && cand[k] != ne)
                             k++;
@@ -546,6 +557,14 @@ int s3d_build_map(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
     find_runs(c);
     c->card_shift = p->card_shift > 0.0f ? p->card_shift : 1.0f;
     if (p->cards) {
+        const ct_scene_layer *B = layer_of(s, draw_layers[0]);
+        for (int y = 0; y < s->map_h; y++)
+            for (int x = 0; x < s->map_w; x++)
+                for (int q = 0; B && q < 4; q++) {
+                    uint16_t e = entry_at(B, x, y, q);
+                    if (!(e & 0x2000) && !tile_empty(s, B, e))
+                        c->ground_ok[y][x] |= (uint8_t)(1u << q);
+                }
         memset(box_h, 0, sizeof box_h);
         memset(box_b, -1, sizeof box_b);
     } else

@@ -220,7 +220,7 @@ set_source_files_properties(frontend/packs/codecs.c PROPERTIES COMPILE_OPTIONS "
 target_link_libraries(ct_packs PUBLIC m)
 # port: HD text (frontend/hdtext.h): the player's font over the game's text
 # boxes; stb_truetype's implementation in hdtext_ttf.c, without our warnings.
-add_library(ct_hdtext STATIC frontend/hdtext.c frontend/hdtext_ttf.c)
+add_library(ct_hdtext STATIC frontend/hdtext.c frontend/hdtext_ttf.c frontend/uipanel.c)
 target_include_directories(ct_hdtext PUBLIC frontend runtime PRIVATE third_party/stb)
 target_compile_options(ct_hdtext PRIVATE ${CT_WARN})
 set_source_files_properties(frontend/hdtext_ttf.c PROPERTIES COMPILE_OPTIONS "-w")
