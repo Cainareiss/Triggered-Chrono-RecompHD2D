@@ -2810,6 +2810,10 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     const ct_scene *sc = g.s3.scene;
     int want3 = s->scene3d && g.s3.ok && sc &&
                 (sc->mode == CT_SCENE_FIELD || sc->mode == CT_SCENE_WORLD) && sc->vram &&
+                /* port: a field nobody controls (the title's opening scenes:
+                   the sky, the flying machine, scrolling layers drawn as a
+                   map) stays the console's picture; it came out scrambled */
+                (sc->mode != CT_SCENE_FIELD || sc->player < sc->n_objects) &&
                 !(st && st->mode == 7) &&
                 /* the map's layers (BG1, BG2) on neither screen: the
                    console shows something else over a loaded map (a
