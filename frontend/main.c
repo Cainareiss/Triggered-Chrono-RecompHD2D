@@ -1799,7 +1799,7 @@ static void register_settings(void)
         .options = ps5_display_labels, .values = ps5_display_values, .count = 3,
         .get = get_ps5_display, .set = set_ps5_display, .flags = SETTING_RESTART,
         .help = "The picture the PS5 draws; the console scales it to the TV. 4K is the "
-                "sharpest (the 3D diorama is drawn at 720 lines and upscaled), 1080p the "
+                "sharpest (the 3D diorama is drawn at 1080 lines and upscaled), 1080p the "
                 "lightest. Takes effect on the next start."});
 #endif
     settings_register(&(setting){

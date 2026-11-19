@@ -2168,11 +2168,11 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     float a = s->effects ? scene_amt : 0.0f;
     float rs = user_render_scale > 0.0f ? user_render_scale : s->render_scale;
 #ifdef CT_PS5
-    /* port: the PS5's Auto: the diorama drawn at no more than 720 lines
-       and upscaled with FSR (30 fps at 4K full size, and still short of
-       60 at 1080, seen on a TV) */
-    if (user_render_scale <= 0.0f && ph > 720) {
-        float cap = 720.0f / (float)ph;
+    /* port: the PS5's Auto: the diorama drawn at no more than 1080 lines
+       and upscaled with FSR (30 fps at 4K full size). Not fewer: at 720
+       the pixel art came out uneven and blocky in the 3D view. */
+    if (user_render_scale <= 0.0f && ph > 1080) {
+        float cap = 1080.0f / (float)ph;
         rs = rs > 0.0f && rs < cap ? rs : cap;
     }
 #endif
