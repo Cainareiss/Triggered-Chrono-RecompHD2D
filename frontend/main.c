@@ -377,7 +377,14 @@ static int running = 1, fast, log_input, log_audio, log_music;
    in it is a directory of its own. */
 static const char *pack_dump;   /* --pack-dump NAME */
 static int menu_style;   /* port: remastered menus (uipanel.h): 0 off, 1 glass */
-static int want_prov(void) { return packs_active() || pack_dump || hdtext_ready() || menu_style; }
+/* port: the provenance G-buffer costs the PPU CPU time every frame (the
+   music stuttered with the menus on): for the menus alone it is drawn one
+   frame in 6, and the windows found then are kept in between. */
+static int menu_prov_now = 1;
+static int want_prov(void)
+{
+    return packs_active() || pack_dump || hdtext_ready() || (menu_style && menu_prov_now);
+}
 static const char *pack_sheets;   /* --pack-export-sheets NAME */
 static int pack_sheets_scale = 4;   /* --pack-export-scale N */
 #define MAX_PACK_NAMES 16
@@ -2795,16 +2802,18 @@ static void on_frame(long f)
         }
         hd2d_set_text_overlay(hd_text_now.rgba, hd_text_now.w, hd_text_now.h, hd_text_now.x,
                               hd_text_now.y, hd_text_now.cw, hd_text_now.ch, hd_text_now.gen);
-        if (menu_style && sched_prov()) {   /* port: remastered menus */
+        if (menu_style && !sched_prov()) {
+            /* port: no provenance this frame: the last windows stay */
+        } else if (menu_style) {   /* port: remastered menus */
             static uint8_t pmask[SCHED_WIDTH * SCHED_HEIGHT];
             static float prect[UIPANEL_MAX][4];
             int n = uipanel_frame(sched_prov(), hd_text_now.lines ? hdtext_removed() : NULL,
                                   pmask, prect);
             hd2d_set_ui_panels(pmask, (const float (*)[4])prect, n, menu_style);
 #ifdef CT_PS5
-            /* port: every 5 s, what it found, for tuning (a small text file) */
+            /* port: every few seconds, what it found, for tuning (a small text file) */
             static unsigned dbg_frames;
-            if (++dbg_frames % 300 == 0)
+            if (++dbg_frames % 50 == 0)
                 uipanel_debug_write("/data/ct-recomp/menus.txt");
 #endif
         } else {
@@ -2813,6 +2822,14 @@ static void on_frame(long f)
     }
     if (show)
         present_now();
+    if (menu_style) {   /* port: the menus' provenance, one frame in 6 */
+        static unsigned tick;
+        int now = ++tick % 6 == 0;
+        if (now != menu_prov_now) {
+            menu_prov_now = now;
+            sched_set_prov(want_prov());
+        }
+    }
     if (hd2d_mode)   /* The PPU's behind G-buffer only while the look uses it. */
         sched_set_behind(hd2d_wants_behind());
     if (n_shots)
