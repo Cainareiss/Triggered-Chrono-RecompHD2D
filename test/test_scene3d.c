@@ -134,6 +134,38 @@ static void test_ground_stays_flat(void)
     s3d_mesh_free(&m);
 }
 
+/* port: layered cards: nothing stands up; tiles drawn over sprites lie
+   S3D_CARD_OVER px up, moved south as far, with the ground left under
+   them. */
+static void test_cards(void)
+{
+    static ct_scene s;
+    make_scene(&s);
+    /* The wall cell's top row: priority (over sprites), as a canopy. */
+    for (int x = 2 * WALL_X; x < 2 * WALL_X + 2; x++)
+        for (int y = 2 * RUN_A; y < 2 * RUN_A + 2; y++)
+            tiles[1][y * CT_SCENE_STRIDE + x] |= 0x2000;
+    s3d_mesh m = {0};
+    s3d_params p = {3, 1.0f, 1};
+    int quads = s3d_build_map(&s, &p, &m);
+    /* Every cell flat on the ground, plus the canopy cell's card. */
+    CHECK(quads == (MW * MH + 1) * 4, "card quads %d", quads);
+    CHECK(m.ni_floor / 6 == MW * MH * 4, "card floor quads %d", m.ni_floor / 6);
+    int flat = 1, bad_y = 0;
+    for (int k = 0; k < m.nv; k++) {
+        flat &= ((m.v[k].tile >> S3D_NORMAL_SHIFT) & 7u) == S3D_N_UP;
+        bad_y += m.v[k].y > 0.2f && fabsf(m.v[k].y - S3D_CARD_OVER) > 0.2f;
+    }
+    CHECK(flat, "every card faces up");
+    CHECK(!bad_y, "%d vertices off the ground and card heights", bad_y);
+    CHECK(has_vertex(&m, WALL_X * 16, S3D_CARD_OVER, RUN_A * 16 + S3D_CARD_OVER), "the canopy card");
+    CHECK(has_vertex(&m, WALL_X * 16, 0, RUN_A * 16), "the ground under it");
+    CHECK(s3d_height_at(WALL_X, RUN_B) == 0, "no boxes");
+    s3d_mesh_free(&m);
+    for (int k = 0; k < CT_SCENE_STRIDE * 2 * CT_SCENE_MAX_CELLS; k++)
+        tiles[1][k] &= (uint16_t)~0x2000;
+}
+
 static void test_sprites(void)
 {
     static ct_scene s;
@@ -290,6 +322,7 @@ int main(void)
 {
     test_map();
     test_ground_stays_flat();
+    test_cards();
     test_sprites();
     test_world();
     if (fails)

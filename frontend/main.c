@@ -1176,6 +1176,10 @@ static int get_dof(void *u) { (void)u; return hd2d_dof(); }
 static void set_dof(void *u, int v) { (void)u; hd2d_set_dof(v); }
 static int get_perf(void *u) { (void)u; return hd2d_perf_osd(); }
 static void set_perf(void *u, int v) { (void)u; hd2d_set_perf_osd(v); }
+static const char *const style3d_labels[2] = {"Diorama blocks", "Layered cards"},
+                         *const style3d_values[2] = {"blocks", "cards"};
+static int get_style3d(void *u) { (void)u; return hd2d_3d_style(); }
+static void set_style3d(void *u, int v) { (void)u; hd2d_set_3d_style(v); }
 static int get_smooth(void *u) { (void)u; return hd2d_smooth(); }
 static void set_smooth(void *u, int v) { (void)u; hd2d_set_smooth(v); }
 static int get_aspect(void *u) { (void)u; return hd2d_aspect(); }
@@ -1698,6 +1702,14 @@ static void register_settings(void)
         .enabled = on_hd2d,
         .help = "The miniature-model blur towards the top and bottom of the picture: off, a "
                 "little, or the look's full amount."});
+    settings_register(&(setting){
+        .key = "style_3d", .label = "3D style", .category = "Look", .type = SETTING_ENUM,
+        .options = style3d_labels, .values = style3d_values, .count = 2, .get = get_style3d,
+        .set = set_style3d, .enabled = on_hd2d,
+        .help = "How the 3D diorama look builds a map. Layered cards: every layer stays flat "
+                "at its own depth, with treetops and roofs floating above the ground, so "
+                "the art keeps its shapes. Diorama blocks: walls and blocks stood up from "
+                "the map."});
     settings_register(&(setting){
         .key = "smooth_3d", .label = "3D texture smoothing", .category = "Look",
         .type = SETTING_BOOL, .get = get_smooth, .set = set_smooth, .enabled = on_hd2d,

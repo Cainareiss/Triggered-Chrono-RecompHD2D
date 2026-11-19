@@ -64,6 +64,10 @@ void hd2d_set_aspect(int aspect);
 void hd2d_set_dof(int level);
 int hd2d_dof(void);
 /* Pixel-art smoothing of the 3D view's tiles (on by default). */
+/* port: the 3D view's style: 1 layered cards (each layer flat at its own
+   height), 0 the block diorama. */
+void hd2d_set_3d_style(int cards);
+int hd2d_3d_style(void);
 void hd2d_set_smooth(int on);
 int hd2d_smooth(void);
 int hd2d_aspect(void);

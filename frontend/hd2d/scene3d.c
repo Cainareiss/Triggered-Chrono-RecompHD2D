@@ -427,6 +427,39 @@ static void emit_cell(build_ctx *c, int x, int y)
     }
 }
 
+/* port: layered cards (s3d_params.cards). Like the 3DS ports that give
+   each 2D layer its own depth instead of building models: the back layer
+   is the ground, the front layer a hair above it, and every tile the
+   console drew over sprites (canopies, roofs, arches) one flat card
+   S3D_CARD_OVER px up, moved south as far so that from the usual camera
+   it sits where the original drew it. Nothing is stood up or stretched,
+   so the art keeps its shapes; the depth shows as parallax when the
+   camera moves, and the high cards cast their shadows on the ground. */
+static void emit_card_cell(build_ctx *c, int x, int y)
+{
+    const ct_scene *s = c->s;
+    if (c->empty[y][x])
+        return;
+    for (int li = 0; li < 2; li++) {
+        const ct_scene_layer *L = layer_of(s, draw_layers[li]);
+        for (int q = 0; L && q < 4; q++) {
+            uint16_t e = entry_at(L, x, y, q);
+            if (tile_empty(s, L, e))
+                continue;
+            int over = (e & 0x2000) != 0;
+            float h = over ? S3D_CARD_OVER : li == 1 ? S3D_CARD_FRONT : 0.0f;
+            place p = {{(float)x * 16, h, (float)y * 16 + h}, {1, 0, 0}, {0, 0, 1}, S3D_N_UP,
+                       over ? S3D_RAISED : 0};
+            emit_quarter(c, L, e, &p, q, li, !over && li == 0 ? S3D_OPAQUE : 0);
+            if (over && li == 0) {   /* the ground it lifted off: the same tile stays */
+                place f;
+                floor_place(&f, x, y);
+                emit_quarter(c, L, e & ~0x2000u, &f, q, li, S3D_OPAQUE);
+            }
+        }
+    }
+}
+
 /* Side walls where neighboring columns' boxes differ in height. */
 static void emit_sides(build_ctx *c)
 {
@@ -481,7 +514,11 @@ int s3d_build_map(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
         return 0;
     int hmax = p->hmax < 1 ? 1 : p->hmax > HMAX_CAP ? HMAX_CAP : p->hmax;
     find_runs(c);
-    mark_runs(c, hmax);
+    if (p->cards) {
+        memset(box_h, 0, sizeof box_h);
+        memset(box_b, -1, sizeof box_b);
+    } else
+        mark_runs(c, hmax);
 
     /* Two passes over the cells: floor quads first, then raised ones, so
        the shadow pass can draw only the second range. */
@@ -490,8 +527,12 @@ int s3d_build_map(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
     c->m = &tmp;
     for (int y = 0; y < s->map_h; y++)
         for (int x = 0; x < s->map_w; x++)
-            if (!cell_hook || !cell_hook(cell_hook_user, s, x, y, &tmp))
-                emit_cell(c, x, y);
+            if (!cell_hook || !cell_hook(cell_hook_user, s, x, y, &tmp)) {
+                if (p->cards)
+                    emit_card_cell(c, x, y);
+                else
+                    emit_cell(c, x, y);
+            }
             else
                 c->hooked[y][x] = 1;
     /* tmp holds every quad in cell order: copy the floor ones, then the
@@ -516,7 +557,8 @@ int s3d_build_map(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
             m->ni_floor = m->ni;
     }
     c->m = m;
-    emit_sides(c);
+    if (!p->cards)
+        emit_sides(c);
     ctx_ok = 1;
     return oom ? -1 : m->ni / 6;
 }
