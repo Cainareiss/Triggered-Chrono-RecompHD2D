@@ -1176,6 +1176,10 @@ static int get_dof(void *u) { (void)u; return hd2d_dof(); }
 static void set_dof(void *u, int v) { (void)u; hd2d_set_dof(v); }
 static int get_perf(void *u) { (void)u; return hd2d_perf_osd(); }
 static void set_perf(void *u, int v) { (void)u; hd2d_set_perf_osd(v); }
+static const char *const depth3d_labels[3] = {"Full", "Subtle", "Flat"},
+                         *const depth3d_values[3] = {"full", "subtle", "flat"};
+static int get_depth3d(void *u) { (void)u; return hd2d_3d_depth(); }
+static void set_depth3d(void *u, int v) { (void)u; hd2d_set_3d_depth(v); }
 static int get_shadows3d(void *u) { (void)u; return hd2d_3d_shadows(); }
 static void set_shadows3d(void *u, int v) { (void)u; hd2d_set_3d_shadows(v); }
 static int get_smooth(void *u) { (void)u; return hd2d_smooth(); }
@@ -1700,6 +1704,13 @@ static void register_settings(void)
         .enabled = on_hd2d,
         .help = "The miniature-model blur towards the top and bottom of the picture: off, a "
                 "little, or the look's full amount."});
+    settings_register(&(setting){
+        .key = "depth_3d", .label = "3D depth", .category = "Look", .type = SETTING_ENUM,
+        .options = depth3d_labels, .values = depth3d_values, .count = 3, .get = get_depth3d,
+        .set = set_depth3d, .enabled = on_hd2d,
+        .help = "How far the 3D diorama's raised layers (treetops, roofs, table tops) move "
+                "against the ground as the camera moves. Full: the most depth, with seams "
+                "inside tables and tents. Flat: lined up exactly, depth from light and shadow."});
     settings_register(&(setting){
         .key = "shadows_3d", .label = "3D shadows", .category = "Look", .type = SETTING_BOOL,
         .get = get_shadows3d, .set = set_shadows3d, .enabled = on_hd2d,

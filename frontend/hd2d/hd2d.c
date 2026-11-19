@@ -854,6 +854,9 @@ void hd2d_set_scene(const ct_scene *scene) { g.s3.scene = scene; }
 static float user_tilt = 40.0f, user_zoom = 0.75f;
 static int user_cards = 1;   /* port: hd2d_set_3d_style */
 static int shadows_3d = 1;   /* port: hd2d_set_3d_shadows */
+static int depth_3d = 1;     /* port: hd2d_set_3d_depth: 0 full, 1 subtle, 2 flat */
+void hd2d_set_3d_depth(int d) { depth_3d = d < 0 ? 0 : d > 2 ? 2 : d; }
+int hd2d_3d_depth(void) { return depth_3d; }
 void hd2d_set_3d_shadows(int on) { shadows_3d = on != 0; }
 int hd2d_3d_shadows(void) { return shadows_3d; }
 void hd2d_set_3d_style(int cards) { user_cards = cards != 0; }
@@ -2506,6 +2509,13 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
                   shadows_3d ? 0.55f * s->shadow * a : 0.0f);
     if (!pass)
         p_glUniform1i(U(P, "uSmooth"), smooth_3d);
+    if (P == P3_SCENE) {   /* port: the cards' snap toward the console's picture */
+        static const float snap[3] = {0.0f, 0.8f, 1.0f};
+        float t = g.s3.map_tilt * 3.14159265f / 180.0f;
+        p_glUniform2f(U(P, "uCard"), user_cards ? snap[depth_3d] : 0.0f,
+                      t > 0.05f ? tanf(t) : 0.05f);
+        p_glUniform3f(U(P, "uEyeV"), eye[0], eye[1], eye[2]);
+    }
     p_glUniform4f(U(P, "uMisc"), s->point_light * a * (0.25f + 0.75f * dark_amt), dist * 1.25f,
                   dist * 3.5f, 1.0f / S3D_SHADOW_SIZE);
     if (pass) {

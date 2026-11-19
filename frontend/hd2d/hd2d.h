@@ -69,6 +69,9 @@ int hd2d_dof(void);
 void hd2d_set_3d_style(int cards);
 int hd2d_3d_style(void);
 /* port: the 3D view's shadows (on by default). */
+/* port: how much the 3D cards' layers move apart: 0 full, 1 subtle, 2 flat. */
+void hd2d_set_3d_depth(int d);
+int hd2d_3d_depth(void);
 void hd2d_set_3d_shadows(int on);
 int hd2d_3d_shadows(void);
 void hd2d_set_smooth(int on);
