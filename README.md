@@ -1,29 +1,74 @@
-# Triggered Chrono
+<div align="center">
 
-An unofficial, fan-made static recompilation of Chrono Trigger (SNES, US 1.0) into a native
-PC port, built on
-[ct-recomp](https://github.com/ThisIsAkill/ct-recomp) by Akhil Moola.
+# TRIGGERED CHRONO
+### Native Recompilation · HD-2D Ambitions · Community-Driven Development
 
-> **Not affiliated.** This project is not affiliated with, authorized by or endorsed by the
-> rights holders of Chrono Trigger. Game and company names are trademarks of their respective
-> owners and are used here only to say what the software works with. It contains no game
-> code, data, art or music.
+**An unofficial Chrono Trigger native-port project built on [ct-recomp](https://github.com/ThisIsAkill/ct-recomp).**
 
-You need your own copy of the game. Put your headerless 4 MB dump in `rom/` and point
-`CT_ROM` at it (see Build below). That folder is git-ignored, and no game data (ROMs,
-extracted assets, keys) is ever committed to this repository.
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
+[![Project roadmap](https://img.shields.io/badge/project-roadmap-8A63D2)](ROADMAP.md)
+[![GitHub issues](https://img.shields.io/github/issues/savageforengland-hue/Triggered-Chrono-RecompHD2D)](https://github.com/savageforengland-hue/Triggered-Chrono-RecompHD2D/issues)
+[![GitHub stars](https://img.shields.io/github/stars/savageforengland-hue/Triggered-Chrono-RecompHD2D?style=social)](https://github.com/savageforengland-hue/Triggered-Chrono-RecompHD2D/stargazers)
 
-**Players:** the [player's guide](docs/USER-GUIDE.md) covers installing the AppImage or
-Flatpak, the first launch, controls, where files live and troubleshooting. On a Steam Deck or
-ROG Ally, follow [docs/HANDHELD.md](docs/HANDHELD.md): Game Mode, controller-only setup,
-the controls and the Deck preset. To replace the game's art with your own, or with
-upscaled placeholders made from your ROM, or its music with recordings of your own, see
-[docs/ASSET-PACKS.md](docs/ASSET-PACKS.md); to draw the text boxes with a font of your
-choice, [HD text](docs/USER-GUIDE.md#hd-text). No art, music or font comes with it.
+[**Getting started**](#getting-started) · [**Features**](#project-highlights) · [**Roadmap**](ROADMAP.md) · [**Documentation**](#documentation) · [**Build**](#build)
 
-CI for the port (`.github/workflows/port.yml`) runs without a ROM: an engine-only build
-and its tests, a check for generated code in the engine programs, the game-agnostic and
-REUSE lints, and `tools/check_dist.py` on the installed engine before it is uploaded.
+</div>
+
+---
+
+> [!IMPORTANT]
+> **Bring your own legally obtained game ROM.** No Chrono Trigger ROM, copyrighted game assets, music or artwork are distributed with this repository. This fan project is not affiliated with or endorsed by the game's rights holders.
+
+## Overview
+
+Triggered Chrono explores a native PC experience for **Chrono Trigger (SNES, US 1.0)** through static recompilation, with optional HD-2D-style presentation and an extensible engine. The project combines the foundations of [ct-recomp](https://github.com/ThisIsAkill/ct-recomp) with work on modern rendering, usability and mod-friendly asset workflows.
+
+**Development status:** Work in progress. The existence of a roadmap item does not mean that feature is finished, and this repository should not be presented as a completed HD-2D remaster.
+
+## Project highlights
+
+| Area | What the repository covers |
+| :--- | :--- |
+| **Native recompilation** | 65816-to-C translation and a native runtime, with interpreter fallback |
+| **HD-2D direction** | Optional enhanced presentation and external asset-pack workflows |
+| **Modern controls** | SDL2 frontend, keyboard and gamepad support |
+| **Testing** | ROM-free engine tests, headless boot probes and comparison tooling |
+| **Portable foundations** | PC-oriented builds, handheld guidance and future platform goals |
+| **Open development** | GPL-3.0-or-later licensing and documented third-party attribution |
+
+## Getting started
+
+**For players:** Start with the [player's guide](docs/USER-GUIDE.md). It covers installation, first launch, controls and troubleshooting.
+
+**For developers:** See [Build](#build) for prerequisites, engine-only compilation and optional ROM-based builds.
+
+**For artists and modders:** Read the [asset-pack documentation](docs/ASSET-PACKS.md) for external graphics and audio replacement workflows. No replacement art or music is bundled.
+
+## Documentation
+
+| Guide | Purpose |
+| :--- | :--- |
+| [Player's guide](docs/USER-GUIDE.md) | Installation, launch and troubleshooting |
+| [Handheld setup](docs/HANDHELD.md) | Steam Deck and other handheld devices |
+| [Asset packs](docs/ASSET-PACKS.md) | Custom and user-supplied graphics/audio |
+| [Roadmap](ROADMAP.md) | Planned enhancements and development priorities |
+| [Progress report](game/ct/PROGRESS.md) | Recompilation metrics and technical progress |
+| [Third-party credits](THIRD_PARTY.md) | Dependencies, notices and attribution |
+
+## Development priorities
+
+The [full roadmap](ROADMAP.md) documents proposed graphics, audio, accessibility, platform and quality-of-life improvements. Key directions include HD asset packs, widescreen support, HD text, MSU-1 audio and future console support. **These are goals, not promises of current functionality.**
+
+## Credits and legal notice
+
+This project builds on **ct-recomp by Akhil Moola** and includes other credited open-source components. See [THIRD_PARTY.md](THIRD_PARTY.md) and [REUSE.toml](REUSE.toml) for attribution and license details.
+
+*Chrono Trigger* and its associated intellectual property belong to their respective rights holders. This is an independent, unofficial fan project. You must supply your own legally obtained, compatible ROM.
+
+---
+
+<details>
+<summary><strong>Technical reference, licensing and original build documentation</strong></summary>
 
 ## License
 
@@ -159,3 +204,5 @@ assets are **not included** and remain the property of their copyright
 holders — you must supply your own legally obtained ROM via `$CT_ROM`.
 Symbol names are credited to dscotton/ct_disassembly (public domain) and
 ChronoRET. See `THIRD_PARTY.md` for vendored/adapted third-party code.
+
+</details>
