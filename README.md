@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/ct5-hd2d-icon.svg" alt="CT5 HD-2D clock project icon" width="180" />
+
 # TRIGGERED CHRONO
 ### Native Recompilation · HD-2D Ambitions · Community-Driven Development
 
