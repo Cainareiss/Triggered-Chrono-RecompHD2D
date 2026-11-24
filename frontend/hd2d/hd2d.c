@@ -1862,7 +1862,8 @@ static void s3d_update(const ct_scene *sc)
 
     uint32_t eh = s3d_empty_hash(sc);
     if (!g.s3.have_map || sc->map_generation != g.s3.map_gen || eh != g.s3.empty_hash ||
-        sc->mode != g.s3.map_mode || g.model_built != g.model_gen) {
+        sc->mode != g.s3.map_mode || g.model_built != g.model_gen ||
+        (sc->mode == CT_SCENE_FIELD && !s3d_room_matches(sc))) {
         /* port: asset packs' models: their cell hook first, then (below,
            once the map's heights are known) their triangles */
         if (g.model_fn)
@@ -2209,19 +2210,16 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     /* The camera: looking at the middle of the console's view, tilted
        back from straight down, far enough off to show about its width. */
     /* The world map has a camera of its own (a higher one, if the user
-       likes), centred on the player and never stopped by edges (it wraps). */
+       likes), centred on the console camera, including scripted pans (it wraps). */
     int world = sc->mode == CT_SCENE_WORLD;
-    float zoom = world ? g.s3.wzoom : s3d_integer_zoom(g.s3.zoom, rw);
+    float zoom = world ? g.s3.wzoom : s3d_integer_zoom(s3d_room_zoom(g.s3.zoom), rw);
     float tilt_deg = (world ? g.s3.wtilt : g.s3.tilt) + g.s3.dtilt;   /* port: + the gyro's offset */
     tilt_deg = tilt_deg < 0 ? 0 : tilt_deg > 80 ? 80 : tilt_deg;
     float tilt = tilt_deg * 3.14159265f / 180.0f, fovy = g.s3.fov * 3.14159265f / 180.0f;
     float aspect = (float)pw / (float)ph;   /* the picture's, at any render scale */
     float dist = 128.0f / zoom / (tanf(fovy * 0.5f) * aspect);
-    float at[3] = {(float)sc->camera_x + 128.0f, 0.0f, (float)sc->camera_y + 120.0f};
-    if (world && sc->player < sc->n_objects) {
-        at[0] = (float)sc->object[sc->player].x;
-        at[2] = (float)sc->object[sc->player].y + 8.0f;
-    }
+    float at[3];
+    s3d_camera_target(sc, at);
     /* The console's camera stops at the map's edges. This one sees
        further at the top of the picture (and wider there), so it stops
        sooner: the floor at the picture's edges stays on the map, give or
@@ -2597,6 +2595,10 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     if (resize(ow, oh, pw, ph))
         return;
     const settings *s = &presets[cur_preset];
+    /* Furniture/sprite overlap has no reliable 3D height or pose metadata.
+       Preserve the complete console composition, including the blanket. */
+    if (s->scene3d && s3d_field_needs_2d(g.s3.scene))
+        s = &presets[HD2D_OFF];
     g.frame++;
 
     int ui_z;

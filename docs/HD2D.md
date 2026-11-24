@@ -432,7 +432,7 @@ UI does.
 
 **Camera.** The field's tilt and zoom by default; `worldmap_tilt` and `worldmap_zoom` (the
 Look tab, settings.ini; `CT_HD2D_3D=wtilt=..,wzoom=..`) give the world map its own, e.g.
-a higher one (tilt 25, zoom 60%). It looks at the party, a little north of its feet, and
+a higher one (tilt 25, zoom 60%). It follows the console camera, including scripted flyovers, and
 never stops at an edge. BG3 isn't UI on the world map (it is the clouds), so the UI layer
 is off there.
 
@@ -599,3 +599,21 @@ the renderer lays the box's tiles flat over the scene (below), and the text over
   tilt-shift only.
 - The renderer works under OpenGL ES 3.0 for Android, but that hasn't been tested on a
   device.
+
+### Room and composition safeguards (Q3-Q5)
+
+Field meshes keep walkable components visible in the console viewport and two
+neighboring cells of non-empty walls/furniture. Bounds and zoom use this selection;
+the mesh is refreshed when the camera moves to another 16-pixel cell, so a room
+that leaves the viewport does not remain cached. With no classified floor, only
+non-empty cells inside the console viewport are retained.
+
+A visible actor whose foot occupies a blocked cell selects the plain 2D preset for
+that frame. Beds and other furniture need surface and pose metadata before they can
+be reconstructed safely in 3D. Preserving the whole console composite also retains
+the blanket's occlusion. This intentionally includes other actors on blocked cells;
+it is a conservative fallback, not a full 3D sleeping-pose implementation.
+
+The world camera uses the console camera position, with the existing focus offset,
+so scripted flyovers can pan independently of the player. Synthetic tests cover
+these decisions; the reported ROM scenes still require visual verification.

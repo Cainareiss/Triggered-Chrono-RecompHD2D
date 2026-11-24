@@ -114,9 +114,24 @@ typedef struct {
 typedef int (*s3d_sprite_hook)(void *user, const ct_scene *s, int obj, s3d_sprite_image *out);
 void s3d_set_sprite_hook(s3d_sprite_hook fn, void *user);
 
-/* The part of the map with pixels (map px), from the last s3d_build_map:
-   the renderer keeps its camera from showing much beyond it. */
+/* Bounds of the active room in the last field mesh, in map pixels. A field
+   map can hold several disconnected rooms; only the components visible in
+   the console camera are built, plus their nearby walls. */
 void s3d_map_bounds(int *x0, int *z0, int *x1, int *z1);
+
+/* Rebuild when the console camera enters a different cell, including when
+   it leaves a room that was previously visible alongside another one. */
+int s3d_room_matches(const ct_scene *s);
+
+/* Conservative fallback for visible actors standing on blocked furniture. */
+int s3d_field_needs_2d(const ct_scene *s);
+
+/* Focus follows console scroll; player coordinates do not override cutscenes. */
+void s3d_camera_target(const ct_scene *s, float at[3]);
+
+/* Raise a user's field-camera zoom only enough to frame a small active room,
+   with a margin and a conservative cap. Large maps keep the requested zoom. */
+float s3d_room_zoom(float zoom);
 
 /* For tests and the renderer: the inferred height (px) of the top of the
    raised geometry over cell (x, z) of the world grid (16 px cells), from
