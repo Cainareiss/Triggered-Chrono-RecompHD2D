@@ -587,6 +587,7 @@ static struct {
         GLuint t_box;
         float wtilt, wzoom;
         int marks;
+        s3d_focus_state focus;   /* cutscene cuts and the 12-frame focus pull */
     } s3;
     /* port: asset packs: the atlas (array texture), its entries (two
        RGBA16UI texels each, 1024 entries a row), the per-pixel map. */
@@ -1505,7 +1506,7 @@ static void light_pass(const settings *s, int ui_z, float scene_amt)
    pass is mixed over what is already there by that much (crossfade). */
 static void post(const settings *s, int px, int py, int pw, int ph, int ow, int oh, int offscreen,
                  float tilt, float dof_tilt, float dof_depth, float osd_alpha, int threeD,
-                 float blend)
+                 float blend, float aperture)
 {
     int pc = threeD ? P3_COC : P_COC, pb = threeD ? P3_BRIGHT : P_BRIGHT,
         pf = threeD ? P3_FINAL : P_FINAL;
@@ -1529,7 +1530,7 @@ static void post(const settings *s, int px, int py, int pw, int ph, int ow, int 
         p_glUniform1i(U(P_DOFBLUR, "uFg"), 1);
         p_glUniform4f(U(P_DOFBLUR, "uFocus"), g.focus_y, s->focus_band, s->focus_ramp, 0.5f);
         p_glUniform3f(U(P_DOFBLUR, "uDof"), dof_tilt, dof_depth, fore_depth);
-        float radius = s->dof_radius * (float)ph / 1080.0f * 2.0f;
+        float radius = s->dof_radius * (float)ph / 1080.0f * 2.0f * aperture;
         p_glUniform1f(U(P_DOFBLUR, "uRadius"), radius);
         bind_tex(0, g.half[0].tex);
         bind_tex(1, g.fgh[0].tex);
@@ -2448,7 +2449,9 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
        likes), centred on the console camera, including scripted pans (it wraps). */
     int world = sc->mode == CT_SCENE_WORLD;
     float zoom = world ? g.s3.wzoom : s3d_integer_zoom(s3d_room_zoom(g.s3.zoom), rw);
-    float tilt_deg = (world ? g.s3.wtilt : g.s3.tilt) + g.s3.dtilt;   /* port: + the gyro's offset */
+    float live_tilt, live_yaw;
+    s3d_camera_offsets(sc, g.s3.dtilt, g.s3.dyaw, &live_tilt, &live_yaw);
+    float tilt_deg = (world ? g.s3.wtilt : g.s3.tilt) + live_tilt;
     tilt_deg = tilt_deg < 0 ? 0 : tilt_deg > 80 ? 80 : tilt_deg;
     /* port: the field's layered cards with a long lens (14 degrees, from
        further off: the same view): with the wide one, cards and sprites
@@ -2487,8 +2490,8 @@ static int s3d_render(const ct_scene *sc, const settings *s, int pw, int ph, int
     }
     float eye[3] = {at[0], at[1] + dist * cosf(tilt), at[2] + dist * sinf(tilt)};
     float up[3] = {0.0f, sinf(tilt), -cosf(tilt)};
-    if (g.s3.dyaw != 0.0f) {   /* port: the gyro's turn, about the vertical through at */
-        float yaw = g.s3.dyaw * 3.14159265f / 180.0f, sy = sinf(yaw), cy = cosf(yaw);
+    if (live_yaw != 0.0f) {   /* port: the gyro's turn, about the vertical through at */
+        float yaw = live_yaw * 3.14159265f / 180.0f, sy = sinf(yaw), cy = cosf(yaw);
         float h = dist * sinf(tilt);
         eye[0] = at[0] + h * sy;
         eye[2] = at[2] + h * cy;
@@ -2954,11 +2957,16 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
     const ct_scene *sc = g.s3.scene;
     int scene_candidate = s->scene3d && g.s3.ok && sc &&
                          (sc->mode == CT_SCENE_FIELD || sc->mode == CT_SCENE_WORLD) && sc->vram &&
+                         !s3d_scene_exact_2d(sc) &&
                          !(st && st->mode == 7) &&
                          (sc->mode != CT_SCENE_FIELD || sc->player < sc->n_objects) &&
                          !(st && !((st->main_enabled | st->sub_enabled) & 3));
     int scene_matches = scene_candidate && s3d_scene_matches_console(sc, bgrx, layers, st, ui_z);
     int want3 = scene_candidate && scene_matches;
+    int focus_change = 0;
+    float aperture = s3d_focus_step(&g.s3.focus, sc, want3, &focus_change);
+    if (focus_change & S3D_SCENE_CUT)
+        g.s3.amt = 0.0f;
     g.s3.amt = s->scene3d && want3 ? fminf(g.s3.amt + S3D_FADE_STEP, 1.0f) : 0.0f;
     float amt3 = g.s3.amt;
     int world2d = sc && sc->mode == CT_SCENE_WORLD;
@@ -2983,13 +2991,15 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
         /* Depth of field settings, shared by passes 3 and 5. */
         float dof_tilt = world2d ? 0.0f : s->dof_tilt * scene_amt * field_amt;
         float dof_depth = world2d ? 0.0f : s->dof_depth * scene_amt * field_amt;
-        post(s, px, py, pw, ph, ow, oh, offscreen, tilt, dof_tilt, dof_depth, osd_alpha, 0, 0.0f);
+        post(s, px, py, pw, ph, ow, oh, offscreen, tilt, dof_tilt, dof_depth, osd_alpha, 0,
+             0.0f, 1.0f);
     }
     if (amt3 > 0.0f) {
         if (want3)
             s3d_box_mask(sc, bgrx, layers, ui_z);
         if (want3 && s3d_render(sc, s, pw, ph, ui_z, scene_amt)) {
             g.s3.amt = 0.0f;
+            s3d_focus_step(&g.s3.focus, NULL, 0, NULL);
             /* Allocation failure must also replace a fully opaque 3D frame
                immediately; no 2D pass was drawn above when amt3 was 1. */
             if (amt3 >= 1.0f) {
@@ -2997,13 +3007,14 @@ void hd2d_render(const uint8_t *bgrx, const uint8_t *layers, const uint8_t *behi
                 float tilt = have_behind && !world2d ? s->tilt * scene_amt * field_amt : 0.0f;
                 post(s, px, py, pw, ph, ow, oh, offscreen, tilt,
                      world2d ? 0.0f : s->dof_tilt * scene_amt * field_amt,
-                     world2d ? 0.0f : s->dof_depth * scene_amt * field_amt, osd_alpha, 0, 0.0f);
+                     world2d ? 0.0f : s->dof_depth * scene_amt * field_amt, osd_alpha, 0, 0.0f,
+                     1.0f);
             }
         } else
             /* Real depth now: the tilt-shift band only a little, the depth
                term doing most of the blur. */
             post(s, px, py, pw, ph, ow, oh, offscreen, 0.0f, s->dof_tilt * 0.25f * scene_amt,
-                 0.9f * scene_amt, osd_alpha, 1, amt3);
+                 0.9f * scene_amt, osd_alpha, 1, amt3, aperture);
     }
     prof.frame[prof.slot] = g.frame;
     prof.submit_ms[prof.slot] = ms_since(tc);

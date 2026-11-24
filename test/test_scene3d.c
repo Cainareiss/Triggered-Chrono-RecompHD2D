@@ -464,6 +464,66 @@ static void test_composition_and_camera(void)
     s.camera_x += 8;
     s3d_camera_target(&s, at);
     CHECK(at[0] == 436, "scripted pan advances with a stationary player");
+
+    float tilt, yaw;
+    s.flags = 0;
+    s3d_camera_offsets(&s, 4.0f, -7.0f, &tilt, &yaw);
+    CHECK(tilt == 4.0f && yaw == -7.0f, "free camera keeps live offsets");
+    s.flags = CT_SCENE_SCRIPTED;
+    s3d_camera_offsets(&s, 4.0f, -7.0f, &tilt, &yaw);
+    CHECK(tilt == 0.0f && yaw == 0.0f, "scripted camera rejects live offsets");
+    CHECK(!s3d_scene_exact_2d(&s), "ordinary scripted field can remain 3D");
+    s.flags |= CT_SCENE_EXACT_2D;
+    CHECK(s3d_scene_exact_2d(&s), "transformed cutscene keeps console composition");
+
+    s3d_focus_state focus = {0};
+    int change = 0;
+    s.flags = 0;
+    s.map_id = 7;
+    s.map_generation = 3;
+    s.camera_x = 100;
+    s.camera_y = 200;
+    float aperture = s3d_focus_step(&focus, &s, 1, &change);
+    CHECK(aperture == 0.0f && change == (S3D_FOCUS_CUT | S3D_SCENE_CUT),
+          "new scene starts sharp");
+    for (int k = 0; k < 11; k++)
+        aperture = s3d_focus_step(&focus, &s, 1, &change);
+    CHECK(fabsf(aperture - 1.0f) < 0.001f && change == 0, "focus reaches target in 12 frames");
+    s.camera_x += 8;
+    aperture = s3d_focus_step(&focus, &s, 1, &change);
+    CHECK(aperture == 1.0f && change == 0, "authored pan keeps focus");
+    s.camera_x += 33;
+    aperture = s3d_focus_step(&focus, &s, 1, &change);
+    CHECK(aperture == 0.0f && change == S3D_FOCUS_CUT, "camera cut restarts focus only");
+    s.map_id++;
+    aperture = s3d_focus_step(&focus, &s, 1, &change);
+    CHECK(aperture == 0.0f && change == (S3D_FOCUS_CUT | S3D_SCENE_CUT),
+          "map cut restarts crossfade and focus");
+    s.map_generation++;
+    aperture = s3d_focus_step(&focus, &s, 1, &change);
+    CHECK(aperture == 0.0f && change == S3D_FOCUS_CUT,
+          "map content change restarts focus only");
+    s.flags = CT_SCENE_SCRIPTED;
+    aperture = s3d_focus_step(&focus, &s, 1, &change);
+    CHECK(aperture == 0.0f && change == S3D_FOCUS_CUT,
+          "script-control boundary restarts focus only");
+    CHECK(s3d_focus_step(&focus, &s, 0, &change) == 0.0f && !focus.valid,
+          "2D fallback clears cinematic focus state");
+
+    s3d_focus_state wrap_focus = {0};
+    s.mode = CT_SCENE_WORLD;
+    s.flags = 0;
+    s.wrap = 1;
+    s.map_w = 192;
+    s.map_h = 128;
+    s.cell_px = 8;
+    s.map_id = 0x1F0;
+    s.camera_x = 1535;
+    s.camera_y = 100;
+    s3d_focus_step(&wrap_focus, &s, 1, &change);
+    s.camera_x = 0;
+    aperture = s3d_focus_step(&wrap_focus, &s, 1, &change);
+    CHECK(aperture > 0.0f && change == 0, "world wrap is a one-pixel pan, not a cut");
 }
 
 int main(void)

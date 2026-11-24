@@ -507,6 +507,10 @@ add_executable(test_world_camera game/ct/test/test_world_camera.c game/ct/world_
 target_include_directories(test_world_camera PRIVATE runtime)
 target_compile_options(test_world_camera PRIVATE ${CT_WARN} -UNDEBUG)
 add_test(NAME world_camera COMMAND test_world_camera)
+add_executable(test_cutscene_scene game/ct/test/test_cutscene_scene.c game/ct/scene.c)
+target_include_directories(test_cutscene_scene PRIVATE runtime game/ct)
+target_compile_options(test_cutscene_scene PRIVATE ${CT_WARN} -UNDEBUG)
+add_test(NAME cutscene_scene COMMAND test_cutscene_scene)
 add_test(NAME music_codecs COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test/test_music_codecs.py
     $<TARGET_FILE:test_music> ${CMAKE_BINARY_DIR}/test_music_codecs_tmp)
 set_tests_properties(music_codecs PROPERTIES SKIP_RETURN_CODE 77)

@@ -618,6 +618,13 @@ The world camera uses the console camera position, with the existing focus offse
 so scripted flyovers can pan independently of the player. Synthetic tests cover
 these decisions; the reported ROM scenes still require visual verification.
 
+Module ABI 11 identifies scripted shots and scenes that require the exact console
+composite. Scripted field/world shots still use HD-2D when the scene gate matches,
+but live camera offsets are suppressed. Scene cuts crossfade back over eight frames
+and the depth-of-field aperture eases in over 12; smooth authored pans do not reset
+it. The special cutscene engine remains 2D across its mixed Mode 1/Mode 7/HDMA
+segments. See [CUTSCENES.md](CUTSCENES.md).
+
 Native PS5 integration preserves full-screen UI and Mode 7 without scene effects.
 Frames using console color math use the original composition rather than an
 unblended 3D reconstruction. The generic scene gate alone cannot validate blended

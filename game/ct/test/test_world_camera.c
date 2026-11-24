@@ -33,14 +33,17 @@ int main(void)
     ct_scene s = {.oam = oam};
     assert(ct_world_scene(&s) == 0);
     assert(s.camera_x == 300 && s.camera_y == 200);
+    assert(s.flags & CT_SCENE_SCRIPTED);
     assert(s.object[0].x == 600 && s.object[0].y == 400);
     assert(s.object[0].n_pieces == 0 && s.n_objects == 2);
 
-    word(0x20, 480);
+    word(0x20, 472);
     word(0x26, 288);
-    oam[2] = 95 << 8 | 112;
+    oam[0] = 0xF000;
+    oam[2] = 95 << 8 | 120;
     assert(ct_world_scene(&s) == 0);
-    assert(s.camera_x == 480 && s.camera_y == 288);
+    assert(s.camera_x == 472 && s.camera_y == 288);
+    assert(!(s.flags & CT_SCENE_SCRIPTED));
     assert(s.object[0].n_pieces == 1 && s.object[0].piece[0] == 1);
 
     /* The script pans while the leader's world position stays fixed. */
@@ -49,8 +52,17 @@ int main(void)
     oam[2] = 81 << 8 | 92;
     assert(ct_world_scene(&s) == 0);
     assert(s.camera_x == 500 && s.camera_y == 302);
+    assert(s.flags & CT_SCENE_SCRIPTED);
     assert(s.object[0].x == 600 && s.object[0].y == 400);
     assert(s.object[0].n_pieces == 1 && s.object[0].piece[0] == 1);
+
+    /* An event-controlled shot stays scripted even at the usual center. */
+    word(0x20, 472);
+    word(0x26, 288);
+    wram[0x138] = 1;
+    assert(ct_world_scene(&s) == 0);
+    assert(s.flags & CT_SCENE_SCRIPTED);
+    wram[0x138] = 0;
 
     word(0x283, 20);
     word(0x285, 20);

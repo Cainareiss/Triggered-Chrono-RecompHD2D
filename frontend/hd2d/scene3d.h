@@ -141,6 +141,26 @@ int s3d_field_needs_2d(const ct_scene *s);
 /* Focus follows console scroll; player coordinates do not override cutscenes. */
 void s3d_camera_target(const ct_scene *s, float at[3]);
 
+/* Scripted shots use only their authored camera. Live camera offsets
+   (currently gyro) are suppressed until control returns to the player. */
+void s3d_camera_offsets(const ct_scene *s, float user_tilt, float user_yaw,
+                        float *tilt, float *yaw);
+
+/* Some cutscene engines use presentation ct_scene cannot describe (Mode 7,
+   per-line HDMA, mixed modes). Those frames must use the console composite. */
+int s3d_scene_exact_2d(const ct_scene *s);
+
+/* Cutscene/scene focus transition. A hard scene cut also restarts the
+   existing 2D -> 3D crossfade; smaller authored changes only restart the
+   12-frame aperture ease. */
+enum { S3D_FOCUS_CUT = 1 << 0, S3D_SCENE_CUT = 1 << 1 };
+typedef struct {
+    uint32_t map_id, map_generation;
+    int32_t camera_x, camera_y;
+    uint8_t valid, mode, scripted, frame;
+} s3d_focus_state;
+float s3d_focus_step(s3d_focus_state *state, const ct_scene *s, int valid3d, int *change);
+
 /* Raise a user's field-camera zoom only enough to frame a small active room,
    with a margin and a conservative cap. Large maps keep the requested zoom. */
 float s3d_room_zoom(float zoom);

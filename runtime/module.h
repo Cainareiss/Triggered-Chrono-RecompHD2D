@@ -32,8 +32,10 @@
    (rumble.h: the rumble_event API patches call, and the frame hook
    ct_module_info.rumble); 9 is the music and text exports
    (ct_music_hooks, ct_text: audio packs and HD text); 10 distinguishes
-   full-screen UI from other flat scenes so renderers never blur menus. */
-#define CT_MODULE_ABI 10
+   full-screen UI from other flat scenes so renderers never blur menus;
+   11 adds scene flags for scripted camera control and exact-console
+   presentation. */
+#define CT_MODULE_ABI 11
 
 /* ---- the scene: what the game is showing, for renderers (docs/SCENE.md) ----
    A module may describe its current view as a map of cells, tile layers
@@ -58,6 +60,13 @@ enum {                       /* ct_scene.mode */
                                 from above; layers 0 and 1 are its tiles, layer 2 an overlay
                                 (clouds) with its own scroll (overlay_*) */
     CT_SCENE_UI = 3,         /* full-screen UI (menu, name entry, shop...): plain and sharp */
+};
+
+enum {                       /* ct_scene.flags */
+    CT_SCENE_SCRIPTED = 1 << 0,  /* the game, not the player, controls this shot: renderers
+                                    must not add live camera input on top of it */
+    CT_SCENE_EXACT_2D = 1 << 1,  /* staging is not represented by ct_scene (Mode 7, HDMA,
+                                    mixed video modes...): preserve the console frame */
 };
 
 enum {                       /* ct_scene_cell.cls: what the cell is to walk on */
@@ -131,6 +140,8 @@ typedef struct {
     uint16_t obj_chr[2];     /* VRAM word address of OBJ tiles 0 and 256 */
     uint8_t obj_size[2];     /* small and large OBJ size, px */
     uint8_t brightness;      /* 0-15; 0 also in forced blank */
+    /* Filled by the module, all modes (ABI 11). */
+    uint8_t flags;           /* CT_SCENE_SCRIPTED, CT_SCENE_EXACT_2D */
     /* Filled by the module, CT_SCENE_WORLD only (ABI 7). */
     uint8_t wrap;            /* the map wraps at both edges */
     uint8_t overlay_blend;   /* layer 2 is added at this many sixteenths over the rest

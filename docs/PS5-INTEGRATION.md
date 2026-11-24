@@ -19,6 +19,10 @@ Changes carried over from the desktop improvements:
   enters a new cell, and follow console scroll during world-map pans.
 - Preserve 2D furniture composition when visible actors occupy blocked cells.
   This is a conservative fallback, not a reconstructed sleeping animation.
+- Mark scripted field/world shots, follow their authored scroll without live
+  camera offsets, and keep the mixed Mode 7/HDMA cutscene engine exact 2D.
+- Ease the 3D depth-of-field aperture over 12 frames after cinematic cuts;
+  smooth pans keep focus and scene/map cuts restart the existing crossfade.
 - Stream MSU-1 PCM soundtracks with header loop points, one-shot jingles and
   original-audio fallback for missing or invalid tracks.
 
@@ -29,8 +33,9 @@ sprites, high sprites and shadows. Hidden rooms cannot supply card ground fill.
 World camera coordinates now come from the NMI scroll shadows, and party OAM
 matching uses that scroll instead of assuming a centered leader. A synthetic
 WRAM/OAM test covers independent pans, offscreen leaders and wrapping.
-Module ABI 10 marks the full-screen UI mode; external game modules must be
-rebuilt. Existing save-state ABI 7 onward remains accepted.
+Module ABI 11 adds scripted/exact-2D scene flags (ABI 10 introduced the
+full-screen UI mode); external game modules must be rebuilt. Existing
+save-state ABI 7 onward remains accepted.
 The previous eight-frame stale-3D grace period and fixed post-battle wait are
 replaced by the console comparison.
 
@@ -43,12 +48,12 @@ errors with `|| true`.
 ## Validation on 2026-11-24
 
 - Full engine/frontend host build: passed (GCC 14.2, CMake 4.4.5, system SDL2).
-- ROM-free CTest suite: **42/42 passed**, including PCM, Ogg/FLAC regression,
-  importer, input, runtime and geometry tests.
+- ROM-free CTest suite: **43/43 passed**, including PCM, Ogg/FLAC regression,
+  importer, input, runtime, geometry and cutscene-classification tests.
 - Music tests with the `CT_PS5` file-offset path selected on the host:
   **44 checks passed**. This is not a PS5 binary or a console test.
-- Geometry under AddressSanitizer/UndefinedBehaviorSanitizer: passed; leak
-  detection disabled because of the execution environment.
+- Geometry and cutscene-state tests under AddressSanitizer/UndefinedBehaviorSanitizer:
+  passed; leak detection disabled because of the execution environment.
 - Both native-title shell scripts: syntax checks passed.
 - Native-title object-target build path: configured and built with the host
   compiler; this checks the CMake packaging mechanism, not PS5 machine code.
@@ -58,6 +63,9 @@ priority ordering without duplicated sprites, attached effects, contact shadows
 and clearing shadow counts on an empty scene. The SDL virtual-controller fixture
 now explicitly maps its declared touchpad button when SDL's automatic mapping
 omits it; this fixes a pre-existing test failure without changing actual controls.
+Synthetic cutscene checks cover all known special-engine NMI vectors, field event
+control, free and scripted world-map cameras, live-camera suppression and the
+12-frame focus transition. See [CUTSCENES.md](CUTSCENES.md).
 
 ## Native build is still blocked
 

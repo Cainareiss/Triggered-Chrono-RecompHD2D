@@ -20,6 +20,7 @@ int ct_world_scene(ct_scene *out);
 
 enum {
     NMI_VECTOR = 0x0500,
+    F_EVENT = 0x0138,            /* nonzero while an event script holds the party */
     LOCATION = 0x0100,             /* $1F0-$1F7: the world maps */
     PX_X = 0x0283, PX_Y = 0x0285,  /* the party, world px (u16) */
     BG1_HOFS = 0x0020, BG1_VOFS = 0x0026,   /* the NMI's PPU shadows (D = 0) */
@@ -125,6 +126,7 @@ int ct_world_scene(ct_scene *out)
 {
     const uint8_t *w = bus_wram();
     out->mode = CT_SCENE_OTHER;
+    out->flags = 0;
     unsigned map = u16at(w, LOCATION) & 0x1FF;
     if (memcmp(w + NMI_VECTOR, world_nmi, sizeof world_nmi) || map < 0x1F0 || map > 0x1F7)
         return -1;
@@ -152,6 +154,13 @@ int ct_world_scene(ct_scene *out)
        the party here made the diorama show a different part of the map. */
     out->camera_x = (int32_t)(u16at(w, BG1_HOFS) % (16 * MW));
     out->camera_y = (int32_t)(u16at(w, BG1_VOFS) % (16 * MH));
+    /* During free movement the party's foot is fixed at (128,112). A
+       different relation means the event engine is panning the shot even
+       if the party itself is stationary (the opening flyover). */
+    int screen_x = (px - out->camera_x + 16 * MW) % (16 * MW);
+    int screen_y = (py - out->camera_y + 16 * MH) % (16 * MH);
+    if (w[F_EVENT] || screen_x != 128 || screen_y != 112)
+        out->flags |= CT_SCENE_SCRIPTED;
     out->cells = cells;
     out->wrap = 1;
 

@@ -65,9 +65,10 @@ int savestate_ready(const char **why)
 }
 
 /* port: the oldest module ABI whose states this build still loads. ABI 9
-   added music/text exports and ABI 10 a scene-mode meaning; neither
-   changes what a state holds, so states saved at ABI 7 onward still load;
-   a section whose layout did change is refused by its length anyway. */
+   added music/text exports, ABI 10 a scene-mode meaning and ABI 11
+   per-frame scene flags; none changes what a state holds, so states saved
+   at ABI 7 onward still load; a section whose layout did change is refused
+   by its length anyway. */
 #define SAVESTATE_ABI_MIN 7
 
 uint8_t *savestate_save(size_t *len, const char **why)

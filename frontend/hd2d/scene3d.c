@@ -312,6 +312,77 @@ void s3d_camera_target(const ct_scene *s, float at[3])
     at[2] = (float)s->camera_y + 120.0f;
 }
 
+void s3d_camera_offsets(const ct_scene *s, float user_tilt, float user_yaw,
+                        float *tilt, float *yaw)
+{
+    int scripted = s && (s->flags & CT_SCENE_SCRIPTED);
+    if (tilt)
+        *tilt = scripted ? 0.0f : user_tilt;
+    if (yaw)
+        *yaw = scripted ? 0.0f : user_yaw;
+}
+
+int s3d_scene_exact_2d(const ct_scene *s)
+{
+    return s && (s->flags & CT_SCENE_EXACT_2D);
+}
+
+static int camera_delta(int32_t a, int32_t b, int span, int wrap)
+{
+    int64_t d = (int64_t)a - b;
+    if (d < 0)
+        d = -d;
+    if (wrap && span > 0) {
+        d %= span;
+        if (d > span / 2)
+            d = span - d;
+    }
+    return d > 0x7FFFFFFF ? 0x7FFFFFFF : (int)d;
+}
+
+float s3d_focus_step(s3d_focus_state *state, const ct_scene *s, int valid3d, int *change)
+{
+    enum { FOCUS_LAST = 11, CAMERA_CUT = 32 };
+    int changed = 0;
+    if (!state || !valid3d || !s) {
+        if (state) {
+            state->valid = 0;
+            state->frame = 0;
+        }
+        if (change)
+            *change = 0;
+        return 0.0f;
+    }
+
+    int scripted = (s->flags & CT_SCENE_SCRIPTED) != 0;
+    if (!state->valid || state->mode != s->mode || state->map_id != s->map_id)
+        changed = S3D_FOCUS_CUT | S3D_SCENE_CUT;
+    else {
+        int span_x = (int)s->map_w * s->cell_px, span_y = (int)s->map_h * s->cell_px;
+        int wraps = s->mode == CT_SCENE_WORLD && s->wrap;
+        if (state->map_generation != s->map_generation || state->scripted != scripted ||
+            camera_delta(state->camera_x, s->camera_x, span_x, wraps) > CAMERA_CUT ||
+            camera_delta(state->camera_y, s->camera_y, span_y, wraps) > CAMERA_CUT)
+            changed = S3D_FOCUS_CUT;
+    }
+
+    state->valid = 1;
+    state->mode = s->mode;
+    state->scripted = (uint8_t)scripted;
+    state->map_id = s->map_id;
+    state->map_generation = s->map_generation;
+    state->camera_x = s->camera_x;
+    state->camera_y = s->camera_y;
+    if (changed)
+        state->frame = 0;
+    else if (state->frame < FOCUS_LAST)
+        state->frame++;
+    if (change)
+        *change = changed;
+    float t = (float)state->frame / FOCUS_LAST;
+    return t * t * (3.0f - 2.0f * t);
+}
+
 /* The layers drawn as geometry, back to front: BG2, then BG1. (The third
    layer is mostly color-math effects in map views; it stays out.) */
 static const int draw_layers[2] = {1, 0};
