@@ -508,7 +508,106 @@ static void emit_piece(const ct_scene *s, s3d_mesh *m, int e, float foot_z, floa
         }
 }
 
-int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
+typedef struct {
+    float ox, oy, kx, ky, depth;
+    int valid;
+} sprite_grid;
+
+static float dot3(const float a[3], const float b[3])
+{
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+static int sprite_grid_at(const s3d_view *v, const s3d_params *p, const float foot[3],
+                          float source_x, float source_y, sprite_grid *g)
+{
+    float rel[3] = {foot[0] - v->eye[0], foot[1] - v->eye[1], foot[2] - v->eye[2]};
+    float d = dot3(rel, v->fwd);
+    if (d <= v->near || v->focal <= 0.0f)
+        return 0;
+    float sx = 0.5f * v->w + v->focal * dot3(rel, v->right) / d;
+    float sy = 0.5f * v->h - v->focal * dot3(rel, v->up) / d;
+    float k = floorf(v->focal / d + 0.5f);
+    k = k < 1.0f ? 1.0f : k > 32.0f ? 32.0f : k;
+    float sin_tilt = fabsf(v->up[1]);
+    float cos_tilt = sqrtf(fmaxf(0.0f, 1.0f - sin_tilt * sin_tilt));
+    float normal_stretch = sin_tilt > 0.1f ? cos_tilt / sin_tilt : 1.4f;
+    normal_stretch = normal_stretch < 1.0f ? 1.0f : normal_stretch > 1.4f ? 1.4f : normal_stretch;
+    float ky = floorf(k * p->stretch / normal_stretch + 0.5f);
+    ky = ky < 1.0f ? 1.0f : ky > 32.0f ? 32.0f : ky;
+    g->kx = k;
+    g->ky = ky;
+    g->depth = d;
+    g->ox = floorf(sx + 0.5f) - source_x * k;
+    g->oy = floorf(sy + 0.5f) - source_y * ky;
+    g->valid = 1;
+    return 1;
+}
+
+static void sprite_unproject(const s3d_view *v, float x, float y, float d, float out[3])
+{
+    float a = (x - 0.5f * (float)v->w) / v->focal;
+    float b = (0.5f * (float)v->h - y) / v->focal;
+    for (int k = 0; k < 3; k++)
+        out[k] = v->eye[k] + d * (v->fwd[k] + a * v->right[k] + b * v->up[k]);
+}
+
+static void emit_piece_grid(const ct_scene *s, s3d_mesh *m, int e, const s3d_view *v,
+                            const sprite_grid *g)
+{
+    int x, y, size;
+    if (!oam_visible(s, e, &x, &y, &size))
+        return;
+    uint16_t w1 = s->oam[2 * e + 1];
+    int hf = (w1 >> 14) & 1, vf = (w1 >> 15) & 1, n = size / 8;
+    uint32_t base = s->obj_chr[(w1 >> 8) & 1], pal = (w1 >> 9) & 7;
+    float d = g->depth - (float)(127 - e) * 0.01f;
+    if (d <= v->near)
+        return;
+    for (int ty = 0; ty < n; ty++)
+        for (int tx = 0; tx < n; tx++) {
+            int col = (hf ? n - 1 - tx : tx) * 8, row = (vf ? n - 1 - ty : ty) * 8;
+            int used = ((((w1 & 0xFF) >> 4) + (row >> 3)) << 4) | (((w1 & 0xF) + (col >> 3)) & 0xF);
+            uint32_t addr = (base + (uint32_t)used * 16) & S3D_ADDR_MASK;
+            float x0 = floorf(g->ox + (float)(x + tx * 8) * g->kx + 0.5f);
+            float x1 = floorf(g->ox + (float)(x + tx * 8 + 8) * g->kx + 0.5f);
+            float y0 = floorf(g->oy + (float)(y + ty * 8) * g->ky + 0.5f);
+            float y1 = floorf(g->oy + (float)(y + ty * 8 + 8) * g->ky + 0.5f);
+            float c[4][3];
+            sprite_unproject(v, x0, y0, d, c[0]);
+            sprite_unproject(v, x1, y0, d, c[1]);
+            sprite_unproject(v, x0, y1, d, c[2]);
+            sprite_unproject(v, x1, y1, d, c[3]);
+            s3d_emit_corners(m, c,
+                             addr | pal << S3D_PAL_SHIFT | S3D_OBJ |
+                                 (uint32_t)S3D_N_SPRITE << S3D_NORMAL_SHIFT | S3D_RAISED,
+                             hf, vf);
+        }
+}
+
+static void emit_image_grid(s3d_mesh *m, const s3d_sprite_image *im, int e,
+                            const s3d_view *v, const sprite_grid *g)
+{
+    float d = g->depth - (float)(127 - e) * 0.01f;
+    if (d <= v->near)
+        return;
+    float x0 = floorf(g->ox + (float)im->x * g->kx + 0.5f);
+    float x1 = floorf(g->ox + (float)(im->x + im->w) * g->kx + 0.5f);
+    float y0 = floorf(g->oy + (float)im->y * g->ky + 0.5f);
+    float y1 = floorf(g->oy + (float)(im->y + im->h) * g->ky + 0.5f);
+    float c[4][3];
+    sprite_unproject(v, x0, y0, d, c[0]);
+    sprite_unproject(v, x1, y0, d, c[1]);
+    sprite_unproject(v, x0, y1, d, c[2]);
+    sprite_unproject(v, x1, y1, d, c[3]);
+    s3d_emit_corners(m, c,
+                     (im->tile & (S3D_PACKED | S3D_ENTRY_MASK)) | S3D_OBJ |
+                         (uint32_t)S3D_N_SPRITE << S3D_NORMAL_SHIFT | S3D_RAISED,
+                     im->hflip, im->vflip);
+}
+
+int s3d_build_sprites_view(const ct_scene *s, const s3d_params *p, const s3d_view *v,
+                           s3d_mesh *m)
 {
     m->nv = m->ni = m->ni_floor = 0;
     oom = 0;
@@ -552,23 +651,36 @@ int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
             foot_z += up;
             base_y = up;
         }
+        sprite_grid grid = {0};
+        if (v) {
+            float foot[3] = {(float)o->x, base_y, foot_z};
+            sprite_grid_at(v, p, foot, (float)(o->x - s->camera_x), (float)foot_sy + lift, &grid);
+        }
         s3d_sprite_image im;
         if (sprite_hook && sprite_hook(sprite_hook_user, s, k, &im)) {
-            /* one quad for the whole picture, where its entries would be */
-            float st = p->stretch, h = (float)(foot_sy - im.y) + lift;
-            float tl[3] = {(float)(s->camera_x + im.x), base_y + h * st,
-                           foot_z + (float)(127 - o->piece[0]) * 0.004f};
-            const float U[3] = {(float)im.w / 8.0f, 0, 0}, V[3] = {0, -st * (float)im.h / 8.0f, 0};
-            s3d_emit(m, tl, U, V,
-                     (im.tile & (S3D_PACKED | S3D_ENTRY_MASK)) | S3D_OBJ |
-                         (uint32_t)S3D_N_SPRITE << S3D_NORMAL_SHIFT | S3D_RAISED,
-                     im.hflip, im.vflip);
+            if (grid.valid)
+                emit_image_grid(m, &im, o->piece[0], v, &grid);
+            else {
+                /* one quad for the whole picture, where its entries would be */
+                float st = p->stretch, h = (float)(foot_sy - im.y) + lift;
+                float tl[3] = {(float)(s->camera_x + im.x), base_y + h * st,
+                               foot_z + (float)(127 - o->piece[0]) * 0.004f};
+                const float U[3] = {(float)im.w / 8.0f, 0, 0};
+                const float V[3] = {0, -st * (float)im.h / 8.0f, 0};
+                s3d_emit(m, tl, U, V,
+                         (im.tile & (S3D_PACKED | S3D_ENTRY_MASK)) | S3D_OBJ |
+                             (uint32_t)S3D_N_SPRITE << S3D_NORMAL_SHIFT | S3D_RAISED,
+                         im.hflip, im.vflip);
+            }
             for (int j = 0; j < o->n_pieces; j++)
                 owned[o->piece[j] & 127] = 1;
             continue;
         }
         for (int j = 0; j < o->n_pieces; j++) {
-            emit_piece(s, m, o->piece[j], foot_z, base_y, foot_sy, lift, p->stretch);
+            if (grid.valid)
+                emit_piece_grid(s, m, o->piece[j], v, &grid);
+            else
+                emit_piece(s, m, o->piece[j], foot_z, base_y, foot_sy, lift, p->stretch);
             owned[o->piece[j] & 127] = 1;
         }
     }
@@ -577,7 +689,21 @@ int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
         int x, y, size;
         if (owned[e] || !oam_visible(s, e, &x, &y, &size))
             continue;
+        if (v) {
+            float foot[3] = {(float)(s->camera_x + x), 0.0f, (float)(s->camera_y + y + size)};
+            sprite_grid grid = {0};
+            sprite_grid_at(v, p, foot, (float)x, (float)(y + size), &grid);
+            if (grid.valid) {
+                emit_piece_grid(s, m, e, v, &grid);
+                continue;
+            }
+        }
         emit_piece(s, m, e, (float)(s->camera_y + y + size), 0.0f, y + size, 0.0f, p->stretch);
     }
     return oom ? -1 : m->ni / 6;
+}
+
+int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m)
+{
+    return s3d_build_sprites_view(s, p, NULL, m);
 }

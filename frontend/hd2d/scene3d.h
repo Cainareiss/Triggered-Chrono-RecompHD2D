@@ -61,6 +61,13 @@ typedef struct {
                         look shorter from above than the floor does) */
 } s3d_params;
 
+/* Camera basis and target size, used to snap field sprites to output pixels. */
+typedef struct {
+    float eye[3], at[3], right[3], up[3], fwd[3];
+    float focal, near;
+    int w, h;
+} s3d_view;
+
 void s3d_mesh_free(s3d_mesh *m);
 
 /* The map's geometry: floor quads first (m->ni_floor), then the raised
@@ -70,8 +77,12 @@ int s3d_build_map(const ct_scene *s, const s3d_params *p, s3d_mesh *m);
 
 /* This frame's sprites: one quad per 8x8 piece of every visible OAM entry,
    standing at its object's foot point (entries no object owns stand at
-   their own bottom edge). Returns the number of quads. */
+   their own bottom edge). With a view, upright sprites are snapped to its
+   target-pixel grid and use an integer pixel scale. Returns the number of
+   quads. */
 int s3d_build_sprites(const ct_scene *s, const s3d_params *p, s3d_mesh *m);
+int s3d_build_sprites_view(const ct_scene *s, const s3d_params *p, const s3d_view *v,
+                           s3d_mesh *m);
 
 /* One textured quad: corner tl, then a step of 8 px along u (the tile's
    +x) and along v (its +y, downward in the image); tile is the packed
@@ -129,15 +140,9 @@ float s3d_world_height(float x, float z);
    wrapping; rgb = normal * 0.5 + 0.5, a = 255. */
 const uint8_t *s3d_world_normals(int *w, int *h);
 
-/* The camera, for sprites that keep the console's pixel grid: eye, the
-   point it looks at, unit right / up / forward, focal length in target
-   px, the near plane's distance, the target size. */
-typedef struct {
-    float eye[3], at[3], right[3], up[3], fwd[3];
-    float focal, near;
-    int w, h;
-} s3d_view;
-
+/* The camera basis used to project and snap field sprites: eye, point of
+   focus, unit right / up / forward, focal length in target px, near plane,
+   and target size. */
 /* This frame's world sprites, as billboards facing the camera: each
    object's pieces stand at its foot point on the ground, and are snapped
    so that one sprite pixel is a whole number of target pixels, on the
