@@ -6,7 +6,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 The HD-2D/MSU-1 integration and its validation status are tracked in
 [PS5-INTEGRATION.md](PS5-INTEGRATION.md). The previously published CT5 1.0
-executable is unchanged; rebuild before testing these source changes.
+executable is unchanged; use the new candidate or rebuild before testing these
+source changes. See [BUILD-PS5-TEST.md](BUILD-PS5-TEST.md) for the recovered
+toolchain and the 2026-11-28 native build.
 
 The port runs natively on a jailbroken PS5 as an ELF payload. It is built with the
 open-source [ps5-payload-sdk](https://github.com/ps5-payload-dev/sdk), not Sony's SDK.

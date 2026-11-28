@@ -78,7 +78,7 @@ No Python, ROM patch, `.msu` file or on-console converter is required.
 PCM streaming uses the title's existing `fseek`/`ftell` imports, with a compile-time
 check for 64-bit offsets. This avoids introducing additional libc imports just
 for MSU-1. The native executable and real audio timing still require validation;
-see [PS5-INTEGRATION.md](PS5-INTEGRATION.md) for the current build blocker.
+see [PS5-INTEGRATION.md](PS5-INTEGRATION.md) for the native build and hardware-test status.
 After producing a runnable build, validate:
 
 1. Boot and ordinary gameplay with no pack, then with the same save and a pack.

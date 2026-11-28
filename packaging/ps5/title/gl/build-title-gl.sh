@@ -12,13 +12,23 @@
 #   SDL_PREFIX=.../ps5-opengl/build/native-build/sdk    (integration/SDL2/build.py
 #             native, with gl/sdl-bridge.patch applied to the ps5-opengl checkout)
 #   GL_SRC=.../ps5-opengl                                (for native-app/)
-#   KIT=.../ps5-native-app-boilerplate at 4f531c4b       (its .deps set up)
+#   KIT=.../ps5-native-app-boilerplate at 4f531c4b, or the accessible drakmor
+#       mirror at 470695e0 (its .deps set up; the latter is patched in staging)
 #   packaging/ps5/title/gl/build-title-gl.sh [WORKDIR]   -> WORKDIR/app/dist/<TITLE_ID>/
 set -euo pipefail
 : "${GL_PREFIX:?}" "${SDL_PREFIX:?}" "${GL_SRC:?}" "${KIT:?}"
 here=$(cd "$(dirname "$0")/.." && pwd); src=$(cd "$here/../../.." && pwd)
 work=${1:-$src/build-ps5-title-gl}; objs=$work/objs; app=$work/app
 TITLE_ID=${TITLE_ID:-PPSA28361}
+kit_rev=$(git -C "$KIT" rev-parse HEAD)
+case "$kit_rev" in
+    4f531c4b517f80bcb6b1267135848168d2250047) patch_staged_kit=0 ;;
+    470695e0c557f99ff2df0e36e4df713c5e636526) patch_staged_kit=1 ;;
+    *)
+        echo "unsupported native-app boilerplate revision: $kit_rev" >&2
+        exit 2
+        ;;
+esac
 sdk=$KIT/.deps/native/ps5-payload-sdk
 builtins=${BUILTINS:-$(find "$(dirname "$(dirname "$(readlink -f "$(command -v llvm-config-21 || command -v llvm-config)")")")/lib/clang" -name 'libclang_rt.builtins*.a' | grep -m1 x86_64)}
 test -s "$builtins"
@@ -43,6 +53,13 @@ cp "$KIT/Makefile" "$app/"
 for d in runtime sce_sys tooling tools; do mkdir -p "$app/$d"; cp -a "$KIT/$d/." "$app/$d/"; done
 mkdir -p "$app/.deps"; cp -a "$KIT/.deps/native" "$app/.deps/native"
 asdk=$app/.deps/native/ps5-payload-sdk
+if [ "$patch_staged_kit" = 1 ]; then
+    # The reachable drakmor mirror predates the native-link fixes already in
+    # the pinned blackbear revision. Apply the same reviewed fixes used by the
+    # non-GL title build, but only to this disposable staging copy.
+    patch -d "$app" -p1 --dry-run --silent < "$here/boilerplate.patch"
+    patch -d "$app" -p1 --silent < "$here/boilerplate.patch"
+fi
 cp "$app/tooling/native/ps5-pie.ld" "$app/tooling/native/ps5-pie-base.ld"
 cp "$GL_SRC/native-app/ps5-pie.ld" "$GL_SRC/native-app/app-symbols.map" "$app/tooling/native/"
 cp "$GL_PREFIX/lib/libSceAgc.so" "$GL_PREFIX/lib/libSceAgcDriver.so" "$asdk/target/lib/"

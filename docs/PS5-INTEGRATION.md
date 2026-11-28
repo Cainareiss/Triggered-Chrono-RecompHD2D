@@ -67,27 +67,43 @@ Synthetic cutscene checks cover all known special-engine NMI vectors, field even
 control, free and scripted world-map cameras, live-camera suppression and the
 12-frame focus transition. See [CUTSCENES.md](CUTSCENES.md).
 
-## Native build is still blocked
+## Native build on 2026-11-28
 
-No new `eboot.bin` has been produced, and no hardware acceptance is claimed.
-The original GPU-title script requires the native-app boilerplate revision
-`4f531c4b517f80bcb6b1267135848168d2250047`. On the date above, its documented
-`blackbearreloaded/ps5-native-app-boilerplate` URL returned GitHub API 404 and
-could not be fetched with Git. The accessible `drakmor` mirror stops at
-`470695e0c557f99ff2df0e36e4df713c5e636526` and does not contain that revision.
-It has not been substituted silently.
+The original native-app boilerplate revision
+`4f531c4b517f80bcb6b1267135848168d2250047` was recovered from the
+`leolobato/ps5-native-app-boilerplate` mirror. The accessible `drakmor` revision
+`470695e0c557f99ff2df0e36e4df713c5e636526` was also validated with the existing
+`boilerplate.patch` applied only to its disposable staging copy. Both paths
+produced a byte-identical final title; the recovered original pin is the primary
+reproducible path.
 
-The PS5 payload SDK v0.42 archive was retrieved and its published SHA-256
-verified (`8cfbc7cd5811e719eb4f0c47eea668d3dc7b40bc8ab11c4a5031d40c23ec02da`).
-That archive does not include the host LLVM compiler. The GPU SDK sources are
-available at `OpenAGC/ps5-opengl`, but this session did not have the matching
-built GL/SDL SDKs or LLVM toolchain. Recover the pinned kit or validate an
-explicit dependency update, build matching GL/SDL libraries, and then run
-`packaging/ps5/title/gl/build-title-gl.sh` as documented in [PS5.md](PS5.md).
+The build used:
 
-Keep the current working console installation until a newly built candidate is
-available. Follow the scenarios in [MSU1.md](MSU1.md) with the user's own ROM,
-soundtrack and saves. Compare original audio and PCM packs, then check the bed,
-dialogue opening, room boundaries, world flyover, battles, save states and an
-extended session. Hardware frame pacing, visual composition and cutscene music
-timing remain unverified.
+- PS5 payload SDK v0.42, archive SHA-256
+  `8cfbc7cd5811e719eb4f0c47eea668d3dc7b40bc8ab11c4a5031d40c23ec02da`;
+- ps5-opengl SDK 1.0.2 with manifest SHA-256
+  `0d432edc9d648d6e0cccb4d5eb3db8484f10ba4b075b5ccf23edda3251b66360`;
+- the exact ps5-opengl 1.0.2 source snapshot for the native-app linker and
+  runtime shims; and
+- SDL2 commit `8c56053f13ca13a0c050de613706ff69eb615836`, built against that GL SDK.
+
+The engine-only native compilation, link, import convergence and fake-signed
+SELF inspection passed. The final table contains 331 imports from nine modules,
+and both output containers passed the native tool's integrity check.
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `PPSA28361/eboot.bin` | 26,321,501 bytes | `08950bb3737261397029ffde6023b1082e1e3e18efe8648e2567209d8b67cb10` |
+| `PPSA28361/sce_module/libc.prx` | 1,284,674 bytes | `e6ff45d16adf687855cc3b33b0c8a4132b6504360b221e0a34c7e99fb3ba0036` |
+
+The current ROM-free host suite also passes 43/43 tests after reconfiguring the
+test tree. This candidate contains neither a ROM nor generated game code. With
+the user's own ROM and no `ct_game.so`, it runs the game in the interpreter; any
+private game module must be rebuilt for module ABI 11.
+
+This is build acceptance, not hardware acceptance. It has not yet been booted on
+a PS5, and no claim is made about gameplay, frame pacing, controller behavior,
+saves, MSU-1 timing or long-session stability. Keep the existing working console
+copy backed up until the checklist in [BUILD-PS5-TEST.md](BUILD-PS5-TEST.md) has
+passed. Then follow [MSU1.md](MSU1.md) with the user's own ROM, soundtrack and
+saves.
